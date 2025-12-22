@@ -203,7 +203,7 @@ def feature_to_haplo_blocks(
     )
 
     adata = adata[:, adata.var["HB"].notna()].copy()
-    adata.var["HB"] = adata.var["HB"].astype(np.int32)
+    adata.var["HB"] = adata.var["HB"].astype(feature_df["HB"].dtype)
 
     ##################################################
     idx_map = dict(zip(feature_df["FEATURE_ID"], np.arange(len(feature_df))))
@@ -329,7 +329,8 @@ def feature_binning(
             feature_df.loc[assign, bin_colname] = max(bin_id - 1, bin_id0)
             bin_id = max(bin_id, bin_id0 + 1)
     else:
-        feature_df[bin_colname] = feature_df["HB"]
+        # ensure BIN_ID is contiguous
+        feature_df[bin_colname], hb_levels = pd.factorize(feature_df["HB"], sort=True)
 
     ##################################################
     # merge BIN_ID with adata
@@ -407,7 +408,7 @@ def allele_binning(
             bin_id = max(bin_id, bin_id0 + 1)
     else:
         print(f"segment allele binning for {data_type}")
-        bin_df[bin_colname] = bin_df["HB"]
+        bin_df[bin_colname], hb_levels = pd.factorize(bin_df["HB"], sort=True)
 
     allele_super_bins = bin_df.groupby(by=bin_colname, sort=False, as_index=True)
     allele_bins = allele_super_bins.agg(
@@ -514,7 +515,7 @@ def aggregate_var_counts(
     adata: AnnData,
     var_bins: pd.DataFrame,
     data_type: str,
-    agg_colname="SUPER_VAR_IDX",
+    agg_colname="BIN_ID",
     out_file=None,
     verbose=1,
 ):

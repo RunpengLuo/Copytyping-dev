@@ -32,10 +32,13 @@ def run_sample(
     mode: str,
     plot_dir: str,
     out_dir: str,
+    genome_file: str,
     refine_label_by_reference=True,
     ref_label="cell_type",
     agg_size=10,
     fig_type="png",
+    posterior_thres=0.65,
+    margin_thres=0.1
 ):
     label = method
     sc_model = SC_Model(barcodes, data_types, mod_dirs, out_dir, modality)
@@ -46,7 +49,7 @@ def run_sample(
             init_params=init_params,
         )
         anns, clone_props = sc_model.map_decode(
-            mode, params, label=label, posterior_thres=args["posterior_thres"]
+            mode, params, label=label, posterior_thres=posterior_thres, margin_thres=margin_thres
         )
     else:
         params = {}
@@ -153,7 +156,7 @@ def run_sample(
             None,
             sample,
             data_type,
-            args["genome_file"],
+            genome_file,
             mask_cnp=False,
             lab_type=label,
             filename=os.path.join(
@@ -189,6 +192,7 @@ def run(args=None):
 
     sample_file = args["sample_file"]
     genome_segment = args["genome_segment"]
+    genome_size = args["genome_size"]
     method = args["method"]
     mode = args["mode"]
     work_dir = args["work_dir"]
@@ -224,9 +228,7 @@ def run(args=None):
         "VISIUM": "path_label",
     }[d]
 
-    tau0 = 100
-    phi0 = 30
-    init_params = {"pi": bulk_props}
+    init_params = {"pi": bulk_props, "tau0": 50, "phi0": 30}
     fix_params = {
         "pi": True,
         # "GEX-tau": True,
@@ -234,10 +236,11 @@ def run(args=None):
         # "GEX-inv_phi": True,
         # "ATAC-inv_phi": True
     }
-
+    posterior_thres = args["posterior_thres"]
+    margin_thres = 0.10
     ##################################################
     sample_df = pd.read_table(sample_file, sep="\t", index_col=False).fillna("")
-    for sample_infos in sample_df.groupby(by=["SAMPLE", "REP_ID"], sort=False):
+    for _, sample_infos in sample_df.groupby(by=["SAMPLE", "REP_ID"], sort=False):
         sample = sample_infos["SAMPLE"].iloc[0]
         rep_id = sample_infos["REP_ID"].iloc[0]
         data_types = sample_infos["DATA_TYPE"].unique().tolist()
@@ -276,10 +279,13 @@ def run(args=None):
             mode="hybrid",
             plot_dir=plot_dir,
             out_dir=out_dir,
+            genome_file=genome_size,
             refine_label_by_reference=refine_label_by_reference,
             ref_label=ref_label(data_types[0]),
             agg_size=agg_size,
             fig_type=fig_type,
+            posterior_thres=posterior_thres,
+            margin_thres=margin_thres,
         )
 
 

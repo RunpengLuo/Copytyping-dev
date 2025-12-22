@@ -45,13 +45,14 @@ class SC_Model:
         mode: str,
         init_fix_params=None,
         init_params=None,
-        default_tau=30,
-        default_phi=10,
+        default_tau=50,
+        default_phi=30,
     ):
         params = {}
         if not init_params is None:
-            for key, param in init_params.items():
-                params[key] = param
+            params["pi"] = init_params.get("pi", None)
+            default_phi = init_params.get("phi0", default_phi)
+            default_tau = init_params.get("tau0", default_tau)
 
         if params.get("pi", None) is None:
             params["pi"] = np.ones(self.K) / self.K
@@ -412,14 +413,12 @@ class SC_Model:
         eps=1e-10,
         share_invphi=True,
         share_tau=True,
-        tau0=30,
-        phi0=30,
     ):
         assert mode in ["hybrid", "allele_only", "total_only"]
         print(f"Start inference, mode={mode}")
         # Parameters
         params, fix_params = self._init_params(
-            mode, fix_params, init_params, default_tau=tau0, default_phi=phi0
+            mode, fix_params, init_params
         )
         if self.verbose:
             self.print_params(params, mode)
