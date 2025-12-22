@@ -189,7 +189,6 @@ def run(args=None):
 
     sample_file = args["sample_file"]
     genome_segment = args["genome_segment"]
-    modality = args["modality"]
     method = args["method"]
     mode = args["mode"]
     work_dir = args["work_dir"]
