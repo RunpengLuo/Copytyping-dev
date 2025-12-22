@@ -1,0 +1,12 @@
+[project]
+name = "copytyping"
+version = "0.0.1"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+copytyping = "copytyping.__main__:main"

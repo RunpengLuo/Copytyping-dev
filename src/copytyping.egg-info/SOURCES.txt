@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/copytyping/__init__.py
+src/copytyping/__main__.py
+src/copytyping/copytyping_parser.py
+src/copytyping/utils.py
+src/copytyping.egg-info/PKG-INFO
+src/copytyping.egg-info/SOURCES.txt
+src/copytyping.egg-info/dependency_links.txt
+src/copytyping.egg-info/entry_points.txt
+src/copytyping.egg-info/top_level.txt
+src/copytyping/combine_counts/__init__.py
+src/copytyping/combine_counts/combine_counts.py
+src/copytyping/copytype_cells/copytype_cells.py
