@@ -36,9 +36,12 @@ def run_sample(
     refine_label_by_reference=True,
     ref_label="cell_type",
     agg_size=10,
-    fig_type="png",
     posterior_thres=0.65,
-    margin_thres=0.1
+    margin_thres=0.1,
+    img_type="png",
+    transparent=False,
+    dpi=300,
+    show_metric_heatmap=False
 ):
     label = method
     sc_model = SC_Model(barcodes, data_types, mod_dirs, out_dir, modality)
@@ -49,7 +52,11 @@ def run_sample(
             init_params=init_params,
         )
         anns, clone_props = sc_model.map_decode(
-            mode, params, label=label, posterior_thres=posterior_thres, margin_thres=margin_thres
+            mode,
+            params,
+            label=label,
+            posterior_thres=posterior_thres,
+            margin_thres=margin_thres,
         )
     else:
         params = {}
@@ -92,6 +99,14 @@ def run_sample(
             acol=label,
             bcol="cell_type",
         )
+        # save evalution metric to csv
+        metric["SAMPLE"] = sample
+        pd.DataFrame([metric]).to_csv(
+            os.path.join(out_dir, f"{sample}.{rep_id}.evaluation.{method}.tsv"),
+            sep="\t",
+            header=True,
+            index=False,
+        )
     anns.to_csv(
         os.path.join(out_dir, f"{sample}.{rep_id}.annotations.{method}.tsv"),
         sep="\t",
@@ -110,6 +125,8 @@ def run_sample(
     # visualization
     umap_features = []
     for data_type in sc_model.data_types:
+        os.makedirs(os.path.join(plot_dir, f"{data_type}_heatmap"), exist_ok=True)
+        os.makedirs(os.path.join(plot_dir, f"{data_type}_others"), exist_ok=True)
         sx_data: SX_Data = sc_model.data_sources[data_type]
         features = prepare_rdr_baf_features(sx_data, params[f"{data_type}-lambda"])
         umap_features.append(features)
@@ -120,8 +137,11 @@ def run_sample(
             anns,
             lab_type=label,
             filename=os.path.join(
-                plot_dir, f"{sample}.{rep_id}.UMAP.{data_type}.{label}.pdf"
+                plot_dir,
+                f"{data_type}_others",
+                f"{sample}.{rep_id}.UMAP.{data_type}.{label}.pdf",
             ),
+            dpi=dpi,
         )
         for val in ["BAF", "pi_gk", "log2RDR"]:
             if val in ["log2RDR", "pi_gk"] and f"{data_type}-lambda" not in params:
@@ -143,11 +163,13 @@ def run_sample(
                         lab_type=my_label,
                         filename=os.path.join(
                             plot_dir,
-                            f"{sample}.{rep_id}.{val}_heatmap.{data_type}.agg{agg}.{my_label}.{fig_type}",
+                            f"{data_type}_heatmap",
+                            f"{sample}.{rep_id}.{val}_heatmap.{data_type}.agg{agg}.{my_label}.{img_type}",
                         ),
-                        dpi=300,
+                        dpi=dpi,
                         figsize=(20, 6 if agg > 1 else 15),
-                        title_info=title_info,
+                        title_info=title_info if show_metric_heatmap else "",
+                        transparent=transparent,
                     )
 
         plot_rdr_baf_1d_aggregated(
@@ -160,7 +182,9 @@ def run_sample(
             mask_cnp=False,
             lab_type=label,
             filename=os.path.join(
-                plot_dir, f"{sample}.{rep_id}.scatter.{data_type}.{label}.pdf"
+                plot_dir,
+                f"{data_type}_others",
+                f"{sample}.{rep_id}.scatter.{data_type}.{label}.pdf",
             ),
         )
     if len(umap_features) > 1:
@@ -172,8 +196,11 @@ def run_sample(
             anns,
             lab_type=label,
             filename=os.path.join(
-                plot_dir, f"{sample}.{rep_id}.UMAP.multiome.{label}.pdf"
+                plot_dir,
+                f"{data_type}_others",
+                f"{sample}.{rep_id}.UMAP.multiome.{label}.pdf",
             ),
+            dpi=dpi,
         )
     #         plot_params(
     #             params,
@@ -200,7 +227,11 @@ def run(args=None):
     num_iters = args["niters"]
 
     agg_size = 10
-    fig_type = "png"
+    img_type = args["img_type"]
+    dpi = args["dpi"]
+    transparent = args["transparent"]
+    show_metric_heatmap = False
+    # args["show_metric_heatmap"]
 
     # assigned cells has contradict labels with cell types are marked with NA.
     refine_label_by_reference = True
@@ -280,12 +311,15 @@ def run(args=None):
             plot_dir=plot_dir,
             out_dir=out_dir,
             genome_file=genome_size,
-            refine_label_by_reference=refine_label_by_reference,
-            ref_label=ref_label(data_types[0]),
-            agg_size=agg_size,
-            fig_type=fig_type,
             posterior_thres=posterior_thres,
             margin_thres=margin_thres,
+            ref_label=ref_label(data_types[0]),
+            refine_label_by_reference=refine_label_by_reference,
+            agg_size=agg_size,
+            img_type=img_type,
+            dpi=dpi,
+            transparent=transparent,
+            show_metric_heatmap=show_metric_heatmap
         )
 
 

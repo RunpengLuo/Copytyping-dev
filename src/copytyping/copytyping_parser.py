@@ -170,4 +170,25 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         type=float,
         help="Assign cells/spots to NA if posterior less than <posterior_thres>",
     )
+
+    ##################################################
+    # plot parameters
+    parser.add_argument(
+        "--dpi", required=False, type=int, help="image resolution", default=300
+    )
+    parser.add_argument(
+        "--transparent",
+        required=False,
+        action="store_true",
+        default=False,
+        help="transparent background",
+    )
+    parser.add_argument(
+        "--img_type",
+        required=False,
+        choices=["pdf", "png", "svg"],
+        type=str,
+        help="file format (pdf, png, svg)",
+        default="png",
+    )
     return parser

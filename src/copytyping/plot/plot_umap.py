@@ -29,7 +29,7 @@ def plot_umap_copynumber(
     cell_type="cell_type",
     figsize=(18, 6),
     filename=None,
-    **kwargs,
+    dpi=300,
 ):
     # build anndata
     adata = AnnData(X=features)
@@ -62,7 +62,7 @@ def plot_umap_copynumber(
         )
         plt.suptitle(f"{sample} {data_type} UMAP")
         plt.tight_layout()
-        pdf.savefig(fig)
+        pdf.savefig(fig, dpi=dpi)
         plt.close()
         pdf.close()
     return

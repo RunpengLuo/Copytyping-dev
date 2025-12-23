@@ -417,9 +417,7 @@ class SC_Model:
         assert mode in ["hybrid", "allele_only", "total_only"]
         print(f"Start inference, mode={mode}")
         # Parameters
-        params, fix_params = self._init_params(
-            mode, fix_params, init_params
-        )
+        params, fix_params = self._init_params(mode, fix_params, init_params)
         if self.verbose:
             self.print_params(params, mode)
 

@@ -30,6 +30,7 @@ logging.getLogger("fontTools.subset").setLevel(logging.ERROR)
 logging.getLogger("fontTools.ttLib").setLevel(logging.ERROR)
 logging.getLogger("fontTools").setLevel(logging.ERROR)
 
+
 def plot_heatmap(
     ax: plt.Axes,
     cell_labels: np.ndarray,
@@ -418,15 +419,12 @@ def plot_cnv_heatmap(
 
     # cluster_by_val = proportions is None
     cluster_by_val = False
-    print(f"cluster_by_val={cluster_by_val}")
+    # print(f"cluster_by_val={cluster_by_val}")
     if val == "BAF":
         data_matrix, cell_labels = prepare_baf(
             sx_data, cell_labels, uniq_labels, agg_size, cluster_by_val
         )
         data_info = sx_data.bin_info
-        # boundaries = np.array([0.00, 0.20, 0.40, 0.60, 0.80, 1.00])
-        # colors = ["#2166ac", "#67a9cf", "#bfbfbf", "#ef8a62", "#b2182b"]  # 5 bins
-
         boundaries = np.linspace(0, 1, 11)  # [0.0, 0.1, ..., 1.0]
         colors = [
             "#1f77b4",
@@ -534,7 +532,7 @@ def plot_cnv_heatmap(
     ##################################################
     title = f"{sample} {data_type} {val} Heatmap"
     if agg_size > 1:
-        title += f" (pseudobulk over {agg_size} cells)"
+        title += f" (pseudobulk-{agg_size} cell for visualization)"
     if title_info != "":
         title += f"\n{title_info}"
     fig.suptitle(
