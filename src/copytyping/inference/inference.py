@@ -41,7 +41,7 @@ def run_sample(
     img_type="png",
     transparent=False,
     dpi=300,
-    show_metric_heatmap=False
+    show_metric_heatmap=False,
 ):
     label = method
     sc_model = SC_Model(barcodes, data_types, mod_dirs, out_dir, modality)
@@ -235,6 +235,11 @@ def run(args=None):
 
     # assigned cells has contradict labels with cell types are marked with NA.
     refine_label_by_reference = True
+    ref_label = lambda d: {
+        "GEX": "cell_type",
+        "ATAC": "cell_type",
+        "VISIUM": "path_label",
+    }[d]
 
     prep_dir = os.path.join(work_dir, "preprocess")
     haplo_file = os.path.join(prep_dir, "haplotype_blocks.tsv")
@@ -250,14 +255,7 @@ def run(args=None):
     ##################################################
     wl_segments = read_whitelist_segments(genome_segment)
     haplo_info = pd.read_table(haplo_file, sep="\t")
-    bulk_props = np.array(
-        [float(v) for v in str(haplo_info["PROPS"].iloc[0]).split(";")]
-    )
-    ref_label = lambda d: {
-        "GEX": "cell_type",
-        "ATAC": "cell_type",
-        "VISIUM": "path_label",
-    }[d]
+    bulk_props = np.array(list(map(float, haplo_info["PROPS"].iloc[0].split(";"))))
 
     init_params = {"pi": bulk_props, "tau0": 50, "phi0": 30}
     fix_params = {
@@ -269,6 +267,7 @@ def run(args=None):
     }
     posterior_thres = args["posterior_thres"]
     margin_thres = 0.10
+
     ##################################################
     sample_df = pd.read_table(sample_file, sep="\t", index_col=False).fillna("")
     for _, sample_infos in sample_df.groupby(by=["SAMPLE", "REP_ID"], sort=False):
@@ -295,6 +294,8 @@ def run(args=None):
         barcodes = pd.read_table(barcode_file, sep="\t")
         print(f"process sample={sample}.{rep_id}, rep_id={rep_id}, modality={modality}")
         print(f"#barcodes={len(barcodes)}")
+        
+
         run_sample(
             sample,
             rep_id,
@@ -305,7 +306,6 @@ def run(args=None):
             fix_params,
             data_types,
             mod_dirs,
-            modality,
             method,
             mode="hybrid",
             plot_dir=plot_dir,
@@ -319,7 +319,7 @@ def run(args=None):
             img_type=img_type,
             dpi=dpi,
             transparent=transparent,
-            show_metric_heatmap=show_metric_heatmap
+            show_metric_heatmap=show_metric_heatmap,
         )
 
 

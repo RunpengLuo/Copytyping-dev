@@ -1,9 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
-from scipy.stats import binom, beta, norm
-from scipy.stats import binomtest, chi2, norm, combine_pvalues, goodness_of_fit
+from scipy.stats import binomtest, chi2, norm, combine_pvalues, goodness_of_fit, zscore
 from statsmodels.stats.multitest import multipletests
 from scipy.optimize import minimize, minimize_scalar
 import statsmodels.formula.api as smf
@@ -23,29 +21,29 @@ def compute_baseline_proportions(
     return base_props
 
 
-def estimate_fold_change(
-    T: np.ndarray, Tn: np.ndarray, base_props: np.ndarray
-) -> np.ndarray:
-    return
+# def estimate_fold_change(
+#     T: np.ndarray, Tn: np.ndarray, base_props: np.ndarray
+# ) -> np.ndarray:
+#     return
 
 
-def compute_allele_bin_proportions(
-    feat_info: pd.DataFrame,
-    num_bins: int,
-    full_props: np.ndarray,
-    norm=True,
-    bin_colname="SNP_BIN_ID",
-):
-    """
-    full_props: (#feats, )
-    allele base props is defined over bins, and should only aggregate HET features' baseprops
-    """
-    bin_props = np.zeros(num_bins, dtype=np.float32)
-    for bin_id, feats in feat_info.groupby(bin_colname, sort=False):
-        bin_props[bin_id] = np.sum(full_props[feats.index.to_numpy()])
-    if norm:
-        bin_props = bin_props / np.sum(bin_props)
-    return bin_props
+# def compute_allele_bin_proportions(
+#     feat_info: pd.DataFrame,
+#     num_bins: int,
+#     full_props: np.ndarray,
+#     norm=True,
+#     bin_colname="SNP_BIN_ID",
+# ):
+#     """
+#     full_props: (#feats, )
+#     allele base props is defined over bins, and should only aggregate HET features' baseprops
+#     """
+#     bin_props = np.zeros(num_bins, dtype=np.float32)
+#     for bin_id, feats in feat_info.groupby(bin_colname, sort=False):
+#         bin_props[bin_id] = np.sum(full_props[feats.index.to_numpy()])
+#     if norm:
+#         bin_props = bin_props / np.sum(bin_props)
+#     return bin_props
 
 
 def compute_rdr(lambda_g: np.ndarray, C: np.ndarray):
@@ -61,7 +59,7 @@ def compute_rdr(lambda_g: np.ndarray, C: np.ndarray):
 
 
 # linear scaling assumption
-def compute_props(lambda_g: np.ndarray, C: np.ndarray, norm=True):
+def compute_pi_gk(lambda_g: np.ndarray, C: np.ndarray, norm=True):
     """compute mu_{g,k}=lam_g * C[g,k] / sum_{g}{lam_g * C[g,k]}
 
     Args:
@@ -73,6 +71,35 @@ def compute_props(lambda_g: np.ndarray, C: np.ndarray, norm=True):
         props_gk = props_gk / np.sum(props_gk, axis=0, keepdims=True)
     return props_gk
 
+def empirical_p_gn(Y: np.ndarray, D: np.ndarray, norm=False):
+    baf_matrix = np.divide(
+        Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
+    )
+    if norm:
+        baf_matrix[~np.isnan(baf_matrix)] -= 0.5
+        baf_matrix = zscore(baf_matrix, axis=0, nan_policy="omit")
+        baf_matrix = np.where(np.isnan(baf_matrix), 0.0, baf_matrix)
+    return baf_matrix
+
+def empirical_rdr_gn(X: np.ndarray, T: np.ndarray, base_props: np.ndarray, log2=False, norm=False):
+    """
+    Tn*lambda_g*[(1-rho_n) + rho_n*rdr_gk]
+    """
+    rdr_denom = base_props[:, None] @ T[None, :]  # (G, N)
+    rdr_matrix = np.divide(
+        X,
+        rdr_denom,
+        out=np.full_like(rdr_denom, fill_value=np.nan, dtype=np.float32),
+        where=rdr_denom > 0,
+    )
+    rdr_matrix[rdr_matrix == 0] = np.nan
+
+    if log2:
+        rdr_matrix[~np.isnan(rdr_matrix)] = np.log2(rdr_matrix[~np.isnan(rdr_matrix)])
+    if norm:
+        rdr_matrix = zscore(rdr_matrix, axis=0, nan_policy="omit")
+        rdr_matrix = np.where(np.isnan(rdr_matrix), 0.0, rdr_matrix)
+    return rdr_matrix
 
 # TODO
 def estimate_spot_proportion_loh(
@@ -87,3 +114,22 @@ def estimate_spot_proportion_loh(
     print
 
     pass
+
+# def estimate_tumor_proportion_mom(
+#     sx_data: SX_Data,
+#     base_props: np.ndarray,
+# ):
+#     """
+#     Estimate per-spot tumor proportion using allelic data using MoM
+#     """
+#     print("esimate spot proportion via MoM")
+#     C = sx_data.allele_C
+#     rdr_denom = (base_props[:, None] * C).sum(axis=0)  # (K, )
+#     rdr_gk = C / rdr_denom  # (G, K)
+#     print("rdr_denom: ", rdr_denom)
+
+#     rdr_gk = compute_rdr(base_props, sx_data.allele_C)
+#     emp_p_gn = empirical_p_gn(sx_data.Y, sx_data.D)
+    
+#     baf_mat = 
+

@@ -14,29 +14,27 @@ from scipy.optimize import minimize_scalar
 from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
 
 ##################################################
-class SC_Model:
-    """Single-cell EM model, no spatial information, tumor purity=1 for each cell."""
+class SS_Model:
+    """EM model for spot-level data, variable tumor purity for each spot."""
 
     def __init__(
         self,
         barcodes: pd.DataFrame,
-        data_types: list,
+        slice_id: str,
         mod_dirs: dict,
         out_dir: str,
         modality: str,
         verbose=1,
     ) -> None:
         self.barcodes = barcodes
-        self.data_types = data_types
+        self.slice_id = slice_id
         self.N = self.num_barcodes = len(barcodes)
         self.out_dir = out_dir
         self.modality = modality
-        self.data_sources = {}
-        for data_type in self.data_types:
-            self.data_sources[data_type] = SX_Data(
-                len(barcodes), mod_dirs[data_type], data_type
-            )
-        self.clones = self.data_sources[self.data_types[0]].clones
+        self.data_sources = {
+            slice_id: SX_Data(len(barcodes), mod_dirs[slice_id], slice_id)
+        }
+        self.clones = self.data_sources[self.slice_id].clones
         self.K = self.num_clones = len(self.clones)
         self.verbose = verbose
         return
@@ -60,53 +58,20 @@ class SC_Model:
             params["pi"] = np.ones(self.K) / self.K
 
         # initialize baseline proportion if not allele_only mode
-        if mode != "allele_only":
-            if "GEX" in self.data_sources:
-                if params.get("GEX-lambda", None) is None:
-                    params["GEX-lambda"] = self.initialize_baseline_proportions("GEX")
-                if params.get("GEX-inv_phi", None) is None:
-                    params["GEX-inv_phi"] = np.full(
-                        self.data_sources["GEX"].nrows_eff_feat,
-                        fill_value=1 / default_phi,
-                        dtype=np.float32,
-                    )
-
-            if "ATAC" in self.data_sources:
-                if params.get("ATAC-lambda", None) is None:
-                    params["ATAC-lambda"] = self.initialize_baseline_proportions("ATAC")
-                if params.get("ATAC-inv_phi", None) is None:
-                    params["ATAC-inv_phi"] = np.full(
-                        self.data_sources["ATAC"].nrows_eff_feat,
-                        fill_value=1 / default_phi,
-                        dtype=np.float32,
-                    )
-
-        if mode != "total_only":
-            if "GEX" in self.data_sources:
-                if params.get("GEX-tau", None) is None:
-                    params["GEX-tau"] = np.full(
-                        self.data_sources["GEX"].nrows_eff_allele,
-                        fill_value=default_tau,
-                        dtype=np.float32,
-                    )
-            if "ATAC" in self.data_sources:
-                if params.get("ATAC-tau", None) is None:
-                    params["ATAC-tau"] = np.full(
-                        self.data_sources["ATAC"].nrows_eff_allele,
-                        fill_value=default_tau,
-                        dtype=np.float32,
-                    )
-        if any(
-            data_type.startswith("VISIUM") for data_type in self.data_sources.keys()
-        ):
-            data_type = list(self.data_sources.keys())[0]
-            assert mode == "allele_only"
-            if params.get(f"{data_type}-tau", None) is None:
-                params[f"{data_type}-tau"] = np.full(
-                    self.data_sources[data_type].nrows_eff_allele,
-                    fill_value=default_tau,
+        if mode != "pure":
+            params["lambda"] = self.initialize_baseline_proportions()
+            params["rho"] = self.estimate_tumor_proportions(params["lambda"])
+            if params.get("inv_phi", None) is None:
+                params["inv_phi"] = np.full(
+                    self.data_sources[self.slice_id].nrows_eff_feat,
+                    fill_value=1 / default_phi,
                     dtype=np.float32,
                 )
+        params["tau"] = np.full(
+            self.data_sources[self.slice_id].nrows_eff_allele,
+            fill_value=default_tau,
+            dtype=np.float32,
+        )
 
         fix_params = {key: False for key in params.keys()}
         if not init_fix_params is None:
@@ -416,7 +381,20 @@ class SC_Model:
         share_invphi=True,
         share_tau=True,
     ):
-        assert mode in ["hybrid", "allele_only", "total_only"]
+        """
+        Parameters:
+            1. per-spot tumor proportion \rho
+            2. mixing weights \pi
+            3. dispersion \phi and \tau
+        Latent variable:
+            1. per-spot clone label in {0...K}
+
+        1. init baseline proportions
+        2. init per-spot tumor proportion
+        3. E-step, compute posterior
+        4. M-step, update per-spot proportion via 1d optimization
+        """
+        assert mode in ["pure", "het1"]
         print(f"Start inference, mode={mode}")
         # Parameters
         params, fix_params = self._init_params(mode, fix_params, init_params)
@@ -503,4 +481,3 @@ class SC_Model:
             clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones
         }
         return anns, clone_props
-

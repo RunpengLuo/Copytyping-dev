@@ -21,23 +21,12 @@ from copytyping.sx_data.sx_data import SX_Data
 
 
 def prepare_rdr_baf_features(
-    sx_data: SX_Data, base_props: np.ndarray, aggregate_hb=True, norm=True
+    sx_data: SX_Data, base_props: np.ndarray, norm=True
 ):
     # allele data
     Y = sx_data.Y
     D = sx_data.D
     baf_masks = sx_data.ALLELE_MASK["IMBALANCED"]
-    # aggregate over CNV segments
-    if aggregate_hb:
-        hb = sx_data.bin_info["HB"].to_numpy()
-        uniq_hb, inv = np.unique(hb, return_inverse=True)  # inv[g] in [0, K)
-        Y_agg = np.zeros((len(uniq_hb), Y.shape[1]), dtype=Y.dtype)  # Y'
-        D_agg = np.zeros((len(uniq_hb), D.shape[1]), dtype=D.dtype)  # D'
-        np.add.at(Y_agg, inv, Y)
-        np.add.at(D_agg, inv, D)
-        Y = Y_agg
-        D = D_agg
-        baf_masks = mark_imbalanced(sx_data.bin_info.groupby(by="HB").first())
     baf_matrix = np.divide(
         Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
     )
@@ -50,18 +39,6 @@ def prepare_rdr_baf_features(
     T = sx_data.T
     Tn = sx_data.Tn
     rdr_masks = sx_data.FEAT_MASK["ANEUPLOID"]
-    # aggregate over CNV segments
-    if aggregate_hb:
-        hb = sx_data.feat_info["HB"].to_numpy()
-        uniq_hb, inv = np.unique(hb, return_inverse=True)  # inv[g] in [0, K)
-        T_agg = np.zeros((len(uniq_hb), Y.shape[1]), dtype=T.dtype)
-        base_props_agg = np.zeros((len(uniq_hb), 1), dtype=base_props.dtype)
-        np.add.at(T_agg, inv, T)
-        np.add.at(base_props_agg, inv, base_props[:, None])
-        T = T_agg
-        base_props = base_props_agg.reshape(-1)
-        rdr_masks = mark_aneuploid(sx_data.feat_info.groupby(by="HB").first())
-
     rdr_denom = base_props[:, None] @ Tn[None, :]  # (G, N)
     rdr_matrix = np.divide(
         T,
