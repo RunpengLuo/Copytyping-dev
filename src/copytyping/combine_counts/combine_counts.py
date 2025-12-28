@@ -47,10 +47,11 @@ def run(args=None):
 
     ##################################################
     # load copy-number profile
-    haplo_blocks, cnv_Aallele, cnv_Ballele, cnv_mixBAF, clone_props = load_cnv_profile(
+    haplo_blocks = load_seg_ucn(
         seg_ucn, min_cnv_length=min_cnv_length
-    )
+    )[0]
     haplo_blocks["HB"] = haplo_blocks.index.to_numpy()
+    num_blocks = len(haplo_blocks)
     haplo_block_file = os.path.join(prep_dir, "haplotype_blocks.tsv")
     haplo_blocks.to_csv(haplo_block_file, header=True, sep="\t", index=False)
 
@@ -91,111 +92,30 @@ def run(args=None):
         )
 
         ##################################################
-        # CNV segmentation, total features
+        # CNV segmentation
         adata: AnnData = sc.read_h5ad(path2h5ad)
         adata, features = feature_to_haplo_blocks(adata, haplo_blocks, data_id)
-        feature_bins = feature_binning(
-            adata,
-            features,
-            tmp_dir,
-            data_id,
-            feature_may_overlap="ATAC" not in data_id,
-            binning_strategy="segment",
-            bin_colname="BIN_ID",
-        )
-        aggregate_var_counts(
-            adata,
-            feature_bins,
-            data_id,
-            agg_colname="BIN_ID",
-            out_file=os.path.join(mod_dir, f"count.npz"),
-        )
-        adata.write_h5ad(os.path.join(mod_dir, f"{data_type}.h5ad"), compression="gzip")
+        X_bin = matrix_segmentation(adata.X, features["HB"].to_numpy(), num_blocks, adata.X.dtype)
+
+        cell_snps, tot_mat, ref_mat, alt_mat = load_cellsnp_files(path2cellsnp, barcodes)
+        cell_snps = annotate_snps_post(snp_info, cell_snps)
+        phases = cell_snps["PHASE"].to_numpy()
+        raw_snp_ids = cell_snps["RAW_SNP_IDX"].to_numpy()
+        tot_mat = tot_mat[raw_snp_ids, :]
+        ref_mat = ref_mat[raw_snp_ids, :]
+        alt_mat = alt_mat[raw_snp_ids, :]
+        Y_mat = ref_mat.multiply(phases[:, None]) + alt_mat.multiply(1 - phases[:, None])
+        D_bin = matrix_segmentation(tot_mat.T, cell_snps["HB"].to_numpy(), num_blocks, tot_mat.dtype)
+        Y_bin = matrix_segmentation(Y_mat.T, cell_snps["HB"].to_numpy(), num_blocks, Y_mat.dtype)
+        Y_bin.data = np.rint(Y_bin.data).astype(np.int32)
+        Y_bin.eliminate_zeros()
+
+        sparse.save_npz(os.path.join(mod_dir, "X_count.npz"), X_bin)
+        sparse.save_npz(os.path.join(mod_dir, "Y_count.npz"), Y_bin)
+        sparse.save_npz(os.path.join(mod_dir, "D_count.npz"), D_bin)
 
         ##################################################
-        # CNV segmentation, allele features
-        allele_data = load_cellsnp_files(path2cellsnp, barcodes)
-        [cell_snps, dp_mat, ref_mat, alt_mat] = annotate_snps_post2(
-            snp_info, allele_data
-        )
-        cell_snps = snp_to_region(
-            cell_snps, feature_bins, data_type, region_id="BIN_ID"
-        )
-        a_allele_mat, b_allele_mat, t_allele_mat = aggregate_allele_counts(
-            feature_bins,
-            cell_snps,
-            dp_mat,
-            ref_mat,
-            alt_mat,
-            data_type,
-            agg_mode="cellsnp-lite",
-            agg_colname="BIN_ID",
-        )
-
-        allele_bins = allele_binning(
-            feature_bins,
-            t_allele_mat,
-            data_type,
-            binning_strategy="segment",
-            bin_colname="SNP_BIN_ID",
-        )
-
-        aggregate_allele_counts(
-            allele_bins,
-            feature_bins,
-            t_allele_mat,
-            b_allele_mat,
-            a_allele_mat,
-            data_type,
-            agg_mode="regular",
-            agg_colname="SNP_BIN_ID",
-            out_dir=mod_dir,
-            out_prefix="",
-        )
-
-        ##################################################
-        # save book-keeping informations
-        features.to_csv(
-            os.path.join(mod_dir, f"raw_features.tsv.gz"),
-            sep="\t",
-            index=False,
-            header=True,
-        )
-        features.loc[mark_imbalanced(features), :].to_csv(
-            os.path.join(mod_dir, f"raw_features.imb.tsv.gz"),
-            sep="\t",
-            index=False,
-            header=True,
-        )
-
-        feature_bins.to_csv(
-            os.path.join(mod_dir, f"feature_bins.tsv"),
-            sep="\t",
-            index=False,
-            header=True,
-        )
-        feature_bins.loc[mark_imbalanced(feature_bins), :].to_csv(
-            os.path.join(mod_dir, f"feature_bins.imb.tsv"),
-            sep="\t",
-            index=False,
-            header=True,
-        )
-
-        allele_bins.to_csv(
-            os.path.join(mod_dir, "allele_bins.tsv"),
-            sep="\t",
-            index=False,
-            header=True,
-        )
-        allele_bins.loc[mark_imbalanced(allele_bins), :].to_csv(
-            os.path.join(mod_dir, "allele_bins.imb.tsv"),
-            sep="\t",
-            index=False,
-            header=True,
-        )
-
-        ##################################################
-        sx_data = SX_Data(len(barcodes), mod_dir, data_type)
+        sx_data = SX_Data(barcodes_df, haplo_blocks, mod_dir, data_type)
         plot_cnv_heatmap(
             sample,
             data_id,

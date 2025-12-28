@@ -202,7 +202,7 @@ def plot_library_sizes(
 # ):
 #     bin_info = sx_data.bin_info
 #     if mask_cnp:
-#         bin_info = bin_info.loc[sx_data.ALLELE_MASK[mask_id], :]
+#         bin_info = bin_info.loc[sx_data.MASK[mask_id], :]
 #     print(f"plot 1D BAF heatmap, #bins={len(bin_info)}")
 
 #     print(bin_info.head())
@@ -241,7 +241,7 @@ def plot_library_sizes(
 #         Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
 #     )
 #     if mask_cnp:
-#         baf_matrix = baf_matrix[sx_data.ALLELE_MASK[mask_id]]
+#         baf_matrix = baf_matrix[sx_data.MASK[mask_id]]
 
 #     baf_matrix = baf_matrix.T
 
@@ -309,11 +309,11 @@ def plot_library_sizes(
 #     verbose=1,
 #     **kwargs
 # ):
-#     feat_info = sx_data.feat_info
+#     bin_info = sx_data.bin_info
 #     cnp_mask = base_props > 0
 #     if mask_cnp:
-#         cnp_mask &= sx_data.FEAT_MASK[mask_id]
-#     feat_info = feat_info.loc[cnp_mask, :]
+#         cnp_mask &= sx_data.MASK[mask_id]
+#     bin_info = bin_info.loc[cnp_mask, :]
 
 #     T = sx_data.T # (G, N)
 #     Tn = sx_data.Tn # (N, )
@@ -353,7 +353,7 @@ def plot_library_sizes(
 #     # build anndata
 #     adata = AnnData(X=rdr_matrix)
 #     adata.obs[lab_type] = cell_labels
-#     adata.var[['#CHR','START','END']] = feat_info[['#CHR','START','END']].values
+#     adata.var[['#CHR','START','END']] = bin_info[['#CHR','START','END']].values
 #     adata_sorted = cluster_per_group(adata, cluster_chroms=None, groupby=lab_type)
 
 #     chroms = adata_sorted.var["#CHR"].to_numpy()
@@ -361,7 +361,7 @@ def plot_library_sizes(
 #     chr_pos = [0] + chr_change_idx.tolist()
 #     var_group_labels = list(chroms[chr_pos])
 #     var_group_positions = [
-#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(feat_info))
+#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(bin_info))
 #         for i in range(len(chr_pos))
 #     ]
 
@@ -474,19 +474,19 @@ def plot_rdr_baf_1d_aggregated(
     print("plot 1D scatter aggregted BAF")
     chrom_sizes = get_chr_sizes(genome_file)
     bin_info = sx_data.bin_info
-    # feat_info = sx_data.feat_info
+    # bin_info = sx_data.bin_info
     # feat_mask = base_props > 0
     if mask_cnp:
-        bin_info = bin_info.loc[sx_data.ALLELE_MASK[mask_id], :]
-        # feat_mask &= sx_data.FEAT_MASK[mask_id]
-    # feat_info = feat_info.loc[mask_id, :]
+        bin_info = bin_info.loc[sx_data.MASK[mask_id], :]
+        # feat_mask &= sx_data.MASK[mask_id]
+    # bin_info = bin_info.loc[mask_id, :]
 
     exp_bafs = None
     exp_rdrs = None  # TODO
     if lab_type == "cell_label":
-        exp_bafs = sx_data.allele_BAF
+        exp_bafs = sx_data.BAF
         if mask_cnp:
-            exp_bafs = exp_bafs[sx_data.ALLELE_MASK[mask_id], :]
+            exp_bafs = exp_bafs[sx_data.MASK[mask_id], :]
 
     bin_info = bin_info.copy(deep=True)
 
@@ -494,8 +494,8 @@ def plot_rdr_baf_1d_aggregated(
     Y = sx_data.Y
     D = sx_data.D
     if mask_cnp:
-        Y = Y[sx_data.ALLELE_MASK[mask_id]]
-        D = D[sx_data.ALLELE_MASK[mask_id]]
+        Y = Y[sx_data.MASK[mask_id]]
+        D = D[sx_data.MASK[mask_id]]
 
     cell_labels = anns[lab_type].tolist()
     uniq_cell_labels = anns[lab_type].unique()

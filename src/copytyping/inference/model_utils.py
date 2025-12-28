@@ -28,7 +28,7 @@ def compute_baseline_proportions(
 
 
 # def compute_allele_bin_proportions(
-#     feat_info: pd.DataFrame,
+#     bin_info: pd.DataFrame,
 #     num_bins: int,
 #     full_props: np.ndarray,
 #     norm=True,
@@ -39,7 +39,7 @@ def compute_baseline_proportions(
 #     allele base props is defined over bins, and should only aggregate HET features' baseprops
 #     """
 #     bin_props = np.zeros(num_bins, dtype=np.float32)
-#     for bin_id, feats in feat_info.groupby(bin_colname, sort=False):
+#     for bin_id, feats in bin_info.groupby(bin_colname, sort=False):
 #         bin_props[bin_id] = np.sum(full_props[feats.index.to_numpy()])
 #     if norm:
 #         bin_props = bin_props / np.sum(bin_props)

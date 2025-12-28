@@ -26,11 +26,11 @@ def prepare_rdr_baf_features(
     # allele data
     Y = sx_data.Y
     D = sx_data.D
-    baf_masks = sx_data.ALLELE_MASK["IMBALANCED"]
     baf_matrix = np.divide(
         Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
     )
     baf_matrix = baf_matrix.T
+    baf_masks = sx_data.MASK["IMBALANCED"]
     baf_matrix = baf_matrix[:, baf_masks]
     perc_nan_baf = np.round(np.sum(np.isnan(baf_matrix)) / baf_matrix.size, 3)
     print(f"perc.nan.baf={perc_nan_baf:.3%}")
@@ -38,7 +38,7 @@ def prepare_rdr_baf_features(
     # rdr data
     T = sx_data.T
     Tn = sx_data.Tn
-    rdr_masks = sx_data.FEAT_MASK["ANEUPLOID"]
+    rdr_masks = sx_data.MASK["ANEUPLOID"]
     rdr_denom = base_props[:, None] @ Tn[None, :]  # (G, N)
     rdr_matrix = np.divide(
         T,

@@ -170,6 +170,13 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         type=float,
         help="Assign cells/spots to NA if posterior less than <posterior_thres>",
     )
+    parser.add_argument(
+        "--margin_thres",
+        required=False,
+        default=0.10,
+        type=float,
+        help="Assign cells/spots to NA if top-2 margin less than <posterior_thres>",
+    )
 
     ##################################################
     # plot parameters

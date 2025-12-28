@@ -98,51 +98,12 @@ def annotate_snps(segs: pd.DataFrame, snp_info: pd.DataFrame, seg_id="SEG_IDX"):
     snp_info["END"] = snp_info["POS"]
     return snp_info
 
-
 def annotate_snps_post(
-    snp_info: pd.DataFrame, allele_infos: dict, min_phase_posterior=0.95
-):
-    """
-    any SNPs that are unphased or has max(phase, 1-phase)<min_phase_posterior are discarded.
-    """
-    low_confidence_snps = (
-        np.maximum(snp_info["PHASE"], 1 - snp_info["PHASE"]) < min_phase_posterior
-    )
-    print(f"#low-confidence phased SNPs={np.sum(low_confidence_snps)}/{len(snp_info)}")
-    snp_info = snp_info.loc[~low_confidence_snps, :].reset_index(drop=True)
-
-    for data_type in allele_infos.keys():
-        cell_snps = allele_infos[data_type][0]
-        cell_snps = (
-            cell_snps.reset_index(drop=False)
-            .merge(
-                right=snp_info[["#CHR", "POS", "POS0", "PHASE", "HB"]],
-                on=["#CHR", "POS"],
-                how="left",
-                sort=False,
-            )
-            .set_index("index")
-        )
-
-        # some SNPs may outside CNV segments or unphased
-        num_filtered = np.sum(cell_snps["PHASE"].isna())
-        print(f"{data_type}, #unphased SNPs={num_filtered}/{len(cell_snps)}")
-        cell_snps = cell_snps.loc[cell_snps["PHASE"].notna(), :].copy(deep=True)
-
-        cell_snps["PHASE"] = cell_snps["PHASE"].astype(snp_info["PHASE"].dtype)
-        cell_snps["HB"] = cell_snps["HB"].astype(snp_info["HB"].dtype)
-        cell_snps["POS0"] = cell_snps["POS0"].astype(snp_info["POS"].dtype)
-        allele_infos[data_type][0] = cell_snps
-    return allele_infos
-
-
-def annotate_snps_post2(
     snp_info: pd.DataFrame,
-    allele_data: list,
+    cell_snps: pd.DataFrame
 ):
-    cell_snps = allele_data[0]
     cell_snps = (
-        allele_data[0]
+        cell_snps
         .reset_index(drop=False)
         .merge(
             right=snp_info[["#CHR", "POS", "POS0", "PHASE", "HB"]],
@@ -161,8 +122,7 @@ def annotate_snps_post2(
     cell_snps["PHASE"] = cell_snps["PHASE"].astype(snp_info["PHASE"].dtype)
     cell_snps["HB"] = cell_snps["HB"].astype(snp_info["HB"].dtype)
     cell_snps["POS0"] = cell_snps["POS0"].astype(snp_info["POS"].dtype)
-    allele_data[0] = cell_snps
-    return allele_data
+    return cell_snps
 
 
 ##################################################
@@ -220,6 +180,25 @@ def feature_to_haplo_blocks(
     )
     return adata, feature_df
 
+# def snp_to_haplo_blocks(
+#     snp_df: pd.DataFrame,
+#     haplo_blocks: pd.DataFrame,
+#     modality: str
+# ):
+#     """
+#     assign HB id to snp_df
+#     """
+#     print(f"#{modality}-SNP (raw)={len(snp_df)}")
+#     snp_df = assign_pos_to_range(snp_df, haplo_blocks, ref_id="HB", pos_col="POS0")
+#     isna_snp_df = snp_df["HB"].isna()
+#     print(
+#         f"#{modality}-SNPs outside any region={np.sum(isna_snp_df) / len(snp_df):.3%}"
+#     )
+#     snp_df.dropna(subset="HB", inplace=True)
+#     snp_df["HB"] = snp_df["HB"].astype(haplo_blocks["HB"].dtype)
+#     print(f"#{modality}-SNP (remain)={len(snp_df)}")
+#     return snp_df
+
 
 def snp_to_region(
     snp_df: pd.DataFrame, region_df: pd.DataFrame, modality: str, region_id="BIN_ID"
@@ -243,95 +222,159 @@ def snp_to_region(
     return snp_df
 
 
+# def feature_binning(
+#     adata: AnnData,
+#     feature_df: pd.DataFrame,
+#     tmp_dir: str,
+#     modality: str,
+#     feature_may_overlap=True,
+#     binning_strategy="adaptive",
+#     bin_colname="BIN_ID",
+#     min_med_count=5,
+#     max_nfeature=50,
+# ):
+#     """
+#     adata and feature_df has same var dim
+#     inplace modify adata and feature_df
+#     """
+#     if feature_may_overlap:
+#         print("detect overlapping features")
+#         tmp_feature_in_file = os.path.join(tmp_dir, f"tmp_{modality}.in.bed")
+#         tmp_feature_out_file = os.path.join(tmp_dir, f"tmp_{modality}.out.bed")
+#         feature_df.to_csv(
+#             tmp_feature_in_file,
+#             sep="\t",
+#             header=False,
+#             index=False,
+#             columns=["#CHR", "START", "END", "FEATURE_ID"],
+#         )
+#         var_df_clustered = run_bedtools_cluster(
+#             tmp_feature_in_file,
+#             tmp_feature_out_file,
+#             tmp_dir,
+#             max_dist=0,
+#             load_df=True,
+#             usecols=list(range(5)),
+#             names=["#CHR", "START", "END", "FEATURE_ID", "SUPER_VAR_IDX"],
+#         )
+#         var_df_clustered["SUPER_VAR_IDX"] -= 1  # convert to 0-based
+#         feature_df = pd.merge(
+#             left=feature_df,
+#             right=var_df_clustered[["FEATURE_ID", "SUPER_VAR_IDX"]],
+#             on="FEATURE_ID",
+#             how="left",
+#             sort=False,
+#         )
+#         num_ovlp = len(feature_df) - len(feature_df["SUPER_VAR_IDX"].unique())
+#         print(f"found {num_ovlp} overlapping features")
+#     else:
+#         feature_df["SUPER_VAR_IDX"] = feature_df["FEATURE_ID"]
+
+#     ##################################################
+#     # binning over HB and SUPER_VAR_IDX
+#     if issparse(adata.X) and not isinstance(adata.X, csc_matrix):
+#         adata.X = adata.X.tocsc()
+
+#     if binning_strategy == "adaptive":
+#         bin_id = 0
+#         feature_df[bin_colname] = -1
+#         for hb, hb_features in feature_df.groupby(by="HB", sort=False):
+#             hb_supers = hb_features.groupby(by="SUPER_VAR_IDX", sort=False).groups
+#             sup_ids = hb_features["SUPER_VAR_IDX"].unique()
+#             num_hb_supers = len(sup_ids)
+#             curr_idx = [0]
+#             acc_counts = adata.X[:, hb_supers[sup_ids[0]]].sum(1).A1
+#             acc_nfeature = len(hb_supers[sup_ids[0]])
+#             bin_id0 = bin_id
+#             for i in range(1, num_hb_supers):
+#                 nxt_gene_ids = hb_supers[sup_ids[i]]
+#                 nxt_counts = adata.X[:, nxt_gene_ids].sum(1).A1
+#                 nxt_nfeature = len(nxt_gene_ids)
+#                 if (np.median(acc_counts) >= min_med_count) or (
+#                     acc_nfeature >= max_nfeature
+#                 ):
+#                     assign = np.concatenate([hb_supers[sup_ids[j]] for j in curr_idx])
+#                     feature_df.loc[assign, bin_colname] = bin_id
+
+#                     bin_id += 1
+#                     curr_idx = [i]
+#                     acc_counts = nxt_counts
+#                     acc_nfeature = nxt_nfeature
+#                 else:
+#                     curr_idx.append(i)
+#                     acc_counts += nxt_counts
+#                     acc_nfeature += nxt_nfeature
+#             assign = np.concatenate([hb_supers[sup_ids[j]] for j in curr_idx])
+#             feature_df.loc[assign, bin_colname] = max(bin_id - 1, bin_id0)
+#             bin_id = max(bin_id, bin_id0 + 1)
+#     else:
+#         # ensure BIN_ID is contiguous
+#         feature_df[bin_colname], hb_levels = pd.factorize(feature_df["HB"], sort=True)
+
+#     ##################################################
+#     # merge BIN_ID with adata
+#     adata.var = (
+#         adata.var.reset_index(drop=False)
+#         .merge(
+#             right=feature_df[["FEATURE_ID", bin_colname]],
+#             on="FEATURE_ID",
+#             how="left",
+#         )
+#         .set_index("index")
+#     )
+
+#     ##################################################
+#     # construct bin_df
+#     var_feature_bins = feature_df.groupby(by=bin_colname, sort=False, as_index=True)
+#     feature_bins = var_feature_bins.agg(
+#         **{
+#             "#CHR": ("#CHR", "first"),
+#             "START": ("START", "min"),
+#             "END": ("END", "max"),
+#             "HB": ("HB", "first"),
+#             "CNP": ("CNP", "first"),
+#             "feature_ids": ("feature_ids", lambda x: "|".join(map(str, x.unique()))),
+#         }
+#     ).reset_index(drop=False)
+#     feature_bins.loc[:, "#features"] = var_feature_bins.size().reset_index(drop=True)
+#     feature_bins.loc[:, "BLOCKSIZE"] = feature_bins["END"] - feature_bins["START"]
+#     print(f"#bins={len(feature_bins)}")
+#     print(f"#cna-bins={len(feature_bins.loc[mark_cna(feature_bins)])}")
+#     return feature_bins
+
+def matrix_segmentation(X, bin_ids, M):
+    """
+    X: (N, G) sparse or dense
+    bin_ids: (G,) ints in [0..M-1]
+    return: (N, M) csr_matrix
+    """
+    X = X.tocsr() if sparse.issparse(X) else np.asarray(X)
+    bin_ids = np.asarray(bin_ids, dtype=np.int64)
+    N, G = X.shape
+    if bin_ids.shape[0] != G:
+        raise ValueError(f"bin_ids length {bin_ids.shape[0]} != G {G}")
+    if bin_ids.size and (bin_ids.min() < 0 or bin_ids.max() >= M):
+        raise ValueError("bin_ids out of range")
+
+    # (G, M) one-hot assignment
+    B = sparse.csr_matrix(
+        (np.ones(G, dtype=np.int8), (np.arange(G), bin_ids)),
+        shape=(G, M),
+    )
+
+    X_bin = X @ B   # (N, M)
+    return X_bin.tocsr() if sparse.issparse(X_bin) else sparse.csr_matrix(X_bin)
+
 def feature_binning(
     adata: AnnData,
     feature_df: pd.DataFrame,
-    tmp_dir: str,
-    modality: str,
-    feature_may_overlap=True,
-    binning_strategy="adaptive",
-    bin_colname="BIN_ID",
-    min_med_count=5,
-    max_nfeature=50,
+    bin_colname="BIN_ID"
 ):
-    """
-    adata and feature_df has same var dim
-    inplace modify adata and feature_df
-    """
-    if feature_may_overlap:
-        print("detect overlapping features")
-        tmp_feature_in_file = os.path.join(tmp_dir, f"tmp_{modality}.in.bed")
-        tmp_feature_out_file = os.path.join(tmp_dir, f"tmp_{modality}.out.bed")
-        feature_df.to_csv(
-            tmp_feature_in_file,
-            sep="\t",
-            header=False,
-            index=False,
-            columns=["#CHR", "START", "END", "FEATURE_ID"],
-        )
-        var_df_clustered = run_bedtools_cluster(
-            tmp_feature_in_file,
-            tmp_feature_out_file,
-            tmp_dir,
-            max_dist=0,
-            load_df=True,
-            usecols=list(range(5)),
-            names=["#CHR", "START", "END", "FEATURE_ID", "SUPER_VAR_IDX"],
-        )
-        var_df_clustered["SUPER_VAR_IDX"] -= 1  # convert to 0-based
-        feature_df = pd.merge(
-            left=feature_df,
-            right=var_df_clustered[["FEATURE_ID", "SUPER_VAR_IDX"]],
-            on="FEATURE_ID",
-            how="left",
-            sort=False,
-        )
-        num_ovlp = len(feature_df) - len(feature_df["SUPER_VAR_IDX"].unique())
-        print(f"found {num_ovlp} overlapping features")
-    else:
-        feature_df["SUPER_VAR_IDX"] = feature_df["FEATURE_ID"]
-
-    ##################################################
-    # binning over HB and SUPER_VAR_IDX
     if issparse(adata.X) and not isinstance(adata.X, csc_matrix):
         adata.X = adata.X.tocsc()
-
-    if binning_strategy == "adaptive":
-        bin_id = 0
-        feature_df[bin_colname] = -1
-        for hb, hb_features in feature_df.groupby(by="HB", sort=False):
-            hb_supers = hb_features.groupby(by="SUPER_VAR_IDX", sort=False).groups
-            sup_ids = hb_features["SUPER_VAR_IDX"].unique()
-            num_hb_supers = len(sup_ids)
-            curr_idx = [0]
-            acc_counts = adata.X[:, hb_supers[sup_ids[0]]].sum(1).A1
-            acc_nfeature = len(hb_supers[sup_ids[0]])
-            bin_id0 = bin_id
-            for i in range(1, num_hb_supers):
-                nxt_gene_ids = hb_supers[sup_ids[i]]
-                nxt_counts = adata.X[:, nxt_gene_ids].sum(1).A1
-                nxt_nfeature = len(nxt_gene_ids)
-                if (np.median(acc_counts) >= min_med_count) or (
-                    acc_nfeature >= max_nfeature
-                ):
-                    assign = np.concatenate([hb_supers[sup_ids[j]] for j in curr_idx])
-                    feature_df.loc[assign, bin_colname] = bin_id
-
-                    bin_id += 1
-                    curr_idx = [i]
-                    acc_counts = nxt_counts
-                    acc_nfeature = nxt_nfeature
-                else:
-                    curr_idx.append(i)
-                    acc_counts += nxt_counts
-                    acc_nfeature += nxt_nfeature
-            assign = np.concatenate([hb_supers[sup_ids[j]] for j in curr_idx])
-            feature_df.loc[assign, bin_colname] = max(bin_id - 1, bin_id0)
-            bin_id = max(bin_id, bin_id0 + 1)
-    else:
-        # ensure BIN_ID is contiguous
-        feature_df[bin_colname], hb_levels = pd.factorize(feature_df["HB"], sort=True)
-
+    # ensure BIN_ID is contiguous
+    feature_df[bin_colname], hb_levels = pd.factorize(feature_df["HB"], sort=True)
+    
     ##################################################
     # merge BIN_ID with adata
     adata.var = (
@@ -362,7 +405,6 @@ def feature_binning(
     print(f"#bins={len(feature_bins)}")
     print(f"#cna-bins={len(feature_bins.loc[mark_cna(feature_bins)])}")
     return feature_bins
-
 
 ##################################################
 def allele_binning(

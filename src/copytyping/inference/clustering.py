@@ -9,12 +9,12 @@ from scanpy import AnnData
 from sklearn import cluster, mixture
 
 from copytyping.utils import *
-from copytyping.inference.cell_model import SC_Model
+from copytyping.inference.cell_model import Cell_Model
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.inference.inference_utils import prepare_rdr_baf_features
 
 
-def kmeans_copytyping(sc_model: SC_Model, params: dict):
+def kmeans_copytyping(sc_model: Cell_Model, params: dict):
     features = []
     for data_type in sc_model.data_types:
         my_features = prepare_rdr_baf_features(
@@ -30,7 +30,7 @@ def kmeans_copytyping(sc_model: SC_Model, params: dict):
     return kmeans.labels_
 
 
-def leiden_copytyping(sc_model: SC_Model, params: dict, random_state=42, resolution=1):
+def leiden_copytyping(sc_model: Cell_Model, params: dict, random_state=42, resolution=1):
     features = []
     for data_type in sc_model.data_types:
         my_features = prepare_rdr_baf_features(
@@ -49,7 +49,7 @@ def leiden_copytyping(sc_model: SC_Model, params: dict, random_state=42, resolut
 
 
 def ward_copytyping(
-    sc_model: SC_Model,
+    sc_model: Cell_Model,
     params: dict,
     label="ward",
 ):

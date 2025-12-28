@@ -4,8 +4,7 @@ from scipy.stats import binom, beta, norm
 
 ##################################################
 # Likelihood functions
-def _cond_betabin_logpmf(
-    X: np.ndarray,
+def cond_betabin_logpmf(
     Y: np.ndarray,
     D: np.ndarray,
     tau: np.ndarray,
@@ -25,13 +24,13 @@ def _cond_betabin_logpmf(
     Returns:
         np.ndarray: (G,N,K)
     """
-    (G, N) = X.shape
+    (G, N) = Y.shape
     K = p.shape[1]
 
     # (G, N, K)
-    _X = X[:, :, None]
     _Y = Y[:, :, None]
     _D = D[:, :, None]
+    _X = _D - _Y
     _tau = np.broadcast_to(np.atleast_1d(tau)[:, None, None], (G, 1, 1))
     _p = p[:, None, :]
 
@@ -43,31 +42,31 @@ def _cond_betabin_logpmf(
     return ll
 
 
-def _cond_negbin_logpmf(
-    T: np.ndarray,
+def cond_negbin_logpmf(
+    X: np.ndarray,
     Tn: np.ndarray,
     props_gk: np.ndarray,
     inv_phi: np.ndarray,
 ) -> np.ndarray:
     """compute loglik conditioned on labels per bin per cell per clone
-        bb_ll_{g,n,k} = logP(T_{g,n}|l_n=k;param)
+        nb_ll_{g,n,k} = logP(X_{g,n}|l_n=k;param)
 
     Args:
-        T (np.ndarray): (G,N)
+        X (np.ndarray): (G,N)
         Tn (np.ndarray): (N,)
         props (np.ndarray): (G, K)
         inv_phi (np.ndarray): (G,)
     Returns:
         np.ndarray: (G,N,K)
     """
-    (G, N) = T.shape
+    (G, N) = X.shape
     K = props_gk.shape[1]
     mu_counts = props_gk[:, None, :] * Tn[None, :, None]  # (G,N,K)
-    _T = T[:, :, None]  # (G, N, K)
+    _X = X[:, :, None]  # (G, N, K)
 
     _inv_phi = np.broadcast_to(np.atleast_1d(inv_phi)[:, None, None], (G, N, K))
 
-    log_binom = gammaln(_T + _inv_phi) - gammaln(_inv_phi) - gammaln(_T + 1)
+    log_binom = gammaln(_X + _inv_phi) - gammaln(_inv_phi) - gammaln(_X + 1)
     ll = log_binom + _inv_phi * np.log(_inv_phi / (_inv_phi + mu_counts))
-    ll = ll + _T * np.log(mu_counts / (_inv_phi + mu_counts))
+    ll = ll + _X * np.log(mu_counts / (_inv_phi + mu_counts))
     return ll

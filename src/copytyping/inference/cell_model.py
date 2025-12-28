@@ -8,33 +8,32 @@ import pandas as pd
 from copytyping.utils import *
 from copytyping.sx_data.sx_data import *
 from copytyping.inference.model_utils import *
-from copytyping.inference.likelihood_funcs import _cond_betabin_logpmf, _cond_negbin_logpmf
+from copytyping.inference.likelihood_funcs import *
 
 from scipy.optimize import minimize_scalar
 from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
 
 ##################################################
-class SC_Model:
+class Cell_Model:
     """Single-cell EM model, no spatial information, tumor purity=1 for each cell."""
 
     def __init__(
         self,
         barcodes: pd.DataFrame,
+        haplo_blocks: pd.DataFrame,
         data_types: list,
         mod_dirs: dict,
-        out_dir: str,
         modality: str,
         verbose=1,
     ) -> None:
         self.barcodes = barcodes
         self.data_types = data_types
         self.N = self.num_barcodes = len(barcodes)
-        self.out_dir = out_dir
         self.modality = modality
         self.data_sources = {}
         for data_type in self.data_types:
             self.data_sources[data_type] = SX_Data(
-                len(barcodes), mod_dirs[data_type], data_type
+                barcodes, haplo_blocks, mod_dirs[data_type], data_type
             )
         self.clones = self.data_sources[self.data_types[0]].clones
         self.K = self.num_clones = len(self.clones)
@@ -61,46 +60,29 @@ class SC_Model:
 
         # initialize baseline proportion if not allele_only mode
         if mode != "allele_only":
-            if "GEX" in self.data_sources:
-                if params.get("GEX-lambda", None) is None:
-                    params["GEX-lambda"] = self.initialize_baseline_proportions("GEX")
-                if params.get("GEX-inv_phi", None) is None:
-                    params["GEX-inv_phi"] = np.full(
-                        self.data_sources["GEX"].nrows_eff_feat,
-                        fill_value=1 / default_phi,
-                        dtype=np.float32,
-                    )
-
-            if "ATAC" in self.data_sources:
-                if params.get("ATAC-lambda", None) is None:
-                    params["ATAC-lambda"] = self.initialize_baseline_proportions("ATAC")
-                if params.get("ATAC-inv_phi", None) is None:
-                    params["ATAC-inv_phi"] = np.full(
-                        self.data_sources["ATAC"].nrows_eff_feat,
+            for data_type in self.data_types:
+                if params.get(f"{data_type}-lambda", None) is None:
+                    params[f"{data_type}-lambda"] = self.initialize_baseline_proportions(data_type)
+                if params.get(f"{data_type}-inv_phi", None) is None:
+                    params[f"{data_type}-inv_phi"] = np.full(
+                        self.data_sources[data_type].nrows_eff_feat,
                         fill_value=1 / default_phi,
                         dtype=np.float32,
                     )
 
         if mode != "total_only":
-            if "GEX" in self.data_sources:
-                if params.get("GEX-tau", None) is None:
-                    params["GEX-tau"] = np.full(
-                        self.data_sources["GEX"].nrows_eff_allele,
-                        fill_value=default_tau,
-                        dtype=np.float32,
-                    )
-            if "ATAC" in self.data_sources:
-                if params.get("ATAC-tau", None) is None:
-                    params["ATAC-tau"] = np.full(
-                        self.data_sources["ATAC"].nrows_eff_allele,
+            for data_type in self.data_types:
+                if params.get(f"{data_type}-tau", None) is None:
+                    params[f"{data_type}-tau"] = np.full(
+                        self.data_sources[data_type].nrows_eff_allele,
                         fill_value=default_tau,
                         dtype=np.float32,
                     )
         if any(
-            data_type.startswith("VISIUM") for data_type in self.data_sources.keys()
+            data_type.startswith("VISIUM") for data_type in self.data_types
         ):
-            data_type = list(self.data_sources.keys())[0]
             assert mode == "allele_only"
+            data_type = self.data_types[0]
             if params.get(f"{data_type}-tau", None) is None:
                 params[f"{data_type}-tau"] = np.full(
                     self.data_sources[data_type].nrows_eff_allele,
@@ -117,7 +99,7 @@ class SC_Model:
 
     def initialize_baseline_proportions(
         self,
-        modality: str,
+        data_type: str,
         black_list=[
             "Tumor_cell",
             "tumor",
@@ -129,7 +111,7 @@ class SC_Model:
         ],
     ):
         """this returns baseline proportions for all bins"""
-        print(f"initialize baseline proportion for {modality}")
+        print(f"initialize baseline proportion for {data_type}")
         if "cell_type" in self.barcodes.columns:
             cell_types = self.barcodes["cell_type"].unique()
             print("All celltypes: ", cell_types)
@@ -146,8 +128,8 @@ class SC_Model:
         # TODO better normal cell selection
         assert num_normal_cells > 0
         base_props = compute_baseline_proportions(
-            self.data_sources[modality].T,
-            self.data_sources[modality].Tn,
+            self.data_sources[data_type].X,
+            self.data_sources[data_type].Tn,
             is_normal_cell,
         )
         return base_props
@@ -161,8 +143,8 @@ class SC_Model:
             # allele log-probs
             if mode != "total_only":
                 MA = sx_data.apply_allele_mask_shallow(mask_id="IMBALANCED")
-                allele_ll_mat = _cond_betabin_logpmf(
-                    MA["X"], MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
+                allele_ll_mat = cond_betabin_logpmf(
+                    MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
                 )
                 allele_lls = allele_ll_mat.sum(axis=0)  # (N,K)
                 global_lls += allele_lls
@@ -172,13 +154,13 @@ class SC_Model:
                 lambda_g = params[f"{data_type}-lambda"]
                 props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)
                 props_gk_cnv = props_gk[
-                    (sx_data.FEAT_MASK["ANEUPLOID"]) & (lambda_g > 0), :
+                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
                 ]
 
-                mask = lambda_g[sx_data.FEAT_MASK["ANEUPLOID"]] > 0
+                mask = lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
                 MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
-                total_ll_mat = _cond_negbin_logpmf(
-                    MF["T"][mask],
+                total_ll_mat = cond_negbin_logpmf(
+                    MF["X"][mask],
                     sx_data.Tn,
                     props_gk_cnv,
                     params[f"{data_type}-inv_phi"][mask],
@@ -241,15 +223,15 @@ class SC_Model:
                 # update NB over-dispersion
                 lambda_g = params[f"{data_type}-lambda"]
                 props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)[
-                    (sx_data.FEAT_MASK["ANEUPLOID"]) & (lambda_g > 0), :
+                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
                 ]
                 MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
-                T_gnk = MF["T"][lambda_g[sx_data.FEAT_MASK["ANEUPLOID"]] > 0][
+                X_gnk = MF["X"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0][
                     :, :, None
                 ]  # (G, N, 1)
                 mu_gnk = props_gk[:, None, :] * sx_data.Tn[None, :, None]  # (G, 1, K)
                 if share_invphi:
-                    const_logfact = -gammaln(T_gnk + 1.0)
+                    const_logfact = -gammaln(X_gnk + 1.0)
 
                     def neg_E_loglik(invphi):
                         if invphi <= 0.0:
@@ -260,11 +242,11 @@ class SC_Model:
                         log_r_plus_mu = np.log(r + mu_gnk)
 
                         log_pmf = (
-                            gammaln(T_gnk + r)
+                            gammaln(X_gnk + r)
                             - gammaln(r)
                             + const_logfact
                             + r * (log_r - log_r_plus_mu)
-                            + T_gnk * (np.log(mu_gnk) - log_r_plus_mu)
+                            + X_gnk * (np.log(mu_gnk) - log_r_plus_mu)
                         )
 
                         E_loglik = np.sum(gamma_gnk * log_pmf)
@@ -283,12 +265,12 @@ class SC_Model:
                 else:
                     # learn cnv-segment specific invphi
                     for k, v in (
-                        MF["feat_info"]
+                        MF["bin_info"]
                         .reset_index(drop=True)
                         .groupby("HB", sort=False)
                         .groups.items()
                     ):
-                        const_logfact = -gammaln(T_gnk[v] + 1.0)
+                        const_logfact = -gammaln(X_gnk[v] + 1.0)
 
                         def neg_E_loglik(invphi):
                             if invphi <= 0.0:
@@ -299,11 +281,11 @@ class SC_Model:
                             log_r_plus_mu = np.log(r + mu_gnk[v])
 
                             log_pmf = (
-                                gammaln(T_gnk[v] + r)
+                                gammaln(X_gnk[v] + r)
                                 - gammaln(r)
                                 + const_logfact
                                 + r * (log_r - log_r_plus_mu)
-                                + T_gnk[v] * (np.log(mu_gnk[v]) - log_r_plus_mu)
+                                + X_gnk[v] * (np.log(mu_gnk[v]) - log_r_plus_mu)
                             )
 
                             E_loglik = np.sum(gamma_gnk * log_pmf)
@@ -323,9 +305,9 @@ class SC_Model:
                 # update BB over-dispersion tau
                 MA = sx_data.apply_allele_mask_shallow(mask_id="IMBALANCED")
                 p_gnk = MA["BAF"][:, None, :]  # (G, 1, K)
-                X_gnk = MA["X"][:, :, None]  # (G, N, 1)
                 Y_gnk = MA["Y"][:, :, None]  # (G, N, 1)
                 D_gnk = MA["D"][:, :, None]  # (G, N, 1)
+                X_gnk = D_gnk - Y_gnk # (G, N, 1)
                 if share_tau:
                     log_binom_const = (
                         gammaln(D_gnk + 1.0)
@@ -405,7 +387,7 @@ class SC_Model:
             if mode != "total_only":
                 print(f"{data_type}-tau", np.unique(params[f"{data_type}-tau"]))
 
-    def inference(
+    def fit(
         self,
         mode="hybrid",
         fix_params=None,
@@ -454,9 +436,10 @@ class SC_Model:
 
         # potentially plot the LL here TODO ll_trace
         # print(param_trace)
+        self.params = params
         return params
 
-    def map_decode(
+    def predict(
         self,
         mode: str,
         params: dict,
@@ -485,19 +468,6 @@ class SC_Model:
             anns["margin_delta"] < margin_thres
         )
         anns.loc[mask_na, label] = "NA"
-        # see if NA labels can be assigned to normal vs tumor
-        # normal_tumor_margin = np.abs(anns["normal"] - anns["tumor"])
-        # anns.loc[
-        #     mask_na
-        #     & (anns["normal"] >= posterior_thres)
-        #     & (normal_tumor_margin >= margin_thres),
-        #     label,
-        # ] = "NA/normal"
-        # anns.loc[
-        #     mask_na & (anns["tumor"] >= posterior_thres) & (normal_tumor_margin >= margin_thres),
-        #     label,
-        # ] = "NA/tumor"
-
         # clone proportions among all barcodes (including NA)
         clone_props = {
             clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones

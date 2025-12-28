@@ -8,13 +8,13 @@ import pandas as pd
 from copytyping.utils import *
 from copytyping.sx_data.sx_data import *
 from copytyping.inference.model_utils import *
-from copytyping.inference.likelihood_funcs import _cond_betabin_logpmf, _cond_negbin_logpmf
+from copytyping.inference.likelihood_funcs import cond_betabin_logpmf, cond_negbin_logpmf
 
 from scipy.optimize import minimize_scalar
 from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
 
 ##################################################
-class SS_Model:
+class Spot_Model:
     """EM model for spot-level data, variable tumor purity for each spot."""
 
     def __init__(
@@ -126,7 +126,7 @@ class SS_Model:
             # allele log-probs
             if mode != "total_only":
                 MA = sx_data.apply_allele_mask_shallow(mask_id="IMBALANCED")
-                allele_ll_mat = _cond_betabin_logpmf(
+                allele_ll_mat = cond_betabin_logpmf(
                     MA["X"], MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
                 )
                 allele_lls = allele_ll_mat.sum(axis=0)  # (N,K)
@@ -137,12 +137,12 @@ class SS_Model:
                 lambda_g = params[f"{data_type}-lambda"]
                 props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)
                 props_gk_cnv = props_gk[
-                    (sx_data.FEAT_MASK["ANEUPLOID"]) & (lambda_g > 0), :
+                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
                 ]
 
-                mask = lambda_g[sx_data.FEAT_MASK["ANEUPLOID"]] > 0
+                mask = lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
                 MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
-                total_ll_mat = _cond_negbin_logpmf(
+                total_ll_mat = cond_negbin_logpmf(
                     MF["T"][mask],
                     sx_data.Tn,
                     props_gk_cnv,
@@ -206,10 +206,10 @@ class SS_Model:
                 # update NB over-dispersion
                 lambda_g = params[f"{data_type}-lambda"]
                 props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)[
-                    (sx_data.FEAT_MASK["ANEUPLOID"]) & (lambda_g > 0), :
+                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
                 ]
                 MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
-                T_gnk = MF["T"][lambda_g[sx_data.FEAT_MASK["ANEUPLOID"]] > 0][
+                T_gnk = MF["T"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0][
                     :, :, None
                 ]  # (G, N, 1)
                 mu_gnk = props_gk[:, None, :] * sx_data.Tn[None, :, None]  # (G, 1, K)
@@ -248,7 +248,7 @@ class SS_Model:
                 else:
                     # learn cnv-segment specific invphi
                     for k, v in (
-                        MF["feat_info"]
+                        MF["bin_info"]
                         .reset_index(drop=True)
                         .groupby("HB", sort=False)
                         .groups.items()

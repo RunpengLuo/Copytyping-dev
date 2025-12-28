@@ -23,6 +23,8 @@ from copytyping.utils import get_chr_sizes
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.plot.plot_cnp import *
 
+from copytyping.inference.model_utils import empirical_p_gn, empirical_rdr_gn
+
 import logging
 
 # Silence fontTools subsetter chatter
@@ -35,8 +37,8 @@ def plot_heatmap(
     ax: plt.Axes,
     cell_labels: np.ndarray,
     bin_info: pd.DataFrame,
-    wl_segments: pd.DataFrame,
     X_mat: np.ndarray,
+    wl_segments: pd.DataFrame,
     height=1,
     plot_chrname=True,
     title=None,
@@ -250,7 +252,7 @@ def prepare_rdr(
     log2=True,
     cluster_by_val=False,
 ):
-    T_agg_list, Tn_agg_list, cell_labels_agg = [], [], []
+    X_agg_list, Tn_agg_list, cell_labels_agg = [], [], []
     for lab in uniq_labels:
         idx = np.where(cell_labels == lab)[0]
         n_cells = len(idx)
@@ -260,30 +262,21 @@ def prepare_rdr(
             if len(sub_idx) == 0:
                 continue
             # sum counts per bin
-            T_sum = sx_data.T[:, sub_idx].sum(axis=1)
+            X_sum = sx_data.X[:, sub_idx].sum(axis=1)
             Tn_sum = sx_data.Tn[sub_idx].sum()
-            T_agg_list.append(T_sum)
+            X_agg_list.append(X_sum)
             Tn_agg_list.append(Tn_sum)
             cell_labels_agg.append(lab)
-    T = np.column_stack(T_agg_list)  # (n_bins, new_cells)
+    X = np.column_stack(X_agg_list)  # (n_bins, new_cells)
     Tn = np.array(Tn_agg_list, dtype=np.int32)
     cell_labels = np.array(cell_labels_agg)
 
-    rdr_denom = base_props[:, None] @ Tn[None, :]
-    rdr_matrix = np.divide(
-        T,
-        rdr_denom,
-        out=np.full_like(rdr_denom, fill_value=np.nan, dtype=np.float32),
-        where=rdr_denom > 0,
-    )
-    rdr_matrix[rdr_matrix == 0] = np.nan
+    rdr_matrix = empirical_rdr_gn(X, Tn, base_props, log2=log2)
     rdr_matrix = rdr_matrix.T
-    if log2:
-        rdr_matrix[~np.isnan(rdr_matrix)] = np.log2(rdr_matrix[~np.isnan(rdr_matrix)])
 
     # group cells by labels, clustering.
-    aneuploid_mask = sx_data.FEAT_MASK["ANEUPLOID"]
     if cluster_by_val:
+        aneuploid_mask = sx_data.MASK["ANEUPLOID"]
         rdr_matrix = cluster_per_group(
             aneuploid_mask, rdr_matrix, cell_labels, uniq_labels
         )
@@ -298,7 +291,7 @@ def prepare_pi_gk(
     agg_size=1,
     cluster_by_val=False,
 ):
-    T_agg_list, Tn_agg_list, cell_labels_agg = [], [], []
+    X_agg_list, Tn_agg_list, cell_labels_agg = [], [], []
     for lab in uniq_labels:
         idx = np.where(cell_labels == lab)[0]
         n_cells = len(idx)
@@ -308,20 +301,20 @@ def prepare_pi_gk(
             if len(sub_idx) == 0:
                 continue
             # sum counts per bin
-            T_sum = sx_data.T[:, sub_idx].sum(axis=1)
+            X_sum = sx_data.X[:, sub_idx].sum(axis=1)
             Tn_sum = sx_data.Tn[sub_idx].sum()
-            T_agg_list.append(T_sum)
+            X_agg_list.append(X_sum)
             Tn_agg_list.append(Tn_sum)
             cell_labels_agg.append(lab)
-    T = np.column_stack(T_agg_list)  # (n_bins, new_cells)
+    X = np.column_stack(X_agg_list)  # (n_bins, new_cells)
     Tn = np.array(Tn_agg_list, dtype=np.int32)
     cell_labels = np.array(cell_labels_agg)
-    pi_gk_matrix = T / Tn[None, :]
+    pi_gk_matrix = X / Tn[None, :]
     pi_gk_matrix[pi_gk_matrix == 0] = np.nan
     pi_gk_matrix = pi_gk_matrix.T
     # group cells by labels, clustering.
-    aneuploid_mask = sx_data.FEAT_MASK["ANEUPLOID"]
     if cluster_by_val:
+        aneuploid_mask = sx_data.MASK["ANEUPLOID"]
         pi_gk_matrix = cluster_per_group(
             aneuploid_mask, pi_gk_matrix, cell_labels, uniq_labels
         )
@@ -361,7 +354,7 @@ def prepare_baf(
 
     # group cells by labels, clustering.
     if cluster_by_val:
-        imbalanced_mask = sx_data.ALLELE_MASK["IMBALANCED"]
+        imbalanced_mask = sx_data.MASK["IMBALANCED"]
         baf_matrix = cluster_per_group(
             imbalanced_mask, baf_matrix, cell_labels, uniq_labels
         )
@@ -371,7 +364,7 @@ def prepare_baf(
 def plot_cnv_heatmap(
     sample: str,
     data_type: str,
-    haplo_info: pd.DataFrame,
+    haplo_blocks: pd.DataFrame,
     sx_data: SX_Data,
     anns: pd.DataFrame,
     wl_fragments: pd.DataFrame,
@@ -395,18 +388,15 @@ def plot_cnv_heatmap(
     plt.rcParams["svg.fonttype"] = "none"
 
     if anns is None:
-        cell_labels = np.full(sx_data.num_barcodes, fill_value="unknown")
+        cell_labels = np.full(sx_data.N, fill_value="unknown")
     else:
         cell_labels = anns[lab_type].to_numpy()
-    assert len(cell_labels) == sx_data.num_barcodes
+    assert len(cell_labels) == sx_data.N
 
     # order cells by labels, aggregate same label cells
     uniq_labels = np.unique(cell_labels)
     if lab_type in ["copytyping", "spot_label"]:
-        num_clones = (
-            len(str(haplo_info.iloc[0]["CNP"]).split(";")) - 1
-        )  # first column is normal
-        uniq_labels = [f"clone{c}" for c in range(num_clones, 0, -1)] + ["normal", "NA"]
+        uniq_labels = [f"clone{c}" for c in range(sx_data.K - 1, 0, -1)] + ["normal", "NA"]
         uniq_labels = [lab for lab in uniq_labels if lab in np.unique(cell_labels)]
 
     # order props by unique labels, since data also get ordered in prepare step
@@ -420,11 +410,11 @@ def plot_cnv_heatmap(
     # cluster_by_val = proportions is None
     cluster_by_val = False
     # print(f"cluster_by_val={cluster_by_val}")
+    data_info = sx_data.bin_info
     if val == "BAF":
         data_matrix, cell_labels = prepare_baf(
             sx_data, cell_labels, uniq_labels, agg_size, cluster_by_val
         )
-        data_info = sx_data.bin_info
         boundaries = np.linspace(0, 1, 11)  # [0.0, 0.1, ..., 1.0]
         colors = [
             "#1f77b4",
@@ -453,7 +443,6 @@ def plot_cnv_heatmap(
             val == "log2RDR",
             cluster_by_val=cluster_by_val,
         )
-        data_info = sx_data.feat_info
         cmap = "coolwarm"
         if val == "log2RDR":
             norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
@@ -466,7 +455,6 @@ def plot_cnv_heatmap(
         data_matrix, cell_labels = prepare_pi_gk(
             sx_data, cell_labels, uniq_labels, base_props, agg_size, cluster_by_val
         )
-        data_info = sx_data.feat_info
 
         # boundaries = np.linspace(0, 1, 11)   # [0.0, 0.1, ..., 1.0]
         colors = [
@@ -519,14 +507,14 @@ def plot_cnv_heatmap(
         axes[0],
         cell_labels,
         data_info,
-        wl_fragments,
         data_matrix,
+        wl_fragments,
         height=10,
         cmap=cmap,
         norm=norm,
     )
 
-    plot_cnv_profile(axes[1], haplo_info, wl_fragments, plot_chrname=False)
+    plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
     plot_cnv_legend(axes[2])
 
     ##################################################

@@ -65,7 +65,7 @@ def read_barcodes_celltype_one_replicate(
     return barcodes_df
 
 
-def load_cnv_profile(seg_ucn: str, min_cnv_length=1e6):
+def load_seg_ucn(seg_ucn: str, min_cnv_length=1e6):
     """load CNV profile. Filter any unconfident ones."""
     print(f"load cnv profile, min_cnv_length={min_cnv_length}")
     segs, clones, clone_props = read_seg_ucn_file(seg_ucn)
@@ -255,7 +255,7 @@ def load_cellsnp_files(
 
     cell_snps = read_VCF_cellsnp_err_header(vcf_file)
     cell_snps["RAW_SNP_IDX"] = np.arange(len(cell_snps))  # use to index matrix
-    return [cell_snps, dp_mat, ref_mat, alt_mat]
+    return cell_snps, dp_mat, ref_mat, alt_mat
 
 
 def load_calicost_prep_data(calicost_prep_dir: str, barcodes: list):
@@ -368,16 +368,16 @@ def load_spatial_coordinates(coord_file: str):
     pass
 
 
-def parse_allele_cnp(bin_info: pd.DataFrame, laplace=0.01):
-    num_clones = len(str(bin_info["CNP"].iloc[0]).split(";"))
+def parse_cnv_profile(haplo_blocks: pd.DataFrame, laplace=0.01):
+    num_clones = len(str(haplo_blocks["CNP"].iloc[0]).split(";"))
     clones = ["normal"] + [f"clone{i}" for i in range(1, num_clones)]
-    A = np.zeros((len(bin_info), num_clones), dtype=np.int32)
-    B = np.zeros((len(bin_info), num_clones), dtype=np.int32)
+    A = np.zeros((len(haplo_blocks), num_clones), dtype=np.int32)
+    B = np.zeros((len(haplo_blocks), num_clones), dtype=np.int32)
     for i in range(num_clones):
-        A[:, i] = bin_info.apply(
+        A[:, i] = haplo_blocks.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[0]), axis=1
         ).to_numpy()
-        B[:, i] = bin_info.apply(
+        B[:, i] = haplo_blocks.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[1]), axis=1
         ).to_numpy()
     C = A + B
@@ -393,16 +393,16 @@ def parse_allele_cnp(bin_info: pd.DataFrame, laplace=0.01):
     return clones, A, B, C, BAF
 
 
-def parse_total_cnp(feat_info: pd.DataFrame):
-    num_clones = len(str(feat_info["CNP"].iloc[0]).split(";"))
+def parse_total_cnp(bin_info: pd.DataFrame):
+    num_clones = len(str(bin_info["CNP"].iloc[0]).split(";"))
     clones = ["normal"] + [f"clone{i}" for i in range(1, num_clones)]
-    A = np.zeros((len(feat_info), num_clones), dtype=np.int32)
-    B = np.zeros((len(feat_info), num_clones), dtype=np.int32)
+    A = np.zeros((len(bin_info), num_clones), dtype=np.int32)
+    B = np.zeros((len(bin_info), num_clones), dtype=np.int32)
     for i in range(num_clones):
-        A[:, i] = feat_info.apply(
+        A[:, i] = bin_info.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[0]), axis=1
         ).to_numpy()
-        B[:, i] = feat_info.apply(
+        B[:, i] = bin_info.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[1]), axis=1
         ).to_numpy()
     C = A + B
