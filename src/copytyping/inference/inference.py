@@ -224,7 +224,6 @@ def run(args=None):
     mode = args["mode"]
     work_dir = args["work_dir"]
     out_prefix = args["out_prefix"]
-    num_iters = args["niters"]
 
     agg_size = 10
     img_type = args["img_type"]
@@ -266,9 +265,12 @@ def run(args=None):
         # "GEX-inv_phi": True,
         # "ATAC-inv_phi": True
     }
+    num_iters = args["niters"]
     posterior_thres = args["posterior_thres"]
     margin_thres = args["margin_thres"]
 
+    print(f"posterior_thres={posterior_thres}")
+    print(f"margin_thres={margin_thres}")
     ##################################################
     sample_df = pd.read_table(sample_file, sep="\t", index_col=False).fillna("")
     for _, sample_infos in sample_df.groupby(by=["SAMPLE", "REP_ID"], sort=False):
@@ -305,6 +307,7 @@ def run(args=None):
                 mode,
                 fix_params=fix_params,
                 init_params=init_params,
+                max_iter=num_iters
             )
             anns, clone_props = cell_model.predict(
                 mode,

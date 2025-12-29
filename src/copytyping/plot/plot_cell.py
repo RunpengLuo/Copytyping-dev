@@ -52,7 +52,7 @@ def plot_heatmap(
 
     bin_info = bin_info.reset_index(drop=True)
     wl_segments_chs = wl_segments.groupby("#CHR", sort=False)
-    bins_chs = bin_info.groupby("#CHR", sort=False)
+    bins_chs = bin_info.groupby("#CHR", sort=False, observed=True)
 
     x_edges = [0.0]  # running global x edges (length = n_cols + 1)
     col_bin_ids = []  # length = n_cols; bin index or -1 (gap)

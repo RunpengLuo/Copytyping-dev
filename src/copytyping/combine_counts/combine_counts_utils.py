@@ -362,7 +362,7 @@ def matrix_segmentation(X, bin_ids, M):
         shape=(G, M),
     )
 
-    X_bin = X @ B   # (N, M)
+    X_bin = (X @ B).T   # (N, M)
     return X_bin.tocsr() if sparse.issparse(X_bin) else sparse.csr_matrix(X_bin)
 
 def feature_binning(

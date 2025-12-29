@@ -152,7 +152,7 @@ class Cell_Model:
             # total log-probs
             if mode != "allele_only":
                 lambda_g = params[f"{data_type}-lambda"]
-                props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)
+                props_gk = compute_pi_gk(lambda_g, sx_data.C)
                 props_gk_cnv = props_gk[
                     (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
                 ]
@@ -222,7 +222,7 @@ class Cell_Model:
             ):
                 # update NB over-dispersion
                 lambda_g = params[f"{data_type}-lambda"]
-                props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)[
+                props_gk = compute_pi_gk(lambda_g, sx_data.C)[
                     (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
                 ]
                 MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
