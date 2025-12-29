@@ -95,7 +95,7 @@ def run(args=None):
         # CNV segmentation
         adata: AnnData = sc.read_h5ad(path2h5ad)
         adata, features = feature_to_haplo_blocks(adata, haplo_blocks, data_id)
-        X_bin = matrix_segmentation(adata.X, features["HB"].to_numpy(), num_blocks, adata.X.dtype)
+        X_bin = matrix_segmentation(adata.X, features["HB"].to_numpy(), num_blocks)
 
         cell_snps, tot_mat, ref_mat, alt_mat = load_cellsnp_files(path2cellsnp, barcodes)
         cell_snps = annotate_snps_post(snp_info, cell_snps)
@@ -105,8 +105,8 @@ def run(args=None):
         ref_mat = ref_mat[raw_snp_ids, :]
         alt_mat = alt_mat[raw_snp_ids, :]
         Y_mat = ref_mat.multiply(phases[:, None]) + alt_mat.multiply(1 - phases[:, None])
-        D_bin = matrix_segmentation(tot_mat.T, cell_snps["HB"].to_numpy(), num_blocks, tot_mat.dtype)
-        Y_bin = matrix_segmentation(Y_mat.T, cell_snps["HB"].to_numpy(), num_blocks, Y_mat.dtype)
+        D_bin = matrix_segmentation(tot_mat.T, cell_snps["HB"].to_numpy(), num_blocks)
+        Y_bin = matrix_segmentation(Y_mat.T, cell_snps["HB"].to_numpy(), num_blocks)
         Y_bin.data = np.rint(Y_bin.data).astype(np.int32)
         Y_bin.eliminate_zeros()
 
