@@ -36,6 +36,14 @@ The TSV-format sample file records all the samples retrived from same patient, r
 * `PATH_to_cellsnp_lite`: e.g., `/path/to/cellsnp_lite_output/`.
 * `PATH_to_annotation`: e.g., `/path/to/celltype.tsv`
 
+#### HATCHet-related files
+* `/path/to/sample.seg.ucn`: copy-number profile.
+* `/path/to/snp_info.phased.tsv.gz`: phased SNP information.
+
+#### Auxiliary files
+* `/path/to/reference.sizes`: genome size file.
+* `/path/to/reference.bed`: genome arm BED file.
+
 ### Outputs
 * `<out_prefix>_copytyping_assignment/<sample>.<rep_id>.annotations.copytyping.tsv`: per-cell/spot clone label, per-clone posterior probabilities, spot tumor proportion (if avail).
 * `<out_prefix>_copytyping_plot/<data_type>_heatmap/`: BAF/log2RDR cell/spot-level segmented heatmap.
