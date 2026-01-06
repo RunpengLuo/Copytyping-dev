@@ -1,0 +1,4 @@
+SAMPLE	REP_ID	DATA_TYPE	PATH_to_h5ad	PATH_to_barcodes	PATH_to_cellsnp_lite	PATH_to_annotation
+HT001	U1	GEX	/path/to/10x_rna.r1.h5ad	/path/to/samples.r1.tsv	/path/to/rna_r1/	/path/to/celltype.r1.tsv
+HT001	U1	ATAC	/path/to/10x_atac.r1.h5ad	/path/to/samples.r1.tsv	/path/to/atac_r1/	/path/to/celltype.atac_r1.tsv
+HT001	U2	ATAC	/path/to/10x_atac.r2.h5ad	/path/to/samples.r2.tsv	/path/to/atac_r2/	/path/to/celltype.r2.tsv

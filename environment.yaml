@@ -1,0 +1,38 @@
+name: copytyping-env
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python>=3.11
+  - whatshap
+  - bcftools>=1.19
+  - samtools>=1.19
+  - biopython
+  - hmmlearn
+  - matplotlib-base
+  - mosdepth
+  - pandas
+  - cmake
+  - cxx-compiler
+  - make
+  - psutil
+  - pyomo
+  - numpy
+  - pysam
+  - requests
+  - seaborn
+  - scikit-learn
+  - scipy
+  - shapeit
+  - bedtools
+  - pybedtools
+  - pyranges
+  - tabix
+  - coincbc
+  - pip
+  - pip:
+    - PyYAML
+    - kneed
+    - numba
+
