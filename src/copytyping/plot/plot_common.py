@@ -146,12 +146,12 @@ def plot_snps_per_chrom(
 def plot_library_sizes(
     sx_data: SX_Data, sample: str, data_type: str, out_file: str, celltypes=None
 ):
-    Tn = sx_data.Tn
-    mean = np.mean(Tn)
-    med = np.median(Tn)
+    T = sx_data.T
+    mean = np.mean(T)
+    med = np.median(T)
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-    sns.histplot(x=Tn, hue=celltypes, bins=50, ax=ax)
+    sns.histplot(x=T, hue=celltypes, bins=50, ax=ax)
     ax.set_title(f"{sample} - {data_type} - library size\nmean={mean:.3f},median={med}")
     fig.savefig(out_file, dpi=150)
     return
@@ -316,7 +316,7 @@ def plot_library_sizes(
 #     bin_info = bin_info.loc[cnp_mask, :]
 
 #     T = sx_data.T # (G, N)
-#     Tn = sx_data.Tn # (N, )
+#     T = sx_data.T # (N, )
 
 #     cell_labels = anns[lab_type].to_numpy()
 #     assert len(cell_labels) == T.shape[1]
@@ -333,15 +333,15 @@ def plot_library_sizes(
 #                     continue
 #                 # sum counts per bin
 #                 T_sum = T[:, sub_idx].sum(axis=1)
-#                 Tn_sum = Tn[sub_idx].sum()
+#                 Tn_sum = T[sub_idx].sum()
 #                 T_agg_list.append(T_sum)
 #                 Tn_agg_list.append(Tn_sum)
 #                 cell_labels_agg.append(lab)
 #         T = np.column_stack(T_agg_list)  # (n_bins, new_cells)
-#         Tn = np.array(Tn_agg_list, dtype=np.int32)
+#         T = np.array(Tn_agg_list, dtype=np.int32)
 #         cell_labels = np.array(cell_labels_agg)
 
-#     rdr_matrix = (T / (base_props[:, None] @ Tn[None, :])).T
+#     rdr_matrix = (T / (base_props[:, None] @ T[None, :])).T
 #     rdr_matrix = rdr_matrix[:, cnp_mask]
 
 #     if verbose:

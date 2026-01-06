@@ -2,6 +2,7 @@ import numpy as np
 from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
 from scipy.stats import binom, beta, norm
 
+
 ##################################################
 # Likelihood functions
 def cond_betabin_logpmf(
@@ -44,7 +45,7 @@ def cond_betabin_logpmf(
 
 def cond_negbin_logpmf(
     X: np.ndarray,
-    Tn: np.ndarray,
+    T: np.ndarray,
     props_gk: np.ndarray,
     inv_phi: np.ndarray,
 ) -> np.ndarray:
@@ -53,7 +54,7 @@ def cond_negbin_logpmf(
 
     Args:
         X (np.ndarray): (G,N)
-        Tn (np.ndarray): (N,)
+        T (np.ndarray): (N,)
         props (np.ndarray): (G, K)
         inv_phi (np.ndarray): (G,)
     Returns:
@@ -61,7 +62,7 @@ def cond_negbin_logpmf(
     """
     (G, N) = X.shape
     K = props_gk.shape[1]
-    mu_counts = props_gk[:, None, :] * Tn[None, :, None]  # (G,N,K)
+    mu_counts = props_gk[:, None, :] * T[None, :, None]  # (G,N,K)
     _X = X[:, :, None]  # (G, N, K)
 
     _inv_phi = np.broadcast_to(np.atleast_1d(inv_phi)[:, None, None], (G, N, K))

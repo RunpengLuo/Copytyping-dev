@@ -10,6 +10,7 @@ import scanpy as sc
 from copytyping.utils import *
 from copytyping.copytyping_parser import add_arguments_inference
 from copytyping.inference.cell_model import *
+from copytyping.inference.spot_model import *
 from copytyping.inference.clustering import *
 from copytyping.inference.validation import *
 from copytyping.plot.plot_common import *
@@ -44,14 +45,14 @@ from copytyping.plot.plot_umap import *
 #     show_metric_heatmap=False,
 # ):
 #     label = method
-#     cell_model = Cell_Model(barcodes, data_types, mod_dirs, out_dir, modality)
+#     model = Cell_Model(barcodes, data_types, mod_dirs, out_dir, modality)
 #     if method == "copytyping":
-#         params = cell_model.fit(
+#         params = model.fit(
 #             mode,
 #             fix_params=fix_params,
 #             init_params=init_params,
 #         )
-#         anns, clone_props = cell_model.predict(
+#         anns, clone_props = model.predict(
 #             mode,
 #             params,
 #             label=label,
@@ -60,18 +61,18 @@ from copytyping.plot.plot_umap import *
 #         )
 #     else:
 #         params = {}
-#         for data_type in cell_model.data_types:
-#             params[f"{data_type}-lambda"] = cell_model.initialize_baseline_proportions(
+#         for data_type in model.data_types:
+#             params[f"{data_type}-lambda"] = model.initialize_baseline_proportions(
 #                 data_type
 #             )
 #         if method == "kmeans":
-#             cluster_labels = kmeans_copytyping(cell_model, params)
+#             cluster_labels = kmeans_copytyping(model, params)
 #         elif method == "leiden":
 #             resolution = 0.5
-#             cluster_labels = leiden_copytyping(cell_model, params, resolution=resolution)
+#             cluster_labels = leiden_copytyping(model, params, resolution=resolution)
 #         elif method == "ward":
-#             cluster_labels = ward_copytyping(cell_model, params)
-#         anns = cell_model.barcodes.copy(deep=True)
+#             cluster_labels = ward_copytyping(model, params)
+#         anns = model.barcodes.copy(deep=True)
 #         anns, clone_props = cluster_label_major_vote(
 #             anns, cluster_labels, cell_label=label, cell_type=ref_label
 #         )
@@ -124,10 +125,10 @@ from copytyping.plot.plot_umap import *
 #     ##################################################
 #     # visualization
 #     umap_features = []
-#     for data_type in cell_model.data_types:
+#     for data_type in model.data_types:
 #         os.makedirs(os.path.join(plot_dir, f"{data_type}_heatmap"), exist_ok=True)
 #         os.makedirs(os.path.join(plot_dir, f"{data_type}_others"), exist_ok=True)
-#         sx_data: SX_Data = cell_model.data_sources[data_type]
+#         sx_data: SX_Data = model.data_sources[data_type]
 #         features = prepare_rdr_baf_features(sx_data, params[f"{data_type}-lambda"])
 #         umap_features.append(features)
 #         plot_umap_copynumber(
@@ -221,7 +222,6 @@ def run(args=None):
     genome_segment = args["genome_segment"]
     genome_size = args["genome_size"]
     method = args["method"]
-    mode = args["mode"]
     work_dir = args["work_dir"]
     out_prefix = args["out_prefix"]
 
@@ -268,6 +268,7 @@ def run(args=None):
     num_iters = args["niters"]
     posterior_thres = args["posterior_thres"]
     margin_thres = args["margin_thres"]
+    allele_only_posterior_thres = 0.95
 
     print(f"posterior_thres={posterior_thres}")
     print(f"margin_thres={margin_thres}")
@@ -302,15 +303,15 @@ def run(args=None):
 
         ##################################################
         if modality in ["multiome", "GEX", "ATAC"]:
-            cell_model = Cell_Model(barcodes, haplo_blocks, data_types, mod_dirs, modality)
-            params = cell_model.fit(
-                mode,
+            model = Cell_Model(barcodes, haplo_blocks, data_types, mod_dirs, modality)
+            params = model.fit(
+                "hybrid",
                 fix_params=fix_params,
                 init_params=init_params,
-                max_iter=num_iters
+                max_iter=num_iters,
             )
-            anns, clone_props = cell_model.predict(
-                mode,
+            anns, clone_props = model.predict(
+                "hybrid",
                 params,
                 label=qry_label,
                 posterior_thres=posterior_thres,
@@ -318,8 +319,9 @@ def run(args=None):
             )
             print(f"clone proportions: {clone_props}")
         else:
+            model = Spot_Model(barcodes, haplo_blocks, data_types, mod_dirs, modality)
             pass
-            # spot_model = 
+            # spot_model =
 
         ##################################################
         title_info = ""
@@ -353,14 +355,14 @@ def run(args=None):
         plot_posteriors(
             anns,
             os.path.join(plot_dir, f"{sample}.{rep_id}.posteriors.{method}.png"),
-            lab_type=ref_label if ref_label in anns else qry_label
+            lab_type=ref_label if ref_label in anns else qry_label,
         )
-        
+
         ##################################################
         # plot heatmap
-        for data_type in cell_model.data_types:
+        for data_type in model.data_types:
             os.makedirs(os.path.join(plot_dir, f"{data_type}_heatmap"), exist_ok=True)
-            sx_data: SX_Data = cell_model.data_sources[data_type]
+            sx_data: SX_Data = model.data_sources[data_type]
             for val in ["BAF", "pi_gk", "log2RDR"]:
                 if val in ["log2RDR", "pi_gk"] and f"{data_type}-lambda" not in params:
                     continue
@@ -390,6 +392,7 @@ def run(args=None):
                             transparent=transparent,
                         )
     return
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

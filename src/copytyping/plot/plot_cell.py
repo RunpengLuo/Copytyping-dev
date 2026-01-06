@@ -23,7 +23,7 @@ from copytyping.utils import get_chr_sizes
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.plot.plot_cnp import *
 
-from copytyping.inference.model_utils import empirical_p_gn, empirical_rdr_gn
+from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
 
 import logging
 
@@ -263,15 +263,15 @@ def prepare_rdr(
                 continue
             # sum counts per bin
             X_sum = sx_data.X[:, sub_idx].sum(axis=1)
-            Tn_sum = sx_data.Tn[sub_idx].sum()
+            Tn_sum = sx_data.T[sub_idx].sum()
             X_agg_list.append(X_sum)
             Tn_agg_list.append(Tn_sum)
             cell_labels_agg.append(lab)
     X = np.column_stack(X_agg_list)  # (n_bins, new_cells)
-    Tn = np.array(Tn_agg_list, dtype=np.int32)
+    T = np.array(Tn_agg_list, dtype=np.int32)
     cell_labels = np.array(cell_labels_agg)
 
-    rdr_matrix = empirical_rdr_gn(X, Tn, base_props, log2=log2)
+    rdr_matrix = empirical_rdr_gn(X, T, base_props, log2=log2)
     rdr_matrix = rdr_matrix.T
 
     # group cells by labels, clustering.
@@ -302,14 +302,14 @@ def prepare_pi_gk(
                 continue
             # sum counts per bin
             X_sum = sx_data.X[:, sub_idx].sum(axis=1)
-            Tn_sum = sx_data.Tn[sub_idx].sum()
+            Tn_sum = sx_data.T[sub_idx].sum()
             X_agg_list.append(X_sum)
             Tn_agg_list.append(Tn_sum)
             cell_labels_agg.append(lab)
     X = np.column_stack(X_agg_list)  # (n_bins, new_cells)
-    Tn = np.array(Tn_agg_list, dtype=np.int32)
+    T = np.array(Tn_agg_list, dtype=np.int32)
     cell_labels = np.array(cell_labels_agg)
-    pi_gk_matrix = X / Tn[None, :]
+    pi_gk_matrix = X / T[None, :]
     pi_gk_matrix[pi_gk_matrix == 0] = np.nan
     pi_gk_matrix = pi_gk_matrix.T
     # group cells by labels, clustering.
@@ -347,9 +347,7 @@ def prepare_baf(
     D = np.column_stack(D_agg_list)
     cell_labels = np.array(cell_labels_agg)
 
-    baf_matrix = np.divide(
-        Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
-    )
+    baf_matrix = empirical_baf_gn(Y, D)
     baf_matrix = baf_matrix.T
 
     # group cells by labels, clustering.

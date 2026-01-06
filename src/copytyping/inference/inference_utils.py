@@ -20,9 +20,7 @@ from copytyping.external import *
 from copytyping.sx_data.sx_data import SX_Data
 
 
-def prepare_rdr_baf_features(
-    sx_data: SX_Data, base_props: np.ndarray, norm=True
-):
+def prepare_rdr_baf_features(sx_data: SX_Data, base_props: np.ndarray, norm=True):
     # allele data
     Y = sx_data.Y
     D = sx_data.D
@@ -36,12 +34,12 @@ def prepare_rdr_baf_features(
     print(f"perc.nan.baf={perc_nan_baf:.3%}")
 
     # rdr data
+    X = sx_data.X
     T = sx_data.T
-    Tn = sx_data.Tn
     rdr_masks = sx_data.MASK["ANEUPLOID"]
-    rdr_denom = base_props[:, None] @ Tn[None, :]  # (G, N)
+    rdr_denom = base_props[:, None] @ T[None, :]  # (G, N)
     rdr_matrix = np.divide(
-        T,
+        X,
         rdr_denom,
         out=np.full_like(rdr_denom, fill_value=np.nan, dtype=np.float32),
         where=rdr_denom > 0,

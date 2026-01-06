@@ -30,7 +30,9 @@ def kmeans_copytyping(sc_model: Cell_Model, params: dict):
     return kmeans.labels_
 
 
-def leiden_copytyping(sc_model: Cell_Model, params: dict, random_state=42, resolution=1):
+def leiden_copytyping(
+    sc_model: Cell_Model, params: dict, random_state=42, resolution=1
+):
     features = []
     for data_type in sc_model.data_types:
         my_features = prepare_rdr_baf_features(

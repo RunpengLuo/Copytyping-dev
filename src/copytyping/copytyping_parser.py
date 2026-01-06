@@ -79,37 +79,11 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--mode",
-        required=False,
-        type=str,
-        default="hybrid",
-        choices=["hybrid", "allele_only", "total_only"],
-        help="hybrid, allele_only, total_only",
-    )
-
-    # parser.add_argument(
-    #     "--modality",
-    #     required=True,
-    #     type=str,
-    #     default="multiome",
-    #     choices=["multiome", "GEX", "ATAC", "VISIUM"],
-    #     help="multiome, GEX, ATAC, VISIUM",
-    # )
-
-    parser.add_argument(
         "--work_dir",
         required=False,
         type=str,
         help="working directory, <work_dir>/preprocess/",
     )
-
-    # parser.add_argument(
-    #     "--rep_id",
-    #     required=False,
-    #     type=str,
-    #     default="",
-    #     help="working directory, <work_dir>/preprocess/",
-    # )
 
     parser.add_argument(
         "--niters",

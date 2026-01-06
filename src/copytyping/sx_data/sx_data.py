@@ -45,7 +45,7 @@ class SX_Data:
         assert self.Y.shape == (self.G, self.N)
         assert self.D.shape == (self.G, self.N)
 
-        self.Tn = np.sum(self.X, axis=0)
+        self.T = np.sum(self.X, axis=0)
 
         if verbose:
             print(f"{data_type} data is loaded #cells={self.N}, #bins={self.G}")
@@ -53,26 +53,16 @@ class SX_Data:
             print(f"#effective CNA features={self.nrows_eff_feat}")
         return
 
-    def apply_allele_mask_shallow(self, mask_id="CNP"):
+    def apply_mask_shallow(self, mask_id="CNP"):
         cnp_mask = self.MASK[mask_id]
         M = {
             "A": self.A[cnp_mask, :],
             "B": self.B[cnp_mask, :],
             "C": self.C[cnp_mask, :],
             "BAF": self.BAF[cnp_mask, :],
+            "X": self.X[cnp_mask, :],
             "Y": self.Y[cnp_mask, :],
             "D": self.D[cnp_mask, :],
-            "bin_info": self.bin_info[cnp_mask],
-        }
-        return M
-
-    def apply_feat_mask_shallow(self, mask_id="CNP"):
-        cnp_mask = self.MASK[mask_id]
-        M = {
-            "A": self.A[cnp_mask, :],
-            "B": self.B[cnp_mask, :],
-            "C": self.C[cnp_mask, :],
-            "X": self.X[cnp_mask, :],
             "bin_info": self.bin_info[cnp_mask],
         }
         return M
@@ -89,7 +79,11 @@ def get_cnp_mask(A, B, C, and_mask=None):
     neutral_mask = ~tumor_mask
 
     clonal_loh_mask = np.all(B[:, 1:] == 0, axis=1) & np.all(A[:, 1:] > 0, axis=1)
+    clonal_loh_mask |= np.all(A[:, 1:] == 0, axis=1) & np.all(B[:, 1:] > 0, axis=1)
+    
     subclonal_loh_mask = np.any(B[:, 1:] == 0, axis=1) & np.all(A[:, 1:] > 0, axis=1)
+    subclonal_loh_mask |= np.any(A[:, 1:] == 0, axis=1) & np.all(B[:, 1:] > 0, axis=1)
+    
     subclonal_mask = np.copy(tumor_mask)
     if A.shape[1] > 2:
         subclonal_mask = np.any(A[:, 2:] != A[:, 1][:, None], axis=1) | np.any(

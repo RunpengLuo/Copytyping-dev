@@ -13,6 +13,7 @@ from copytyping.inference.likelihood_funcs import *
 from scipy.optimize import minimize_scalar
 from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
 
+
 ##################################################
 class Cell_Model:
     """Single-cell EM model, no spatial information, tumor purity=1 for each cell."""
@@ -62,7 +63,9 @@ class Cell_Model:
         if mode != "allele_only":
             for data_type in self.data_types:
                 if params.get(f"{data_type}-lambda", None) is None:
-                    params[f"{data_type}-lambda"] = self.initialize_baseline_proportions(data_type)
+                    params[f"{data_type}-lambda"] = (
+                        self.initialize_baseline_proportions(data_type)
+                    )
                 if params.get(f"{data_type}-inv_phi", None) is None:
                     params[f"{data_type}-inv_phi"] = np.full(
                         self.data_sources[data_type].nrows_eff_feat,
@@ -78,9 +81,7 @@ class Cell_Model:
                         fill_value=default_tau,
                         dtype=np.float32,
                     )
-        if any(
-            data_type.startswith("VISIUM") for data_type in self.data_types
-        ):
+        if any(data_type.startswith("VISIUM") for data_type in self.data_types):
             assert mode == "allele_only"
             data_type = self.data_types[0]
             if params.get(f"{data_type}-tau", None) is None:
@@ -100,6 +101,7 @@ class Cell_Model:
     def initialize_baseline_proportions(
         self,
         data_type: str,
+        ref_label="cell_type",
         black_list=[
             "Tumor_cell",
             "tumor",
@@ -112,7 +114,7 @@ class Cell_Model:
     ):
         """this returns baseline proportions for all bins"""
         print(f"initialize baseline proportion for {data_type}")
-        if "cell_type" in self.barcodes.columns:
+        if ref_label in self.barcodes.columns:
             cell_types = self.barcodes["cell_type"].unique()
             print("All celltypes: ", cell_types)
             print(f"Black list: ", black_list)
@@ -129,7 +131,7 @@ class Cell_Model:
         assert num_normal_cells > 0
         base_props = compute_baseline_proportions(
             self.data_sources[data_type].X,
-            self.data_sources[data_type].Tn,
+            self.data_sources[data_type].T,
             is_normal_cell,
         )
         return base_props
@@ -142,9 +144,9 @@ class Cell_Model:
             sx_data: SX_Data = self.data_sources[data_type]
             # allele log-probs
             if mode != "total_only":
-                MA = sx_data.apply_allele_mask_shallow(mask_id="IMBALANCED")
+                M = sx_data.apply_mask_shallow(mask_id="IMBALANCED")
                 allele_ll_mat = cond_betabin_logpmf(
-                    MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
+                    M["Y"], M["D"], params[f"{data_type}-tau"], M["BAF"]
                 )
                 allele_lls = allele_ll_mat.sum(axis=0)  # (N,K)
                 global_lls += allele_lls
@@ -152,16 +154,14 @@ class Cell_Model:
             # total log-probs
             if mode != "allele_only":
                 lambda_g = params[f"{data_type}-lambda"]
-                props_gk = compute_pi_gk(lambda_g, sx_data.C)
-                props_gk_cnv = props_gk[
-                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
-                ]
+                props_gk = clone_pi_gk(lambda_g, sx_data.C)
+                props_gk_cnv = props_gk[(sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :]
 
                 mask = lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
-                MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
+                M = sx_data.apply_mask_shallow(mask_id="ANEUPLOID")
                 total_ll_mat = cond_negbin_logpmf(
-                    MF["X"][mask],
-                    sx_data.Tn,
+                    M["X"][mask],
+                    sx_data.T,
                     props_gk_cnv,
                     params[f"{data_type}-inv_phi"][mask],
                 )
@@ -222,14 +222,14 @@ class Cell_Model:
             ):
                 # update NB over-dispersion
                 lambda_g = params[f"{data_type}-lambda"]
-                props_gk = compute_pi_gk(lambda_g, sx_data.C)[
+                props_gk = clone_pi_gk(lambda_g, sx_data.C)[
                     (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
                 ]
-                MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
-                X_gnk = MF["X"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0][
+                M = sx_data.apply_mask_shallow(mask_id="ANEUPLOID")
+                X_gnk = M["X"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0][
                     :, :, None
                 ]  # (G, N, 1)
-                mu_gnk = props_gk[:, None, :] * sx_data.Tn[None, :, None]  # (G, 1, K)
+                mu_gnk = props_gk[:, None, :] * sx_data.T[None, :, None]  # (G, 1, K)
                 if share_invphi:
                     const_logfact = -gammaln(X_gnk + 1.0)
 
@@ -265,7 +265,7 @@ class Cell_Model:
                 else:
                     # learn cnv-segment specific invphi
                     for k, v in (
-                        MF["bin_info"]
+                        M["bin_info"]
                         .reset_index(drop=True)
                         .groupby("HB", sort=False)
                         .groups.items()
@@ -303,11 +303,11 @@ class Cell_Model:
                         params[f"{data_type}-inv_phi"][v] = invphi_hat
             if not fix_params.get(f"{data_type}-tau", True) and mode != "total_only":
                 # update BB over-dispersion tau
-                MA = sx_data.apply_allele_mask_shallow(mask_id="IMBALANCED")
-                p_gnk = MA["BAF"][:, None, :]  # (G, 1, K)
-                Y_gnk = MA["Y"][:, :, None]  # (G, N, 1)
-                D_gnk = MA["D"][:, :, None]  # (G, N, 1)
-                X_gnk = D_gnk - Y_gnk # (G, N, 1)
+                M = sx_data.apply_mask_shallow(mask_id="IMBALANCED")
+                p_gnk = M["BAF"][:, None, :]  # (G, 1, K)
+                Y_gnk = M["Y"][:, :, None]  # (G, N, 1)
+                D_gnk = M["D"][:, :, None]  # (G, N, 1)
+                X_gnk = D_gnk - Y_gnk  # (G, N, 1)
                 if share_tau:
                     log_binom_const = (
                         gammaln(D_gnk + 1.0)
@@ -340,7 +340,7 @@ class Cell_Model:
                 else:
                     # learn cnv-segment specific tau
                     for k, v in (
-                        MA["bin_info"]
+                        M["bin_info"]
                         .reset_index(drop=True)
                         .groupby("HB", sort=False)
                         .groups.items()
@@ -473,4 +473,3 @@ class Cell_Model:
             clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones
         }
         return anns, clone_props
-
