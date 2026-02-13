@@ -8,10 +8,12 @@ import pandas as pd
 from copytyping.utils import *
 from copytyping.sx_data.sx_data import *
 from copytyping.inference.model_utils import *
-from copytyping.inference.likelihood_funcs import cond_betabin_logpmf, cond_negbin_logpmf
+from copytyping.inference.cell_model import Cell_Model
+from copytyping.inference.likelihood_funcs import *
 
 from scipy.optimize import minimize_scalar
 from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
+
 
 ##################################################
 class Spot_Model:
@@ -20,21 +22,23 @@ class Spot_Model:
     def __init__(
         self,
         barcodes: pd.DataFrame,
-        slice_id: str,
+        haplo_blocks: pd.DataFrame,
+        data_types: list,  # [U1, ...]
         mod_dirs: dict,
-        out_dir: str,
-        modality: str,
+        modality="VISIUM",
         verbose=1,
     ) -> None:
+        data_type = data_types[0]
         self.barcodes = barcodes
-        self.slice_id = slice_id
+        self.haplo_blocks = haplo_blocks
+        self.data_types = data_types
+        self.mod_dirs = mod_dirs
         self.N = self.num_barcodes = len(barcodes)
-        self.out_dir = out_dir
         self.modality = modality
         self.data_sources = {
-            slice_id: SX_Data(len(barcodes), mod_dirs[slice_id], slice_id)
+            data_type: SX_Data(barcodes, haplo_blocks, mod_dirs[data_type], data_type)
         }
-        self.clones = self.data_sources[self.slice_id].clones
+        self.clones = self.data_sources[data_type].clones
         self.K = self.num_clones = len(self.clones)
         self.verbose = verbose
         return
@@ -42,11 +46,12 @@ class Spot_Model:
     ##################################################
     def _init_params(
         self,
-        mode: str,
         init_fix_params=None,
         init_params=None,
         default_tau=50,
         default_phi=30,
+        allele_post_thres=0.90,
+        ref_label="path_label",
     ):
         params = {}
         if not init_params is None:
@@ -57,21 +62,59 @@ class Spot_Model:
         if params.get("pi", None) is None:
             params["pi"] = np.ones(self.K) / self.K
 
-        # initialize baseline proportion if not allele_only mode
-        if mode != "pure":
-            params["lambda"] = self.initialize_baseline_proportions()
-            params["rho"] = self.estimate_tumor_proportions(params["lambda"])
-            if params.get("inv_phi", None) is None:
-                params["inv_phi"] = np.full(
-                    self.data_sources[self.slice_id].nrows_eff_feat,
-                    fill_value=1 / default_phi,
-                    dtype=np.float32,
+        sx_data: SX_Data = self.data_sources[self.data_types[0]]
+        if params.get(f"lambda", None) is None:
+            # run allele only model to infer baseline proportions
+            pure_model = Cell_Model(
+                self.barcodes,
+                self.haplo_blocks,
+                self.data_types,
+                self.mod_dirs,
+                self.modality,
+            )
+            allele_params = pure_model.fit("allele_only")
+            allele_anns, clone_props = pure_model.predict(
+                "allele_only",
+                allele_params,
+                label="spot_label",
+                posterior_thres=allele_post_thres,
+            )
+            is_normal_cell = (allele_anns["spot_label"] == "normal").to_numpy()
+            num_normal_cells = np.sum(is_normal_cell)
+            print(f"#estimated normal cells={num_normal_cells}/{self.num_barcodes}")
+            barcodes = self.barcodes
+            if ref_label in barcodes.columns:
+                print("refine estimated normal spots by pathology annotation")
+                black_list = ["tumor"]
+                ref_labels = barcodes[ref_label].unique()
+                print("All reference labels: ", ref_labels)
+                print(f"Black list: ", black_list)
+                path_mask = (~barcodes[ref_label].isin(black_list)).to_numpy()
+                is_normal_cell = is_normal_cell & path_mask
+                num_normal_cells = np.sum(is_normal_cell)
+                print(
+                    f"#after path annotation filtering={num_normal_cells}/{self.num_barcodes}"
                 )
-        params["tau"] = np.full(
-            self.data_sources[self.slice_id].nrows_eff_allele,
-            fill_value=default_tau,
-            dtype=np.float32,
-        )
+            assert num_normal_cells > 0, "no normal cells estimated in allele model"
+            params["lambda"] = compute_baseline_proportions(
+                sx_data.X, sx_data.T, is_normal_cell
+            )
+
+        if params.get("theta", None) is None:
+            params["theta"] = estimate_tumor_proportion(sx_data, params["lambda"])
+
+        if params.get("inv_phi", None) is None:
+            params["inv_phi"] = np.full(
+                sx_data.nrows_eff_feat,
+                fill_value=1 / default_phi,
+                dtype=np.float32,
+            )
+        if params.get("tau", None) is None:
+            params["tau"] = np.full(
+                sx_data.nrows_eff_allele,
+                fill_value=default_tau,
+                dtype=np.float32,
+            )
 
         fix_params = {key: False for key in params.keys()}
         if not init_fix_params is None:
@@ -80,76 +123,42 @@ class Spot_Model:
 
         return params, fix_params
 
-    def initialize_baseline_proportions(
-        self,
-        modality: str,
-        black_list=[
-            "Tumor_cell",
-            "tumor",
-            "Tumor",  # tumor labels / variants
-            "Doublet",
-            "doublet",  # artifacts / ambiguous
-            "Unknown",
-            "NA",  # missing labels
-        ],
-    ):
-        """this returns baseline proportions for all bins"""
-        print(f"initialize baseline proportion for {modality}")
-        if "cell_type" in self.barcodes.columns:
-            cell_types = self.barcodes["cell_type"].unique()
-            print("All celltypes: ", cell_types)
-            print(f"Black list: ", black_list)
-            is_normal_cell = (~self.barcodes["cell_type"].isin(black_list)).to_numpy()
-        else:
-            print("infer normal cells using allele model")
-            # TODO allele model
-            is_normal_cell = np.full(self.num_barcodes, fill_value=False)
-            pass
-
-        num_normal_cells = np.sum(is_normal_cell)
-        print(f"#estimated normal cells={num_normal_cells}/{self.num_barcodes}")
-        # TODO better normal cell selection
-        assert num_normal_cells > 0
-        base_props = compute_baseline_proportions(
-            self.data_sources[modality].T,
-            self.data_sources[modality].Tn,
-            is_normal_cell,
-        )
-        return base_props
-
     ##################################################
-    def compute_log_likelihood(self, mode: str, params: dict):
+    def compute_log_likelihood(self, params: dict):
         global_lls = np.zeros((self.N, self.K), dtype=np.float32)
-        # sum over all modalities
-        for data_type in self.data_types:
-            sx_data: SX_Data = self.data_sources[data_type]
-            # allele log-probs
-            if mode != "total_only":
-                MA = sx_data.apply_allele_mask_shallow(mask_id="IMBALANCED")
-                allele_ll_mat = cond_betabin_logpmf(
-                    MA["X"], MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
-                )
-                allele_lls = allele_ll_mat.sum(axis=0)  # (N,K)
-                global_lls += allele_lls
 
-            # total log-probs
-            if mode != "allele_only":
-                lambda_g = params[f"{data_type}-lambda"]
-                props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)
-                props_gk_cnv = props_gk[
-                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
-                ]
+        data_type = self.data_types[0]
+        sx_data: SX_Data = self.data_sources[data_type]
+        lambda_g = params[f"{data_type}-lambda"]  # (G,)
+        rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
 
-                mask = lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
-                MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
-                total_ll_mat = cond_negbin_logpmf(
-                    MF["T"][mask],
-                    sx_data.Tn,
-                    props_gk_cnv,
-                    params[f"{data_type}-inv_phi"][mask],
-                )
-                total_lls = total_ll_mat.sum(axis=0)  # (N,K)
-                global_lls += total_lls
+        # allele log-probs
+        MA = sx_data.apply_mask_shallow(mask_id="IMBALANCED")
+        allele_mask = lambda_g[sx_data.MASK["IMBALANCED"]] > 0
+        allele_ll_mat = cond_betabin_logpmf_theta(
+            MA["Y"][allele_mask],
+            MA["D"][allele_mask],
+            MA["tau"][allele_mask],
+            MA["BAF"][allele_mask],
+            rdrs_gk[(sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)],
+            params["theta"],
+        )
+        allele_lls = allele_ll_mat.sum(axis=0)  # (N,K)
+        global_lls += allele_lls
+
+        # total log-probs
+        total_mask = lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
+        MF = sx_data.apply_mask_shallow(mask_id="ANEUPLOID")
+        total_ll_mat = cond_negbin_logpmf_theta(
+            MF["X"][total_mask],
+            sx_data.T,
+            lambda_g[total_mask],
+            params[f"{data_type}-inv_phi"][total_mask],
+            rdrs_gk[(sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)],
+            params["theta"],
+        )
+        total_lls = total_ll_mat.sum(axis=0)  # (N,K)
+        global_lls += total_lls
 
         global_lls += np.log(params["pi"])[None, :]  # (N,K)
         log_marg = logsumexp(global_lls, axis=1)  # (N,1)
@@ -157,7 +166,7 @@ class Spot_Model:
         return ll, log_marg, global_lls
 
     def _e_step(self, mode: str, params: dict, t=0) -> np.ndarray:
-        """compute allele and total log-probs, summed over modalities
+        """E-step, compute latent clone label posteriors (N, K)
 
         Args:
             params (dict): parameters
@@ -184,8 +193,9 @@ class Spot_Model:
         invphi_bounds=(1 / 100, 1 / 10),
         logtau_bounds=(np.log(50), np.log(200)),
         t=0,
+        eps=1e-12,
     ):
-        """m-step
+        """M-step, update parameters
 
         Args:
             gammas (np.ndarray): (N,K)
@@ -197,166 +207,125 @@ class Spot_Model:
             params["pi"] = np.sum(gamma, axis=0) / self.N
 
         gamma_gnk = gamma[None, :, :]  # (1, N, K)
-        for data_type in self.data_types:
-            sx_data: SX_Data = self.data_sources[data_type]
-            if (
-                not fix_params.get(f"{data_type}-inv_phi", True)
-                and mode != "allele_only"
-            ):
-                # update NB over-dispersion
-                lambda_g = params[f"{data_type}-lambda"]
-                props_gk = compute_pi_gk(lambda_g, sx_data.feat_C)[
-                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
-                ]
-                MF = sx_data.apply_feat_mask_shallow(mask_id="ANEUPLOID")
-                T_gnk = MF["T"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0][
-                    :, :, None
-                ]  # (G, N, 1)
-                mu_gnk = props_gk[:, None, :] * sx_data.Tn[None, :, None]  # (G, 1, K)
-                if share_invphi:
-                    const_logfact = -gammaln(T_gnk + 1.0)
+        data_type = self.data_types[0]
+        sx_data: SX_Data = self.data_sources[data_type]
+        bin_info = sx_data.bin_info
 
-                    def neg_E_loglik(invphi):
-                        if invphi <= 0.0:
-                            return np.inf
+        # parameters
+        lambda_g = params[f"{data_type}-lambda"]
+        rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
+        props_gk = clone_pi_gk(lambda_g, sx_data.C)
+        p_gk = sx_data.BAF
 
-                        r = 1.0 / invphi  # r in NB
-                        log_r = np.log(r)
-                        log_r_plus_mu = np.log(r + mu_gnk)
+        # masks
+        nb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
+        bb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
 
-                        log_pmf = (
-                            gammaln(T_gnk + r)
-                            - gammaln(r)
-                            + const_logfact
-                            + r * (log_r - log_r_plus_mu)
-                            + T_gnk * (np.log(mu_gnk) - log_r_plus_mu)
-                        )
+        # NB inputs
+        X_gn = sx_data.X[nb_mask, :]  # (G, N)
+        T_n = sx_data.T  # (N,)
 
-                        E_loglik = np.sum(gamma_gnk * log_pmf)
-                        return -E_loglik
+        # BB inputs
+        Y_gn = sx_data.Y[bb_mask, :]  # (G, N)
+        D_gn = sx_data.D[bb_mask, :]  # (G, N)
 
-                    res = minimize_scalar(
-                        neg_E_loglik,
-                        bounds=invphi_bounds,
-                        method="bounded",
-                        options={"xatol": 1e-8},
-                    )
-                    invphi_hat = float(
-                        np.clip(res.x, invphi_bounds[0], invphi_bounds[1])
-                    )
-                    params[f"{data_type}-inv_phi"][:] = invphi_hat
-                else:
-                    # learn cnv-segment specific invphi
-                    for k, v in (
-                        MF["bin_info"]
-                        .reset_index(drop=True)
-                        .groupby("HB", sort=False)
-                        .groups.items()
-                    ):
-                        const_logfact = -gammaln(T_gnk[v] + 1.0)
+        # update tumor proportion with full likelihoods
+        if not fix_params.get("theta", True):
+            inv_phi_g = params[f"{data_type}-inv_phi"][nb_mask]
+            tau_g = params[f"{data_type}-tau"][bb_mask]
 
-                        def neg_E_loglik(invphi):
-                            if invphi <= 0.0:
-                                return np.inf
+            theta_arr = np.zeros_like(params["theta"], dtype=np.float32)
+            for n in range(self.N):
 
-                            r = 1.0 / invphi  # r in NB
-                            log_r = np.log(r)
-                            log_r_plus_mu = np.log(r + mu_gnk[v])
+                def neg_Q_theta(theta):
+                    theta = np.array([theta], dtype=float)
+                    ll_nb = cond_negbin_logpmf_theta(
+                        X=X_gn[:, n : n + 1],
+                        T=np.array([T_n[n]], dtype=float),
+                        lam_g=lambda_g[nb_mask],
+                        inv_phi=inv_phi_g,
+                        rdrs_gk=rdrs_gk[nb_mask],
+                        theta=theta,
+                    )  # (Gtot, 1, K)
 
-                            log_pmf = (
-                                gammaln(T_gnk[v] + r)
-                                - gammaln(r)
-                                + const_logfact
-                                + r * (log_r - log_r_plus_mu)
-                                + T_gnk[v] * (np.log(mu_gnk[v]) - log_r_plus_mu)
-                            )
-
-                            E_loglik = np.sum(gamma_gnk * log_pmf)
-                            return -E_loglik
-
-                        res = minimize_scalar(
-                            neg_E_loglik,
-                            bounds=invphi_bounds,
-                            method="bounded",
-                            options={"xatol": 1e-8},
-                        )
-                        invphi_hat = float(
-                            np.clip(res.x, invphi_bounds[0], invphi_bounds[1])
-                        )
-                        params[f"{data_type}-inv_phi"][v] = invphi_hat
-            if not fix_params.get(f"{data_type}-tau", True) and mode != "total_only":
-                # update BB over-dispersion tau
-                MA = sx_data.apply_allele_mask_shallow(mask_id="IMBALANCED")
-                p_gnk = MA["BAF"][:, None, :]  # (G, 1, K)
-                X_gnk = MA["X"][:, :, None]  # (G, N, 1)
-                Y_gnk = MA["Y"][:, :, None]  # (G, N, 1)
-                D_gnk = MA["D"][:, :, None]  # (G, N, 1)
-                if share_tau:
-                    log_binom_const = (
-                        gammaln(D_gnk + 1.0)
-                        - gammaln(Y_gnk + 1.0)
-                        - gammaln(X_gnk + 1.0)
+                    ll_bb = cond_betabin_logpmf_theta(
+                        Y=Y_gn[:, n : n + 1],
+                        D=D_gn[:, n : n + 1],
+                        tau=tau_g,
+                        p=p_gk[bb_mask],
+                        rdrs_gk=rdrs_gk[bb_mask],
+                        theta=theta,
                     )
 
-                    def neg_Q_logtau(logtau):
-                        tau = np.exp(logtau)
-                        alpha = tau * p_gnk
-                        beta = tau * (1.0 - p_gnk)
+                    Q = np.sum(ll_nb[:, 0, :] * gamma[n][None, :])
+                    Q += np.sum(ll_bb[:, 0, :] * gamma[n][None, :])
+                    return -Q
 
-                        log_pmf = (
-                            log_binom_const
-                            + betaln(Y_gnk + alpha, X_gnk + beta)
-                            - betaln(alpha, beta)
-                        )
+                res = minimize_scalar(
+                    neg_Q_theta,
+                    bounds=(1e-4, 1.0 - 1e-4),
+                    method="bounded",
+                    options={"xatol": 1e-4},
+                )
+                theta_arr[n] = np.clip(res.x, 1e-4, 1.0 - 1e-4)
+            params["theta"] = theta_arr
+        if not fix_params.get(f"{data_type}-inv_phi", True):
+            X_gnk = X_gn[nb_mask][:, :, None]
+            T_gnk = T_n[None, :, None]
+            lam_gnk = lambda_g[nb_mask][:, None, None]
+            rdrs_gnk = rdrs_gk[nb_mask][:, None, :]
+            theta_gnk = params["theta"][None, :, None]
 
-                        Q = np.sum(gamma_gnk * log_pmf)
-                        return -Q  # minimize negative expected loglik
+            mu_gnk = T_gnk * lam_gnk * (theta_gnk * rdrs_gnk + (1.0 - theta_gnk))
+            mu_gnk = np.clip(mu_gnk, eps, None)
 
-                    res = minimize_scalar(
-                        neg_Q_logtau,
-                        bounds=logtau_bounds,
-                        method="bounded",
-                        options={"xatol": 1e-6},
+            if share_invphi:
+                invphi_hat = mle_invphi(X_gnk, mu_gnk, gamma_gnk, invphi_bounds)
+                params[f"{data_type}-inv_phi"][:] = invphi_hat
+            else:
+                # learn cnv-segment specific invphi
+                for _, idx in (
+                    bin_info.reset_index(drop=True)
+                    .groupby("HB", sort=False)
+                    .groups.items()
+                ):
+                    idx = np.asarray(idx, dtype=int)
+                    invphi_hat = mle_invphi(
+                        X_gnk[idx], mu_gnk[idx], gamma_gnk[idx], invphi_bounds
                     )
-                    tau_hat = np.exp(res.x)
-                    params[f"{data_type}-tau"][:] = tau_hat
-                else:
-                    # learn cnv-segment specific tau
-                    for k, v in (
-                        MA["bin_info"]
-                        .reset_index(drop=True)
-                        .groupby("HB", sort=False)
-                        .groups.items()
-                    ):
-                        log_binom_const = (
-                            gammaln(D_gnk[v] + 1.0)
-                            - gammaln(Y_gnk[v] + 1.0)
-                            - gammaln(X_gnk[v] + 1.0)
-                        )
+                    params[f"{data_type}-inv_phi"][idx] = invphi_hat
 
-                        def neg_Q_logtau(logtau):
-                            tau = np.exp(logtau)
-                            alpha = tau * p_gnk[v]
-                            beta = tau * (1.0 - p_gnk[v])
+        if not fix_params.get(f"{data_type}-tau", True):
+            Y_gnk = Y_gn[bb_mask][:, :, None]
+            D_gnk = D_gn[bb_mask][:, :, None]
+            rdrs_gnk = rdrs_gk[bb_mask][:, None, :]
+            theta_gnk = params["theta"][None, :, None]
+            p_gnk = p_gk[bb_mask][:, None, :]
 
-                            log_pmf = (
-                                log_binom_const
-                                + betaln(Y_gnk[v] + alpha, X_gnk[v] + beta)
-                                - betaln(alpha, beta)
-                            )
+            denom = rdrs_gnk * theta_gnk + (1.0 - theta_gnk)
+            num = p_gnk * rdrs_gnk * theta_gnk + 0.5 * (1.0 - theta_gnk)
+            p_hat = num / np.clip(denom, eps, None)
+            p_hat = np.clip(p_hat, eps, 1.0 - eps)
 
-                            Q = np.sum(gamma_gnk * log_pmf)
-                            return -Q  # minimize negative expected loglik
-
-                        res = minimize_scalar(
-                            neg_Q_logtau,
-                            bounds=logtau_bounds,
-                            method="bounded",
-                            options={"xatol": 1e-6},
-                        )
-                        tau_hat = np.exp(res.x)
-                        params[f"{data_type}-tau"][v] = tau_hat
-
+            if share_tau:
+                tau_hat = mle_tau(Y_gnk, D_gnk, p_hat, gamma_gnk, logtau_bounds)
+                params[f"{data_type}-tau"][:] = tau_hat
+            else:
+                for _, idx in (
+                    sx_data.bin_info[bb_mask]
+                    .reset_index(drop=True)
+                    .groupby("HB", sort=False)
+                    .groups.items()
+                ):
+                    idx = np.asarray(idx, dtype=int)
+                    tau_hat = mle_tau(
+                        Y_gnk[idx],
+                        D_gnk[idx],
+                        p_hat[idx],
+                        gamma_gnk[idx],
+                        logtau_bounds,
+                    )
+                    params[f"{data_type}-tau"][idx] = tau_hat
         return
 
     def print_params(self, params: dict, mode="hybrid"):
@@ -370,9 +339,9 @@ class Spot_Model:
             if mode != "total_only":
                 print(f"{data_type}-tau", np.unique(params[f"{data_type}-tau"]))
 
-    def inference(
+    def fit(
         self,
-        mode="hybrid",
+        mode="spot",
         fix_params=None,
         init_params=None,
         max_iter=100,
@@ -383,19 +352,20 @@ class Spot_Model:
     ):
         """
         Parameters:
-            1. per-spot tumor proportion \rho
+            1. per-spot tumor proportion \theta
             2. mixing weights \pi
             3. dispersion \phi and \tau
+            4. baseline proportions \lambda
         Latent variable:
             1. per-spot clone label in {0...K}
 
+        normal spots -> baseline proportion
         1. init baseline proportions
         2. init per-spot tumor proportion
         3. E-step, compute posterior
         4. M-step, update per-spot proportion via 1d optimization
         """
-        assert mode in ["pure", "het1"]
-        print(f"Start inference, mode={mode}")
+        print(f"Start inference")
         # Parameters
         params, fix_params = self._init_params(mode, fix_params, init_params)
         if self.verbose:
@@ -434,7 +404,7 @@ class Spot_Model:
         # print(param_trace)
         return params
 
-    def map_decode(
+    def predict(
         self,
         mode: str,
         params: dict,

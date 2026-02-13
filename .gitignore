@@ -3,8 +3,9 @@ data
 **/__pycache__/
 test*
 run.sh
-
+tmp/
 .DS_Store
+*.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

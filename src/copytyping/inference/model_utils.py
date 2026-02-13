@@ -2,20 +2,15 @@ import numpy as np
 import pandas as pd
 
 from scipy.stats import (
-    binomtest,
-    chi2,
-    norm,
-    combine_pvalues,
-    goodness_of_fit,
     zscore,
     binom,
     betabinom,
 )
-from statsmodels.stats.multitest import multipletests
-from scipy.optimize import minimize, minimize_scalar
-import statsmodels.formula.api as smf
-import statsmodels.api as sm
-from statsmodels.distributions.empirical_distribution import ECDF
+# from statsmodels.stats.multitest import multipletests
+# from scipy.optimize import minimize, minimize_scalar
+# import statsmodels.formula.api as smf
+# import statsmodels.api as sm
+# from statsmodels.distributions.empirical_distribution import ECDF
 from statsmodels.base.model import GenericLikelihoodModel
 from copytyping.sx_data.sx_data import SX_Data
 
@@ -43,16 +38,14 @@ def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray):
 
 
 # linear scaling assumption
-def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray, norm=True):
-    """compute mu_{g,k}=lam_g * C[g,k] / sum_{g}{lam_g * C[g,k]}
-
+def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray):
+    """compute pi_gk=lam_g * rdr_gk
     Args:
         lambda_g (np.ndarray): (G,)
         C (np.ndarray): (G,K)
     """
-    props_gk = lambda_g[:, None] * (C / 2)
-    if norm:
-        props_gk = props_gk / np.sum(props_gk, axis=0, keepdims=True)
+    props_gk = lambda_g[:, None] * C
+    props_gk = props_gk / np.sum(props_gk, axis=0, keepdims=True)
     return props_gk
 
 
@@ -126,6 +119,7 @@ class BAF_Binom(GenericLikelihoodModel):
             start_params=start_params, maxiter=maxiter, maxfun=maxfun, **kwargs
         )
 
+
 def estimate_tumor_proportion(sx_data: SX_Data, base_props: np.ndarray):
     """Estimate tumor proportion by LOH states
     base_props: (G, ) normalized baseline proportion.
@@ -185,6 +179,6 @@ def estimate_tumor_proportion(sx_data: SX_Data, base_props: np.ndarray):
             props_nk[n, k], lls_nk[n, k] = estimate_purity(B_bin, D_bin, rdr_bin)
 
     lls_nk[~np.isfinite(lls_nk)] = -np.inf
-    k_star = np.argmax(lls_nk, axis=1)   # (N,)
+    k_star = np.argmax(lls_nk, axis=1)  # (N,)
     props = props_nk[np.arange(sx_data.N), k_star]
     return props

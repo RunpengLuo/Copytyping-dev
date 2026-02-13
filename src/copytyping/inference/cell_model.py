@@ -202,7 +202,7 @@ class Cell_Model:
         logtau_bounds=(np.log(50), np.log(200)),
         t=0,
     ):
-        """m-step
+        """M-step
 
         Args:
             gammas (np.ndarray): (N,K)
@@ -216,164 +216,60 @@ class Cell_Model:
         gamma_gnk = gamma[None, :, :]  # (1, N, K)
         for data_type in self.data_types:
             sx_data: SX_Data = self.data_sources[data_type]
+            lambda_g = params[f"{data_type}-lambda"]
+            nb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
+            bb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
+
             if (
                 not fix_params.get(f"{data_type}-inv_phi", True)
                 and mode != "allele_only"
             ):
                 # update NB over-dispersion
-                lambda_g = params[f"{data_type}-lambda"]
-                props_gk = clone_pi_gk(lambda_g, sx_data.C)[
-                    (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0), :
-                ]
-                M = sx_data.apply_mask_shallow(mask_id="ANEUPLOID")
-                X_gnk = M["X"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0][
-                    :, :, None
-                ]  # (G, N, 1)
+                props_gk = clone_pi_gk(lambda_g, sx_data.C)[nb_mask]
+                X_gnk = sx_data.X[nb_mask][:, :, None]  # (G, N, 1)
                 mu_gnk = props_gk[:, None, :] * sx_data.T[None, :, None]  # (G, 1, K)
+
                 if share_invphi:
-                    const_logfact = -gammaln(X_gnk + 1.0)
-
-                    def neg_E_loglik(invphi):
-                        if invphi <= 0.0:
-                            return np.inf
-
-                        r = 1.0 / invphi  # r in NB
-                        log_r = np.log(r)
-                        log_r_plus_mu = np.log(r + mu_gnk)
-
-                        log_pmf = (
-                            gammaln(X_gnk + r)
-                            - gammaln(r)
-                            + const_logfact
-                            + r * (log_r - log_r_plus_mu)
-                            + X_gnk * (np.log(mu_gnk) - log_r_plus_mu)
-                        )
-
-                        E_loglik = np.sum(gamma_gnk * log_pmf)
-                        return -E_loglik
-
-                    res = minimize_scalar(
-                        neg_E_loglik,
-                        bounds=invphi_bounds,
-                        method="bounded",
-                        options={"xatol": 1e-8},
-                    )
-                    invphi_hat = float(
-                        np.clip(res.x, invphi_bounds[0], invphi_bounds[1])
-                    )
+                    invphi_hat = mle_invphi(X_gnk, mu_gnk, gamma_gnk, invphi_bounds)
                     params[f"{data_type}-inv_phi"][:] = invphi_hat
                 else:
                     # learn cnv-segment specific invphi
-                    for k, v in (
-                        M["bin_info"]
+                    for _, idx in (
+                        sx_data.bin_info[nb_mask]
                         .reset_index(drop=True)
                         .groupby("HB", sort=False)
                         .groups.items()
                     ):
-                        const_logfact = -gammaln(X_gnk[v] + 1.0)
-
-                        def neg_E_loglik(invphi):
-                            if invphi <= 0.0:
-                                return np.inf
-
-                            r = 1.0 / invphi  # r in NB
-                            log_r = np.log(r)
-                            log_r_plus_mu = np.log(r + mu_gnk[v])
-
-                            log_pmf = (
-                                gammaln(X_gnk[v] + r)
-                                - gammaln(r)
-                                + const_logfact
-                                + r * (log_r - log_r_plus_mu)
-                                + X_gnk[v] * (np.log(mu_gnk[v]) - log_r_plus_mu)
-                            )
-
-                            E_loglik = np.sum(gamma_gnk * log_pmf)
-                            return -E_loglik
-
-                        res = minimize_scalar(
-                            neg_E_loglik,
-                            bounds=invphi_bounds,
-                            method="bounded",
-                            options={"xatol": 1e-8},
+                        idx = np.asarray(idx, dtype=int)
+                        invphi_hat = mle_invphi(
+                            X_gnk[idx], mu_gnk[idx], gamma_gnk[idx], invphi_bounds
                         )
-                        invphi_hat = float(
-                            np.clip(res.x, invphi_bounds[0], invphi_bounds[1])
-                        )
-                        params[f"{data_type}-inv_phi"][v] = invphi_hat
+                        params[f"{data_type}-inv_phi"][idx] = invphi_hat
             if not fix_params.get(f"{data_type}-tau", True) and mode != "total_only":
                 # update BB over-dispersion tau
                 M = sx_data.apply_mask_shallow(mask_id="IMBALANCED")
-                p_gnk = M["BAF"][:, None, :]  # (G, 1, K)
-                Y_gnk = M["Y"][:, :, None]  # (G, N, 1)
-                D_gnk = M["D"][:, :, None]  # (G, N, 1)
-                X_gnk = D_gnk - Y_gnk  # (G, N, 1)
+                p_gnk = sx_data.BAF[bb_mask][:, None, :]  # (G, 1, K)
+                Y_gnk = sx_data.Y[bb_mask][:, :, None]  # (G, N, 1)
+                D_gnk = sx_data.D[bb_mask][:, :, None]  # (G, N, 1)
                 if share_tau:
-                    log_binom_const = (
-                        gammaln(D_gnk + 1.0)
-                        - gammaln(Y_gnk + 1.0)
-                        - gammaln(X_gnk + 1.0)
-                    )
-
-                    def neg_Q_logtau(logtau):
-                        tau = np.exp(logtau)
-                        alpha = tau * p_gnk
-                        beta = tau * (1.0 - p_gnk)
-
-                        log_pmf = (
-                            log_binom_const
-                            + betaln(Y_gnk + alpha, X_gnk + beta)
-                            - betaln(alpha, beta)
-                        )
-
-                        Q = np.sum(gamma_gnk * log_pmf)
-                        return -Q  # minimize negative expected loglik
-
-                    res = minimize_scalar(
-                        neg_Q_logtau,
-                        bounds=logtau_bounds,
-                        method="bounded",
-                        options={"xatol": 1e-6},
-                    )
-                    tau_hat = np.exp(res.x)
+                    tau_hat = mle_tau(Y_gnk, D_gnk, p_gnk, gamma_gnk, logtau_bounds)
                     params[f"{data_type}-tau"][:] = tau_hat
                 else:
-                    # learn cnv-segment specific tau
-                    for k, v in (
-                        M["bin_info"]
+                    for _, idx in (
+                        sx_data.bin_info[bb_mask]
                         .reset_index(drop=True)
                         .groupby("HB", sort=False)
                         .groups.items()
                     ):
-                        log_binom_const = (
-                            gammaln(D_gnk[v] + 1.0)
-                            - gammaln(Y_gnk[v] + 1.0)
-                            - gammaln(X_gnk[v] + 1.0)
+                        idx = np.asarray(idx, dtype=int)
+                        tau_hat = mle_tau(
+                            Y_gnk[idx],
+                            D_gnk[idx],
+                            p_gnk[idx],
+                            gamma_gnk[idx],
+                            logtau_bounds,
                         )
-
-                        def neg_Q_logtau(logtau):
-                            tau = np.exp(logtau)
-                            alpha = tau * p_gnk[v]
-                            beta = tau * (1.0 - p_gnk[v])
-
-                            log_pmf = (
-                                log_binom_const
-                                + betaln(Y_gnk[v] + alpha, X_gnk[v] + beta)
-                                - betaln(alpha, beta)
-                            )
-
-                            Q = np.sum(gamma_gnk * log_pmf)
-                            return -Q  # minimize negative expected loglik
-
-                        res = minimize_scalar(
-                            neg_Q_logtau,
-                            bounds=logtau_bounds,
-                            method="bounded",
-                            options={"xatol": 1e-6},
-                        )
-                        tau_hat = np.exp(res.x)
-                        params[f"{data_type}-tau"][v] = tau_hat
-
+                        params[f"{data_type}-tau"][idx] = tau_hat
         return
 
     def print_params(self, params: dict, mode="hybrid"):
