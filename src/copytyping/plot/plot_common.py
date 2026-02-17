@@ -200,12 +200,12 @@ def plot_library_sizes(
 #     skip_cluster_per_group=False,
 #     **kwargs
 # ):
-#     bin_info = sx_data.bin_info
+#     cnv_blocks = sx_data.cnv_blocks
 #     if mask_cnp:
-#         bin_info = bin_info.loc[sx_data.MASK[mask_id], :]
-#     print(f"plot 1D BAF heatmap, #bins={len(bin_info)}")
+#         cnv_blocks = cnv_blocks.loc[sx_data.MASK[mask_id], :]
+#     print(f"plot 1D BAF heatmap, #bins={len(cnv_blocks)}")
 
-#     print(bin_info.head())
+#     print(cnv_blocks.head())
 #     # BAF data
 #     Y = sx_data.Y
 #     D = sx_data.D
@@ -248,7 +248,7 @@ def plot_library_sizes(
 #     # build anndata
 #     adata = AnnData(X=baf_matrix)
 #     adata.obs[lab_type] = cell_labels
-#     adata.var[['#CHR','START','END']] = bin_info[['#CHR','START','END']].values
+#     adata.var[['#CHR','START','END']] = cnv_blocks[['#CHR','START','END']].values
 #     if not skip_cluster_per_group:
 #         adata_sorted = cluster_per_group(adata, cluster_chroms=None, groupby=lab_type)
 #     else:
@@ -258,7 +258,7 @@ def plot_library_sizes(
 #     chr_pos = [0] + chr_change_idx.tolist()
 #     var_group_labels = list(chroms[chr_pos])
 #     var_group_positions = [
-#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(bin_info))
+#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(cnv_blocks))
 #         for i in range(len(chr_pos))
 #     ]
 
@@ -309,11 +309,11 @@ def plot_library_sizes(
 #     verbose=1,
 #     **kwargs
 # ):
-#     bin_info = sx_data.bin_info
+#     cnv_blocks = sx_data.cnv_blocks
 #     cnp_mask = base_props > 0
 #     if mask_cnp:
 #         cnp_mask &= sx_data.MASK[mask_id]
-#     bin_info = bin_info.loc[cnp_mask, :]
+#     cnv_blocks = cnv_blocks.loc[cnp_mask, :]
 
 #     T = sx_data.T # (G, N)
 #     T = sx_data.T # (N, )
@@ -353,7 +353,7 @@ def plot_library_sizes(
 #     # build anndata
 #     adata = AnnData(X=rdr_matrix)
 #     adata.obs[lab_type] = cell_labels
-#     adata.var[['#CHR','START','END']] = bin_info[['#CHR','START','END']].values
+#     adata.var[['#CHR','START','END']] = cnv_blocks[['#CHR','START','END']].values
 #     adata_sorted = cluster_per_group(adata, cluster_chroms=None, groupby=lab_type)
 
 #     chroms = adata_sorted.var["#CHR"].to_numpy()
@@ -361,7 +361,7 @@ def plot_library_sizes(
 #     chr_pos = [0] + chr_change_idx.tolist()
 #     var_group_labels = list(chroms[chr_pos])
 #     var_group_positions = [
-#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(bin_info))
+#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(cnv_blocks))
 #         for i in range(len(chr_pos))
 #     ]
 
@@ -473,13 +473,9 @@ def plot_rdr_baf_1d_aggregated(
     """
     print("plot 1D scatter aggregted BAF")
     chrom_sizes = get_chr_sizes(genome_file)
-    bin_info = sx_data.bin_info
-    # bin_info = sx_data.bin_info
-    # feat_mask = base_props > 0
+    cnv_blocks = sx_data.cnv_blocks
     if mask_cnp:
-        bin_info = bin_info.loc[sx_data.MASK[mask_id], :]
-        # feat_mask &= sx_data.MASK[mask_id]
-    # bin_info = bin_info.loc[mask_id, :]
+        cnv_blocks = cnv_blocks.loc[sx_data.MASK[mask_id], :]
 
     exp_bafs = None
     exp_rdrs = None  # TODO
@@ -488,7 +484,7 @@ def plot_rdr_baf_1d_aggregated(
         if mask_cnp:
             exp_bafs = exp_bafs[sx_data.MASK[mask_id], :]
 
-    bin_info = bin_info.copy(deep=True)
+    cnv_blocks = cnv_blocks.copy(deep=True)
 
     # BAF data
     Y = sx_data.Y
@@ -499,12 +495,12 @@ def plot_rdr_baf_1d_aggregated(
 
     cell_labels = anns[lab_type].tolist()
     uniq_cell_labels = anns[lab_type].unique()
-    assert (len(bin_info), len(cell_labels)) == Y.shape
+    assert (len(cnv_blocks), len(cell_labels)) == Y.shape
 
     ################
-    bin_info["SAMPLE"] = sample
-    chrs = bin_info["#CHR"].unique().tolist()
-    ret = build_ch_boundary(bin_info, chrs, chrom_sizes, chr_shift=int(10e6))
+    cnv_blocks["SAMPLE"] = sample
+    chrs = cnv_blocks["#CHR"].unique().tolist()
+    ret = build_ch_boundary(cnv_blocks, chrs, chrom_sizes, chr_shift=int(10e6))
     (
         chr_offsets,
         chr_bounds,
@@ -514,19 +510,19 @@ def plot_rdr_baf_1d_aggregated(
         xtick_chrs,
     ) = ret
 
-    positions = bin_info.apply(
+    positions = cnv_blocks.apply(
         func=lambda r: chr_offsets[r["#CHR"]] + (r.START + r.END) // 2, axis=1
     ).to_numpy()
-    abs_starts = bin_info.apply(func=lambda r: chr_offsets[r["#CHR"]] + r.START, axis=1)
-    abs_ends = bin_info.apply(func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1)
+    abs_starts = cnv_blocks.apply(func=lambda r: chr_offsets[r["#CHR"]] + r.START, axis=1)
+    abs_ends = cnv_blocks.apply(func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1)
     ################
     # prepare platte and markers
-    markersize = float(max(20, 4 - np.floor(len(bin_info) / 500)))
+    markersize = float(max(20, 4 - np.floor(len(cnv_blocks) / 500)))
     # markersize_centroid = 10
     # marker_bd_width = 0.8
     sns.set_style("whitegrid")
     palette = sns.color_palette("husl")
-    if len(bin_info) > 8:
+    if len(cnv_blocks) > 8:
         palette = sns.color_palette("husl", n_colors=len(uniq_cell_labels))
     else:
         palette = sns.color_palette("Set2", n_colors=len(uniq_cell_labels))
@@ -656,6 +652,22 @@ def plot_params(
             plt.close()
         pdf.close()
     return
+
+def plot_loss(
+    losses: list,
+    out_loss_file: str,
+    val_type="log-likelihood",
+    dpi=100
+):
+    fig = plt.figure()
+    plt.plot(losses)
+    plt.xlabel("iterations")
+    plt.ylabel(val_type)
+    # optional: log-scale y if it starts very large
+    # plt.yscale("log")
+    plt.tight_layout()
+    plt.savefig(out_loss_file, dpi=dpi)  # optional
+    plt.close()
 
 
 ##################################################

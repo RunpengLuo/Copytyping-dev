@@ -68,19 +68,20 @@ def evaluate_malignant_accuracy(
     return metric, metric_str
 
 
-def refine_labels_celltype(
+def refine_labels_by_reference(
     anns: pd.DataFrame,
+    ref_label="cell_type",
     cell_label="cell_label",
     out_label="refined_label",
-    cell_type="cell_type",
 ):
+    # TODO, ref label vals
     num_na_before = (anns[cell_label] == "NA").sum()
     anns[out_label] = anns[cell_label]
     anns.loc[
-        (anns[cell_type] == "Tumor_cell") & (anns[cell_label] == "normal"), out_label
+        (anns[ref_label] == "Tumor_cell") & (anns[cell_label] == "normal"), out_label
     ] = "NA"
     anns.loc[
-        (anns[cell_type] != "Tumor_cell") & (anns[cell_label] != "normal"), out_label
+        (anns[ref_label] != "Tumor_cell") & (anns[cell_label] != "normal"), out_label
     ] = "NA"
     num_na_after = (anns[out_label] == "NA").sum()
     print(f"#NA before/after refinement={num_na_before}->{num_na_after} / {len(anns)}")

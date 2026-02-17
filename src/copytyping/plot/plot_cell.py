@@ -36,7 +36,7 @@ logging.getLogger("fontTools").setLevel(logging.ERROR)
 def plot_heatmap(
     ax: plt.Axes,
     cell_labels: np.ndarray,
-    bin_info: pd.DataFrame,
+    cnv_blocks: pd.DataFrame,
     X_mat: np.ndarray,
     wl_segments: pd.DataFrame,
     height=1,
@@ -47,12 +47,12 @@ def plot_heatmap(
     norm=None,
 ):
     (N, G) = X_mat.shape
-    assert len(bin_info) == G, "unmatched data"
+    assert len(cnv_blocks) == G, "unmatched data"
     assert len(cell_labels) == N, "unmatched data"
 
-    bin_info = bin_info.reset_index(drop=True)
+    cnv_blocks = cnv_blocks.reset_index(drop=True)
     wl_segments_chs = wl_segments.groupby("#CHR", sort=False)
-    bins_chs = bin_info.groupby("#CHR", sort=False, observed=True)
+    bins_chs = cnv_blocks.groupby("#CHR", sort=False, observed=True)
 
     x_edges = [0.0]  # running global x edges (length = n_cols + 1)
     col_bin_ids = []  # length = n_cols; bin index or -1 (gap)
@@ -60,7 +60,7 @@ def plot_heatmap(
     ch_offset = 0.0
     ch_coords = []
     seg_coords = []
-    chs = bin_info["#CHR"].unique()
+    chs = cnv_blocks["#CHR"].unique()
     for ch in chs:
         ch_coords.append(ch_offset)
         wl_segments_ch = wl_segments_chs.get_group(ch)
@@ -408,7 +408,7 @@ def plot_cnv_heatmap(
     # cluster_by_val = proportions is None
     cluster_by_val = False
     # print(f"cluster_by_val={cluster_by_val}")
-    data_info = sx_data.bin_info
+    data_info = sx_data.cnv_blocks
     if val == "BAF":
         data_matrix, cell_labels = prepare_baf(
             sx_data, cell_labels, uniq_labels, agg_size, cluster_by_val

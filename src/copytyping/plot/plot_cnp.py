@@ -17,7 +17,7 @@ from collections import OrderedDict
 
 def plot_cnv_profile(
     ax: plt.Axes,
-    bin_info: pd.DataFrame,
+    cnv_blocks: pd.DataFrame,
     wl_segments: pd.DataFrame,
     width=20,
     height=1,
@@ -30,24 +30,24 @@ def plot_cnv_profile(
     """
     plot chrom-level integer CNV profile.
     regions outside white list segments are marked as dashed bar.
-    bin_info: #CHR, START, END, CNP
+    cnv_blocks: #CHR, START, END, CNP
     """
     state_style, tcn_states = get_cn_colors()
 
     num_clones = (
-        len(str(bin_info.iloc[0]["CNP"]).split(";")) - 1
+        len(str(cnv_blocks.iloc[0]["CNP"]).split(";")) - 1
     )  # first column is normal
     h = height / num_clones
 
-    bulk_props = np.array([float(v) for v in str(bin_info["PROPS"].iloc[0]).split(";")])
+    bulk_props = np.array([float(v) for v in str(cnv_blocks["PROPS"].iloc[0]).split(";")])
 
     wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
-    bins_chs = bin_info.groupby(by="#CHR", sort=False, observed=True)
+    bins_chs = cnv_blocks.groupby(by="#CHR", sort=False, observed=True)
 
     ch_offset = 0
     ch_coords = []
     seg_coords = []
-    chs = bin_info["#CHR"].unique()
+    chs = cnv_blocks["#CHR"].unique()
     for ch in chs:
         ch_coords.append(ch_offset)
         wl_segments_ch = wl_segments_chs.get_group(ch)

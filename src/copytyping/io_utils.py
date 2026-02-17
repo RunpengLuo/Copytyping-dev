@@ -393,16 +393,16 @@ def parse_cnv_profile(haplo_blocks: pd.DataFrame, laplace=0.01):
     return clones, A, B, C, BAF
 
 
-def parse_total_cnp(bin_info: pd.DataFrame):
-    num_clones = len(str(bin_info["CNP"].iloc[0]).split(";"))
+def parse_total_cnp(cnv_blocks: pd.DataFrame):
+    num_clones = len(str(cnv_blocks["CNP"].iloc[0]).split(";"))
     clones = ["normal"] + [f"clone{i}" for i in range(1, num_clones)]
-    A = np.zeros((len(bin_info), num_clones), dtype=np.int32)
-    B = np.zeros((len(bin_info), num_clones), dtype=np.int32)
+    A = np.zeros((len(cnv_blocks), num_clones), dtype=np.int32)
+    B = np.zeros((len(cnv_blocks), num_clones), dtype=np.int32)
     for i in range(num_clones):
-        A[:, i] = bin_info.apply(
+        A[:, i] = cnv_blocks.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[0]), axis=1
         ).to_numpy()
-        B[:, i] = bin_info.apply(
+        B[:, i] = cnv_blocks.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[1]), axis=1
         ).to_numpy()
     C = A + B

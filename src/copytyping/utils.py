@@ -4,12 +4,31 @@ import gzip
 import pandas as pd
 import numpy as np
 import pysam
+import logging
 
 from collections import OrderedDict
 import pyranges as pr
 
 import subprocess
 from io import StringIO
+
+# VISIUM3prime
+SPOT_ASSAYS = {"VISIUM"}
+CELL_ASSAYS = {"scRNA", "scATAC", "multiome"}
+GEX_ASSAYS = {"scRNA", "multiome", "VISIUM"}
+ATAC_ASSAYS = {"scATAC", "multiome"}
+SPATIAL_ASSAYS = {"VISIUM"}
+ALL_ASSAYS = ["scRNA", "scATAC", "multiome", "VISIUM"]
+
+BLACK_LIST = {
+    "Tumor_cell",
+    "tumor",
+    "Tumor",  # tumor labels / variants
+    "Doublet",
+    "doublet",  # artifacts / ambiguous
+    "Unknown",
+    "NA",  # missing labels
+}
 
 
 def get_ord2chr(ch="chr"):
@@ -112,11 +131,9 @@ def read_cn_profile(seg_ucn: str):
 
 
 def read_barcodes(bc_file: str):
-    barcodes = []
-    with open(bc_file, "r") as fd:
-        for line in fd:
-            barcodes.append(line.strip().split("\t")[0])
-        fd.close()
+    barcodes = (
+        pd.read_table(bc_file, sep="\t", header=None, dtype=str).iloc[:, 0].tolist()
+    )
     return barcodes
 
 
@@ -617,3 +634,10 @@ def assign_pos_to_range(
         )
         hits["POS"] = hits["POS0"] + 1
         return hits
+
+
+def setup_logging(args) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )

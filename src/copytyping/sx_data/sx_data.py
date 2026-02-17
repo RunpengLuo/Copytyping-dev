@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 import numpy as np
 import pandas as pd
@@ -11,35 +12,39 @@ from copytyping.io_utils import *
 class SX_Data:
     def __init__(
         self,
-        barcodes: pd.DataFrame,
-        haplo_blocks: pd.DataFrame,
-        mod_dir: str,
+        bc_file: str,
+        cnp_file: str,
+        x_count_file: str,
+        y_count_file: str,
+        d_count_file: str,
         data_type: str,
+        laplace=0.01,
         verbose=1,
     ) -> None:
-        assert os.path.isdir(mod_dir)
-        self.N = len(barcodes)
-        self.G = len(haplo_blocks)
-
-        self.barcodes = barcodes
-        self.bin_info = haplo_blocks.copy(deep=True)
-        self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
-            self.bin_info, laplace=0.01
+        self.data_type = data_type
+        self.barcodes = pd.read_table(
+            bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
         )
+        self.cnv_blocks = pd.read_table(cnp_file, sep="\t")
+        self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
+            self.cnv_blocks, laplace=laplace
+        )
+        self.N = len(self.barcodes)
+        self.G = len(self.cnv_blocks)
         self.K = len(self.clones)
         self.MASK = get_cnp_mask(self.A, self.B, self.C)
-        self.nrows_eff_allele = np.sum(self.MASK["IMBALANCED"])
-        self.nrows_eff_feat = np.sum(self.MASK["ANEUPLOID"])
+        self.nrows_imbalanced = np.sum(self.MASK["IMBALANCED"])
+        self.nrows_aneuploid = np.sum(self.MASK["ANEUPLOID"])
 
         # (G, N)
         self.X: np.ndarray = (
-            sparse.load_npz(os.path.join(mod_dir, "X_count.npz")).toarray().astype(dtype=np.int32)
+            sparse.load_npz(x_count_file).toarray().astype(dtype=np.int32)
         )
         self.Y: np.ndarray = (
-            sparse.load_npz(os.path.join(mod_dir, "Y_count.npz")).toarray().astype(dtype=np.int32)
+            sparse.load_npz(y_count_file).toarray().astype(dtype=np.int32)
         )
         self.D: np.ndarray = (
-            sparse.load_npz(os.path.join(mod_dir, "D_count.npz")).toarray().astype(dtype=np.int32)
+            sparse.load_npz(d_count_file).toarray().astype(dtype=np.int32)
         )
         assert self.X.shape == (self.G, self.N)
         assert self.Y.shape == (self.G, self.N)
@@ -48,25 +53,27 @@ class SX_Data:
         self.T = np.sum(self.X, axis=0)
 
         if verbose:
-            print(f"{data_type} data is loaded #cells={self.N}, #bins={self.G}")
-            print(f"#effective imbalanced CNA bins={self.nrows_eff_allele}")
-            print(f"#effective CNA features={self.nrows_eff_feat}")
+            logging.info(f"{data_type} data is loaded #cells={self.N}, #bins={self.G}")
+            logging.info(f"#effective imbalanced CNA bins={self.nrows_eff_allele}")
+            logging.info(f"#effective CNA features={self.nrows_eff_feat}")
         return
 
-    def apply_mask_shallow(self, mask_id="CNP"):
-        cnp_mask = self.MASK[mask_id]
-        M = {
-            "A": self.A[cnp_mask, :],
-            "B": self.B[cnp_mask, :],
-            "C": self.C[cnp_mask, :],
-            "BAF": self.BAF[cnp_mask, :],
-            "X": self.X[cnp_mask, :],
-            "Y": self.Y[cnp_mask, :],
-            "D": self.D[cnp_mask, :],
-            "bin_info": self.bin_info[cnp_mask],
-        }
-        return M
+    def apply_mask_shallow(self, mask_id="CNP", additional_mask=None):
+        if additional_mask is None:
+            additional_mask = np.ones(self.G, dtype=bool)
 
+        mask = self.MASK[mask_id] & additional_mask
+        M = {
+            "A": self.A[mask, :],
+            "B": self.B[mask, :],
+            "C": self.C[mask, :],
+            "BAF": self.BAF[mask, :],
+            "X": self.X[mask, :],
+            "Y": self.Y[mask, :],
+            "D": self.D[mask, :],
+            "cnv_blocks": self.cnv_blocks[mask],
+        }
+        return M, mask
 
 def get_cnp_mask(A, B, C, and_mask=None):
     """return 1d mask, False if the bin should be discarded during modelling"""
@@ -80,10 +87,10 @@ def get_cnp_mask(A, B, C, and_mask=None):
 
     clonal_loh_mask = np.all(B[:, 1:] == 0, axis=1) & np.all(A[:, 1:] > 0, axis=1)
     clonal_loh_mask |= np.all(A[:, 1:] == 0, axis=1) & np.all(B[:, 1:] > 0, axis=1)
-    
+
     subclonal_loh_mask = np.any(B[:, 1:] == 0, axis=1) & np.all(A[:, 1:] > 0, axis=1)
     subclonal_loh_mask |= np.any(A[:, 1:] == 0, axis=1) & np.all(B[:, 1:] > 0, axis=1)
-    
+
     subclonal_mask = np.copy(tumor_mask)
     if A.shape[1] > 2:
         subclonal_mask = np.any(A[:, 2:] != A[:, 1][:, None], axis=1) | np.any(
