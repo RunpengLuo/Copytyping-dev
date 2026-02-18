@@ -47,7 +47,7 @@ class Spot_Model(Base_Model):
         allele_post_thres=0.90,
         allele_max_iter=10,
     ):
-        params = self.__init_params(fit_mode, init_params)
+        params = self._init_base_params(fit_mode, init_params)
         data_type = self.data_types[0]
         sx_data: SX_Data = self.data_sources[data_type]
 
@@ -68,7 +68,7 @@ class Spot_Model(Base_Model):
             )
             allele_params = pure_model.fit(
                 "allele_only",
-                fix_params=fix_params,
+                fix_params=init_fix_params,
                 init_params=init_params,
                 share_params=share_params,
                 max_iter=allele_max_iter,
@@ -128,7 +128,7 @@ class Spot_Model(Base_Model):
             allele_ll_mat = cond_betabin_logpmf_theta(
                 MA["Y"],
                 MA["D"],
-                MA[f"{data_type}-tau"],
+                params[f"{data_type}-tau"][lambda_g[sx_data.MASK["IMBALANCED"]] > 0],
                 MA["BAF"],
                 rdrs_gk[bb_mask],
                 params[f"{data_type}-theta"],
@@ -178,13 +178,13 @@ class Spot_Model(Base_Model):
         sx_data: SX_Data = self.data_sources[data_type]
 
         # parameters
-        nb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
-        bb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
-
         lambda_g = params[f"{data_type}-lambda"]
         rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
         # props_gk = clone_pi_gk(lambda_g, sx_data.C)
         p_gk = sx_data.BAF
+
+        nb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
+        bb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
 
         # dispersions
         inv_phi_g = params[f"{data_type}-inv_phi"][nb_mask]
@@ -199,7 +199,7 @@ class Spot_Model(Base_Model):
         ##################################################
         # update tumor proportion via MLE
         if not fix_params[f"{data_type}-theta"]:
-            theta_arr = np.zeros_like(params["theta"], dtype=np.float32)
+            theta_arr = np.zeros_like(params[f"{data_type}-theta"], dtype=np.float32)
             for n in range(self.N):
 
                 def neg_Q_theta(theta):
@@ -232,7 +232,7 @@ class Spot_Model(Base_Model):
                     method="bounded",
                 )
                 theta_arr[n] = np.clip(res.x, 1e-4, 1.0 - 1e-4)
-            params["theta"] = theta_arr
+            params[f"{data_type}-theta"] = theta_arr
 
         ##################################################
         # update NB over-dispersion inv_phi
@@ -244,7 +244,7 @@ class Spot_Model(Base_Model):
             T_gnk = T_n[None, :, None]
             lam_gnk = lambda_g[nb_mask][:, None, None]
             rdrs_gnk = rdrs_gk[nb_mask][:, None, :]
-            theta_gnk = params["theta"][None, :, None]
+            theta_gnk = params[f"{data_type}-theta"][None, :, None]
 
             mu_gnk = T_gnk * lam_gnk * (theta_gnk * rdrs_gnk + (1.0 - theta_gnk))
             # mu_gnk = np.clip(mu_gnk, eps, None)
@@ -265,7 +265,7 @@ class Spot_Model(Base_Model):
             Y_gnk = Y_gn[:, :, None]
             D_gnk = D_gn[:, :, None]
             rdrs_gnk = rdrs_gk[bb_mask][:, None, :]
-            theta_gnk = params["theta"][None, :, None]
+            theta_gnk = params[f"{data_type}-theta"][None, :, None]
             p_gnk = p_gk[bb_mask][:, None, :]
 
             denom = rdrs_gnk * theta_gnk + (1.0 - theta_gnk)
@@ -300,7 +300,7 @@ class Spot_Model(Base_Model):
         assert fit_mode in allowed_fit_mode
         logging.info(f"Start spot model inference, fit_mode={fit_mode}")
 
-        params, fix_params = self._init_params(fit_mode, fix_params, init_params)
+        params, fix_params = self._init_params(fit_mode, fix_params, init_params, share_params)
         if self.verbose:
             self.print_params(params, fit_mode)
 

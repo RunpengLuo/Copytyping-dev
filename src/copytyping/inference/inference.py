@@ -104,7 +104,7 @@ def run(args=None):
         fix_params[f"{data_type}-tau"] = args["fix_BB_dispersion"]
         share_params[f"{data_type}-tau"] = args["share_BB_dispersion"]
         fix_params[f"{data_type}-theta"] = (
-            assay_type in SPOT_ASSAYS and args["fix_tumor_pruity"]
+            assay_type in SPOT_ASSAYS and args["fix_tumor_purity"]
         )
 
     if assay_type in CELL_ASSAYS:
@@ -184,7 +184,7 @@ def run(args=None):
     transparent = args["transparent"]
     for data_type in data_types:
         sx_data: SX_Data = data_sources[data_type]
-        adata: AnnData = data_sources[data_type]
+        adata: AnnData = adatas[data_type]
 
         # plot heatmap
         for val in ["BAF", "pi_gk", "log2RDR"]:

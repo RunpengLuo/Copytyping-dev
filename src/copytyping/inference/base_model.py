@@ -37,7 +37,7 @@ class Base_Model:
         self.verbose = verbose
         return
 
-    def __init_params(
+    def _init_base_params(
         self,
         fit_mode: str,
         init_params: dict,

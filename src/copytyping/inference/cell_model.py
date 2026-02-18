@@ -47,12 +47,12 @@ class Cell_Model(Base_Model):
         allele_post_thres=0.90,
         allele_max_iter=10,
     ):
-        params = self.__init_params(fit_mode, init_params)
+        params = self._init_base_params(fit_mode, init_params)
 
         # initialize baseline proportions
         if (
             fit_mode in {"total_only", "hybrid"}
-            and params.get(f"{data_type}-lambda", None) is None
+            and any(params.get(f"{dt}-lambda", None) is None for dt in self.data_types)
         ):
             is_normal_cell = None
             if ref_label in self.barcodes.columns:
@@ -70,7 +70,7 @@ class Cell_Model(Base_Model):
                 )
                 allele_params = pure_model.fit(
                     "allele_only",
-                    fix_params=fix_params,
+                    fix_params=init_fix_params,
                     init_params=init_params,
                     share_params=share_params,
                     max_iter=allele_max_iter,
@@ -220,7 +220,7 @@ class Cell_Model(Base_Model):
         assert fit_mode in allowed_fit_mode
         logging.info(f"Start cell model inference, fit_mode={fit_mode}")
 
-        params, fix_params = self._init_params(fit_mode, fix_params, init_params)
+        params, fix_params = self._init_params(fit_mode, fix_params, init_params, share_params)
         if self.verbose:
             self.print_params(params, fit_mode)
 

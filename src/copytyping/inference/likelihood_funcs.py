@@ -199,8 +199,8 @@ def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds):
 
 
 def mle_tau(Y_gnk, D_gnk, p_gnk, weights, logtau_bounds):
-    X_gnk = D_gnk - X_gnk
-    const = gammaln(D_gnk + 1.0) - gammaln(Y_gnk + 1.0) - gammaln(D_gnk - X_gnk + 1.0)
+    X_gnk = D_gnk - Y_gnk
+    const = gammaln(D_gnk + 1.0) - gammaln(Y_gnk + 1.0) - gammaln(X_gnk + 1.0)
 
     def neg_Q_logtau(logtau):
         tau = np.exp(logtau)
