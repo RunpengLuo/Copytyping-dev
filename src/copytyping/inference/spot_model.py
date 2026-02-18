@@ -122,7 +122,7 @@ class Spot_Model(Base_Model):
         nb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
 
         if fit_mode in {"allele_only", "hybrid"}:
-            MA = sx_data.apply_mask_shallow(
+            MA, _ = sx_data.apply_mask_shallow(
                 mask_id="IMBALANCED", additional_mask=lambda_g > 0
             )
             allele_ll_mat = cond_betabin_logpmf_theta(
@@ -187,8 +187,8 @@ class Spot_Model(Base_Model):
         bb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
 
         # dispersions
-        inv_phi_g = params[f"{data_type}-inv_phi"][nb_mask]
-        tau_g = params[f"{data_type}-tau"][bb_mask]
+        inv_phi_g = params[f"{data_type}-inv_phi"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0]
+        tau_g = params[f"{data_type}-tau"][lambda_g[sx_data.MASK["IMBALANCED"]] > 0]
 
         # inputs
         X_gn = sx_data.X[nb_mask, :]  # (G, N)
@@ -254,9 +254,13 @@ class Spot_Model(Base_Model):
                     X_gnk, mu_gnk, gamma_gnk, invphi_bounds
                 )
             else:
-                for idx, row in sx_data.cnv_blocks[nb_mask].iterrows():
-                    params[f"{data_type}-inv_phi"][idx] = mle_invphi(
-                        X_gnk[idx], mu_gnk[idx], gamma_gnk[idx], invphi_bounds
+                nb_valid_in_aneuploid = np.where(lambda_g[sx_data.MASK["ANEUPLOID"]] > 0)[0]
+                for local_idx, aneuploid_idx in enumerate(nb_valid_in_aneuploid):
+                    params[f"{data_type}-inv_phi"][aneuploid_idx] = mle_invphi(
+                        X_gnk[local_idx : local_idx + 1],
+                        mu_gnk[local_idx : local_idx + 1],
+                        gamma_gnk,
+                        invphi_bounds,
                     )
 
         ##################################################
@@ -277,12 +281,13 @@ class Spot_Model(Base_Model):
                 tau_hat = mle_tau(Y_gnk, D_gnk, p_hat, gamma_gnk, logtau_bounds)
                 params[f"{data_type}-tau"][:] = tau_hat
             else:
-                for idx, row in sx_data.cnv_blocks[bb_mask].iterrows():
-                    params[f"{data_type}-tau"][idx] = mle_tau(
-                        Y_gnk[idx],
-                        D_gnk[idx],
-                        p_gnk[idx],
-                        gamma_gnk[idx],
+                bb_valid_in_imbalanced = np.where(lambda_g[sx_data.MASK["IMBALANCED"]] > 0)[0]
+                for local_idx, imbalanced_idx in enumerate(bb_valid_in_imbalanced):
+                    params[f"{data_type}-tau"][imbalanced_idx] = mle_tau(
+                        Y_gnk[local_idx : local_idx + 1],
+                        D_gnk[local_idx : local_idx + 1],
+                        p_gnk[local_idx : local_idx + 1],
+                        gamma_gnk,
                         logtau_bounds,
                     )
         return

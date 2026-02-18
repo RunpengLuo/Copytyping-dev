@@ -177,9 +177,13 @@ class Cell_Model(Base_Model):
                         X_gnk, mu_gnk, gamma_gnk, invphi_bounds
                     )
                 else:
-                    for idx, row in sx_data.cnv_blocks[nb_mask].iterrows():
-                        params[f"{data_type}-inv_phi"][idx] = mle_invphi(
-                            X_gnk[idx], mu_gnk[idx], gamma_gnk[idx], invphi_bounds
+                    nb_valid_in_aneuploid = np.where(lambda_g[sx_data.MASK["ANEUPLOID"]] > 0)[0]
+                    for local_idx, aneuploid_idx in enumerate(nb_valid_in_aneuploid):
+                        params[f"{data_type}-inv_phi"][aneuploid_idx] = mle_invphi(
+                            X_gnk[local_idx : local_idx + 1],
+                            mu_gnk[local_idx : local_idx + 1],
+                            gamma_gnk,
+                            invphi_bounds,
                         )
 
             # update BB over-dispersion tau
@@ -197,12 +201,12 @@ class Cell_Model(Base_Model):
                         Y_gnk, D_gnk, p_gnk, gamma_gnk, logtau_bounds
                     )
                 else:
-                    for idx, row in sx_data.cnv_blocks[bb_mask].iterrows():
-                        params[f"{data_type}-tau"][idx] = mle_tau(
-                            Y_gnk[idx],
-                            D_gnk[idx],
-                            p_gnk[idx],
-                            gamma_gnk[idx],
+                    for local_idx in range(Y_gnk.shape[0]):
+                        params[f"{data_type}-tau"][local_idx] = mle_tau(
+                            Y_gnk[local_idx : local_idx + 1],
+                            D_gnk[local_idx : local_idx + 1],
+                            p_gnk[local_idx : local_idx + 1],
+                            gamma_gnk,
                             logtau_bounds,
                         )
         return
