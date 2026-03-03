@@ -234,12 +234,10 @@ def plot_rdr_baf_1d_aggregated(
     if mask_cnp:
         cnv_blocks = cnv_blocks.loc[sx_data.MASK[mask_id], :]
 
-    exp_bafs = None
     exp_rdrs = None  # TODO
-    if lab_type == "cell_label":
-        exp_bafs = sx_data.BAF
-        if mask_cnp:
-            exp_bafs = exp_bafs[sx_data.MASK[mask_id], :]
+    exp_bafs = sx_data.BAF
+    if mask_cnp:
+        exp_bafs = exp_bafs[sx_data.MASK[mask_id], :]
 
     cnv_blocks = cnv_blocks.copy(deep=True)
 
@@ -286,8 +284,10 @@ def plot_rdr_baf_1d_aggregated(
     sns.set_palette(palette)
 
     ################
-    pdf_fd = PdfPages(filename)
-    # compute aggregate BAF
+    base, ext = os.path.splitext(filename)
+    use_pdf = ext.lower() == ".pdf"
+    pdf_fd = PdfPages(filename) if use_pdf else None
+
     uniq_cell_labels = anns[lab_type].unique()
     for i, cell_label in enumerate(uniq_cell_labels):
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
@@ -324,7 +324,7 @@ def plot_rdr_baf_1d_aggregated(
             linestyle=":",
             linewidth=1,
         )
-        if not exp_bafs is None and cell_label != "NA":
+        if exp_bafs is not None and cell_label != "NA":
             clone_baf = list(exp_bafs[:, sx_data.clones.index(cell_label)])
             exp_baf_lines = [
                 [(s, baf), (t, baf)]
@@ -342,10 +342,15 @@ def plot_rdr_baf_1d_aggregated(
             f"{sample} {data_type} Aggregated B-allele Frequency Plot\n{cell_label} #{num_bcs}"
         )
         fig.tight_layout()
-        pdf_fd.savefig(fig, dpi=150)
+        if use_pdf:
+            pdf_fd.savefig(fig, dpi=150)
+        else:
+            fig.savefig(f"{base}.{cell_label}{ext}", dpi=150)
         fig.clear()
         plt.close()
-    pdf_fd.close()
+
+    if use_pdf:
+        pdf_fd.close()
     return
 
 
