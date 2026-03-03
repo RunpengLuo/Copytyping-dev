@@ -88,7 +88,7 @@ def empirical_rdr_gn(
 class BAF_Binom(GenericLikelihoodModel):
     """
     Binomial model endog ~ Bin(exposure, p), where p = exog @ params[:-1].
-    MLE: max_{params} \sum_{s} log P(endog_s | exog_s; params)
+    MLE: max_{params} sum_{s} log P(endog_s | exog_s; params)
 
     Attributes
     ----------
