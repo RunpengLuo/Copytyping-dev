@@ -210,7 +210,7 @@ def check_arguments_inference(args: dict):
         assert gex_dir is not None and os.path.isdir(gex_dir), (
             f"missing --gex_dir={gex_dir} for assay_type={assay_type}"
         )
-        data_types.append("GEX")
+        data_types.append("gex")
         cnv_segments = os.path.join(gex_dir, "cnv_segments.tsv")
         barcodes = os.path.join(gex_dir, "barcodes.tsv.gz")
         x_count = os.path.join(gex_dir, "X_count.npz")
@@ -232,7 +232,7 @@ def check_arguments_inference(args: dict):
         assert atac_dir is not None and os.path.isdir(atac_dir), (
             f"missing --atac_dir={atac_dir} for assay_type={assay_type}"
         )
-        data_types.append("ATAC")
+        data_types.append("atac")
         cnv_segments = os.path.join(atac_dir, "cnv_segments.tsv")
         barcodes = os.path.join(atac_dir, "barcodes.tsv.gz")
         x_count = os.path.join(atac_dir, "X_count.npz")

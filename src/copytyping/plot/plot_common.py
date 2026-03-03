@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 import pandas as pd
 import numpy as np
@@ -9,15 +10,10 @@ import numpy as np
 # from matplotlib.colors import TwoSlopeNorm
 # import matplotlib.colors as mcolors
 import seaborn as sns
-
-# from scipy.cluster.hierarchy import linkage, leaves_list
-from matplotlib.collections import LineCollection
-from scipy import sparse, stats
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.backends.backend_pdf import PdfPages
-
 from collections import OrderedDict
+from matplotlib.collections import LineCollection
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.utils import get_chr_sizes
 from copytyping.io_utils import *
@@ -52,7 +48,7 @@ def plot_snps_per_chrom(
     lab_corr="HB",
     s=4,
 ):
-    print("plot 1D per-SNP B-allele frequency")
+    logging.info("plot 1D per-SNP B-allele frequency")
     chrom_sizes = get_chr_sizes(genome_file)
 
     colors = ["#1f77b4", "#ff7f0e"]  # blue / orange
@@ -70,7 +66,7 @@ def plot_snps_per_chrom(
         chr_end = chrom_sizes[chrom]
         out_file = os.path.join(out_dir, f"{out_prefix}.{chrom}.png")
         snps_ch = snps_chs.get_group(chrom)
-        print(f"plot {chrom} with #SNP={len(snps_ch)}")
+        logging.info(f"plot {chrom} with #SNP={len(snps_ch)}")
         fig, axes = plt.subplots(3, 1, figsize=(40, 6), sharex=True)
         fig.suptitle(f"{chrom}", fontsize=12)
 
@@ -92,7 +88,7 @@ def plot_snps_per_chrom(
         )
 
         # TODO add segment BAF hlines
-        [
+        for i in [0, 1]:
             axes[i].hlines(
                 y=0.5,
                 xmin=0,
@@ -101,19 +97,15 @@ def plot_snps_per_chrom(
                 linestyle=":",
                 linewidth=1,
             )
-            for i in [0, 1]
-        ]
         # BAF lines
         exp_baf_lines = []
         for _, row in haplo_blocks.loc[haplo_blocks["#CHR"] == chrom].iterrows():
             exp_baf_lines.append([(row["START"], row["BAF"]), (row["END"], row["BAF"])])
         bl_colors = [(0, 0, 0, 1)] * len(exp_baf_lines)
-        [
+        for i in [0, 1]:
             axes[i].add_collection(
                 LineCollection(exp_baf_lines, linewidth=2, colors=bl_colors)
             )
-            for i in [0, 1]
-        ]
 
         axes[2].scatter(
             snps_ch["POS"],
@@ -158,243 +150,8 @@ def plot_library_sizes(
 
 
 ##################################################
-# def cluster_per_group(
-#     adata: AnnData,
-#     cluster_chroms=None,
-#     groupby="cell_label"
-# ):
-#     # cluster within groups
-#     if cluster_chroms is not None:
-#         chrom_mask = adata.var["#CHR"].isin(cluster_chroms)
-#     else:
-#         chrom_mask = np.ones(adata.n_vars, dtype=bool)
-#     order_indices = []
-#     groups = adata.obs[groupby]
-#     for cat in groups.unique():
-#         cell_mask = groups == cat
-#         if np.sum(cell_mask) == 0:
-#             continue
-#         X_group = adata.X[cell_mask][:, chrom_mask]
-#         X_group = np.nan_to_num(X_group, nan=0.5)
-#         if X_group.shape[0] > 2:
-#             Z = linkage(X_group, method="ward", metric="euclidean")
-#             leaf_order = leaves_list(Z)
-#             order_indices.extend(np.where(cell_mask)[0][leaf_order])
-#         else:
-#             order_indices.extend(np.where(cell_mask)[0])
-#     return adata[order_indices, :].copy()
-
-##################################################
-# plot 1D cell/spot by genome bin heatmap for one modality
-# def plot_baf_1d(
-#     sx_data: SX_Data,
-#     anns: pd.DataFrame,
-#     sample: str,
-#     data_type: str,
-#     mask_cnp=True,
-#     mask_id="CNP",
-#     lab_type="cell_label",
-#     figsize=(20, 10),
-#     filename=None,
-#     agg_size=5,
-#     skip_cluster_per_group=False,
-#     **kwargs
-# ):
-#     cnv_blocks = sx_data.cnv_blocks
-#     if mask_cnp:
-#         cnv_blocks = cnv_blocks.loc[sx_data.MASK[mask_id], :]
-#     print(f"plot 1D BAF heatmap, #bins={len(cnv_blocks)}")
-
-#     print(cnv_blocks.head())
-#     # BAF data
-#     Y = sx_data.Y
-#     D = sx_data.D
-
-#     if anns is None:
-#         cell_labels = np.full(Y.shape[1], fill_value="unknown")
-#     else:
-#         cell_labels = anns[lab_type].to_numpy()
-#     assert len(cell_labels) == Y.shape[1]
-
-#     # aggregate subset cells
-#     if agg_size > 1:
-#         Y_agg_list, D_agg_list, cell_labels_agg = [], [], []
-#         for lab in np.unique(cell_labels):
-#             idx = np.where(cell_labels == lab)[0]
-#             n_cells = len(idx)
-#             n_groups = int(np.ceil(n_cells / agg_size))
-#             for g in range(n_groups):
-#                 sub_idx = idx[g*agg_size:(g+1)*agg_size]
-#                 if len(sub_idx) == 0:
-#                     continue
-#                 # sum counts per bin
-#                 Y_sum = Y[:, sub_idx].sum(axis=1)
-#                 D_sum = D[:, sub_idx].sum(axis=1)
-#                 Y_agg_list.append(Y_sum)
-#                 D_agg_list.append(D_sum)
-#                 cell_labels_agg.append(lab)
-#         Y = np.column_stack(Y_agg_list)  # (n_bins, new_cells)
-#         D = np.column_stack(D_agg_list)
-#         cell_labels = np.array(cell_labels_agg)
-
-#     baf_matrix = np.divide(
-#         Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
-#     )
-#     if mask_cnp:
-#         baf_matrix = baf_matrix[sx_data.MASK[mask_id]]
-
-#     baf_matrix = baf_matrix.T
-
-#     # build anndata
-#     adata = AnnData(X=baf_matrix)
-#     adata.obs[lab_type] = cell_labels
-#     adata.var[['#CHR','START','END']] = cnv_blocks[['#CHR','START','END']].values
-#     if not skip_cluster_per_group:
-#         adata_sorted = cluster_per_group(adata, cluster_chroms=None, groupby=lab_type)
-#     else:
-#         adata_sorted = adata
-#     chroms = adata_sorted.var["#CHR"].to_numpy()
-#     chr_change_idx = np.where(chroms[1:] != chroms[:-1])[0] + 1
-#     chr_pos = [0] + chr_change_idx.tolist()
-#     var_group_labels = list(chroms[chr_pos])
-#     var_group_positions = [
-#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(cnv_blocks))
-#         for i in range(len(chr_pos))
-#     ]
-
-
-#     cmap = mcolors.LinearSegmentedColormap.from_list(
-#         "baf_map",
-#         # [(0.0, "blue"), (0.5, "green"), (1.0, "red")]
-#         [(0.0, "#1f77b4"), (0.5, "#bfbfbf"), (1.0, "#d62728")]
-#     )
-#     cmap.set_bad(color="white")  # NaNs pure white
-#     norm = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
-
-#     ax_dict = sc.pl.heatmap(
-#         adata,
-#         var_names=adata.var_names,
-#         groupby=lab_type,
-#         figsize=figsize,
-#         cmap=cmap,
-#         norm=norm,
-#         show_gene_labels=False,
-#         var_group_positions=var_group_positions,
-#         var_group_labels=var_group_labels,
-#         dendrogram=False,
-#         show=False,
-#         **kwargs,
-#     )
-
-#     ax_dict["heatmap_ax"].vlines(chr_pos[1:], lw=0.6, ymin=0, ymax=adata.shape[0], color="black")
-#     ax_dict["heatmap_ax"].set_title(f"{sample} {data_type} BAF Heatmap", y=1.10)
-#     if not filename is None:
-#         sc.pl._utils.savefig(filename, dpi=300)
-#         plt.close()
-#         return
-#     plt.show()
-
-# def plot_rdr_1d(
-#     sx_data: SX_Data,
-#     anns: pd.DataFrame,
-#     sample: str,
-#     data_type: str,
-#     base_props: np.ndarray,
-#     mask_cnp=True,
-#     mask_id="CNP",
-#     lab_type="cell_label",
-#     figsize=(20, 10),
-#     filename=None,
-#     agg_size=5,
-#     verbose=1,
-#     **kwargs
-# ):
-#     cnv_blocks = sx_data.cnv_blocks
-#     cnp_mask = base_props > 0
-#     if mask_cnp:
-#         cnp_mask &= sx_data.MASK[mask_id]
-#     cnv_blocks = cnv_blocks.loc[cnp_mask, :]
-
-#     T = sx_data.T # (G, N)
-#     T = sx_data.T # (N, )
-
-#     cell_labels = anns[lab_type].to_numpy()
-#     assert len(cell_labels) == T.shape[1]
-
-#     if agg_size > 1:
-#         T_agg_list, Tn_agg_list, cell_labels_agg = [], [], []
-#         for lab in np.unique(cell_labels):
-#             idx = np.where(cell_labels == lab)[0]
-#             n_cells = len(idx)
-#             n_groups = int(np.ceil(n_cells / agg_size))
-#             for g in range(n_groups):
-#                 sub_idx = idx[g*agg_size:(g+1)*agg_size]
-#                 if len(sub_idx) == 0:
-#                     continue
-#                 # sum counts per bin
-#                 T_sum = T[:, sub_idx].sum(axis=1)
-#                 Tn_sum = T[sub_idx].sum()
-#                 T_agg_list.append(T_sum)
-#                 Tn_agg_list.append(Tn_sum)
-#                 cell_labels_agg.append(lab)
-#         T = np.column_stack(T_agg_list)  # (n_bins, new_cells)
-#         T = np.array(Tn_agg_list, dtype=np.int32)
-#         cell_labels = np.array(cell_labels_agg)
-
-#     rdr_matrix = (T / (base_props[:, None] @ T[None, :])).T
-#     rdr_matrix = rdr_matrix[:, cnp_mask]
-
-#     if verbose:
-#         print(f"before log2 transform median={np.median(rdr_matrix)} max={np.max(rdr_matrix)}")
-#     rdr_matrix = np.log2(np.clip(rdr_matrix, a_min=1e-6, a_max=np.inf))
-#     if verbose:
-#         print(f"after log2 transform median={np.median(rdr_matrix)} max={np.max(rdr_matrix)}")
-
-#     # build anndata
-#     adata = AnnData(X=rdr_matrix)
-#     adata.obs[lab_type] = cell_labels
-#     adata.var[['#CHR','START','END']] = cnv_blocks[['#CHR','START','END']].values
-#     adata_sorted = cluster_per_group(adata, cluster_chroms=None, groupby=lab_type)
-
-#     chroms = adata_sorted.var["#CHR"].to_numpy()
-#     chr_change_idx = np.where(chroms[1:] != chroms[:-1])[0] + 1
-#     chr_pos = [0] + chr_change_idx.tolist()
-#     var_group_labels = list(chroms[chr_pos])
-#     var_group_positions = [
-#         (chr_pos[i], chr_pos[i + 1] if i + 1 < len(chr_pos) else len(cnv_blocks))
-#         for i in range(len(chr_pos))
-#     ]
-
-#     norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
-
-#     ax_dict = sc.pl.heatmap(
-#         adata,
-#         var_names=adata.var_names,
-#         groupby=lab_type,
-#         figsize=figsize,
-#         cmap="coolwarm",
-#         norm=norm,
-#         show_gene_labels=False,
-#         var_group_positions=var_group_positions,
-#         var_group_labels=var_group_labels,
-#         dendrogram=False,
-#         show=False,
-#         **kwargs,
-#     )
-
-#     ax_dict["heatmap_ax"].vlines(chr_pos[1:], lw=0.6, ymin=0, ymax=adata.shape[0], color="black")
-#     ax_dict["heatmap_ax"].set_title(f"{sample} {data_type} log2-RDR Heatmap", y=1.10)
-#     if not filename is None:
-#         sc.pl._utils.savefig(filename, dpi=300)
-#         plt.close()
-#         return
-#     plt.show()
-
-
-##################################################
-# plot 1d clone-aggregated BAF
 def build_ch_boundary(
-    region_df: pd.DataFrame, chrs: list, chr_sizes: dict, chr_shift=int(10e6)
+    region_df: pd.DataFrame, chrs: list, chr_sizes: dict, chr_shift=10_000_000
 ):
     # get 1d plot chromosome offsets, global information
     chr_offsets = OrderedDict()
@@ -471,7 +228,7 @@ def plot_rdr_baf_1d_aggregated(
         2) chromosome boundary
         3) expected BAF
     """
-    print("plot 1D scatter aggregted BAF")
+    logging.info("plot 1D scatter aggregted BAF")
     chrom_sizes = get_chr_sizes(genome_file)
     cnv_blocks = sx_data.cnv_blocks
     if mask_cnp:
@@ -632,7 +389,7 @@ def plot_posteriors(
         bins=10,
     )
 
-    ax.set_title(f"normal posterior")
+    ax.set_title("normal posterior")
     fig.tight_layout()
     fig.savefig(out_file, dpi=150)
 
@@ -644,13 +401,12 @@ def plot_params(
         for name in names:
             param = params[f"{data_type}-{name}"]
             fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 8))
-            ax.hist(x=params[f"{data_type}-{name}"], bins=50)
+            ax.hist(x=param, bins=50)
             title = f"{data_type} {name}\nmean={param.mean():.3f} std={param.std():.3f}"
             ax.set_title(title)
             fig.tight_layout()
             pdf.savefig(fig, dpi=300)
             plt.close()
-        pdf.close()
     return
 
 def plot_loss(
@@ -659,15 +415,13 @@ def plot_loss(
     val_type="log-likelihood",
     dpi=100
 ):
-    fig = plt.figure()
-    plt.plot(losses)
-    plt.xlabel("iterations")
-    plt.ylabel(val_type)
-    # optional: log-scale y if it starts very large
-    # plt.yscale("log")
-    plt.tight_layout()
-    plt.savefig(out_loss_file, dpi=dpi)  # optional
-    plt.close()
+    fig, ax = plt.subplots()
+    ax.plot(losses)
+    ax.set_xlabel("iterations")
+    ax.set_ylabel(val_type)
+    fig.tight_layout()
+    fig.savefig(out_loss_file, dpi=dpi)
+    plt.close(fig)
 
 
 ##################################################
@@ -688,8 +442,7 @@ def plot_cross_heatmap(
     data = pd.pivot_table(
         assign_df, index=acol, columns=bcol, aggfunc="size", fill_value=0
     ).astype(int)
-    data = data.astype(int)
-    print(data)
+    logging.info(data)
 
     fig, axes = plt.subplots(
         num_avals,

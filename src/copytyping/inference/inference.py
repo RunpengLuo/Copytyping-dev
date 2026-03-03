@@ -48,7 +48,16 @@ def run(args=None):
         out_prefix = str(sample)
     os.makedirs(out_dir, exist_ok=True)
     plot_dir = os.path.join(out_dir, "plots")
-    os.makedirs(plot_dir, exist_ok=True)
+    heatmap_dir = os.path.join(plot_dir, "heatmaps")
+    scatter_dir = os.path.join(plot_dir, "scatter")
+    validation_dir = os.path.join(plot_dir, "validation")
+    for d in [heatmap_dir, scatter_dir, validation_dir]:
+        os.makedirs(d, exist_ok=True)
+    if assay_type in SPATIAL_ASSAYS:
+        visium_dir = os.path.join(plot_dir, "visium")
+        os.makedirs(visium_dir, exist_ok=True)
+    work_dir = os.path.join(out_dir, "work")
+    os.makedirs(work_dir, exist_ok=True)
     verbosity = args["verbosity"]
 
     logging.info(f"sample={sample}, assay_type={assay_type}, data_types={data_types}")
@@ -66,21 +75,28 @@ def run(args=None):
             args[f"{data_type}_D_count"],
             data_type,
         )
-        adata: AnnData = sc.read_h5ad(args[f"{data_type}_h5ad"])
-        if ref_label in adata.obs.columns:
-            obs_df = adata.obs.reset_index(names=["BARCODE"])
-            sx_data.barcodes = pd.merge(
-                left=sx_data.barcodes,
-                right=obs_df[["BARCODE", ref_label]],
-                on="BARCODE",
-                how="left",
-                validate="1:1",
-                sort=False,
-            )
-            sx_data.barcodes[ref_label] = (
-                sx_data.barcodes[ref_label].fillna("Unknown").astype(str)
-            )
-        adatas[data_type] = adata
+        if args.get(f"{data_type}_h5ad") is not None:
+            adata: AnnData = sc.read_h5ad(args[f"{data_type}_h5ad"])
+            if ref_label in adata.obs.columns:
+                obs_df = adata.obs.reset_index(names=["BARCODE"])
+                sx_data.barcodes = pd.merge(
+                    left=sx_data.barcodes,
+                    right=obs_df[["BARCODE", ref_label]],
+                    on="BARCODE",
+                    how="left",
+                    validate="1:1",
+                    sort=False,
+                )
+                sx_data.barcodes[ref_label] = (
+                    sx_data.barcodes[ref_label].fillna("Unknown").astype(str)
+                )
+                if sx_data.barcodes[ref_label].isin(NA_CELLTYPE).all():
+                    logging.warning(
+                        f"all {data_type} barcodes have uninformative {ref_label} labels "
+                        f"(all in NA_CELLTYPE={NA_CELLTYPE})"
+                    )
+                    sx_data.barcodes = sx_data.barcodes.drop(columns=[ref_label])
+            adatas[data_type] = adata
         data_sources[data_type] = sx_data
     barcodes: pd.DataFrame = data_sources[data_types[0]].barcodes.copy()
     cnv_blocks = data_sources[data_types[0]].cnv_blocks
@@ -119,7 +135,7 @@ def run(args=None):
         assay_type,
         data_types,
         data_sources,
-        out_dir,
+        work_dir,
         out_prefix,
         verbosity,
     )
@@ -142,7 +158,7 @@ def run(args=None):
     metric_str = ""
     if ref_label in barcodes.columns:
         logging.info("evaluate performance against reference labels")
-        if args["refine_label_by_celltype"]:
+        if args["refine_label_by_reference"]:
             anns = refine_labels_by_reference(
                 anns, ref_label, label, f"{label}-refined"
             )
@@ -159,7 +175,7 @@ def run(args=None):
         plot_cross_heatmap(
             anns,
             sample,
-            os.path.join(plot_dir, f"{out_prefix}.{assay_type}.cross_heatmap.png"),
+            os.path.join(validation_dir, f"{out_prefix}.{assay_type}.cross_heatmap.png"),
             acol=label,
             bcol=ref_label,
         )
@@ -172,7 +188,7 @@ def run(args=None):
 
     plot_posteriors(
         anns,
-        os.path.join(plot_dir, f"{out_prefix}.{assay_type}.posteriors.png"),
+        os.path.join(validation_dir, f"{out_prefix}.{assay_type}.posteriors.png"),
         lab_type=ref_label if ref_label in anns else label,
     )
 
@@ -185,7 +201,7 @@ def run(args=None):
     transparent = args["transparent"]
     for data_type in data_types:
         sx_data: SX_Data = data_sources[data_type]
-        adata: AnnData = adatas[data_type]
+        # adata: AnnData = adatas[data_type]
 
         # plot heatmap
         for val in ["BAF", "pi_gk", "log2RDR"]:
@@ -208,7 +224,7 @@ def run(args=None):
                         agg_size=agg,
                         lab_type=my_label,
                         filename=os.path.join(
-                            plot_dir,
+                            heatmap_dir,
                             f"{out_prefix}.{assay_type}.{val}_heatmap.{data_type}.agg{agg}.{my_label}.{img_type}",
                         ),
                         dpi=dpi,
@@ -227,7 +243,7 @@ def run(args=None):
             mask_cnp=False,
             lab_type=label,
             filename=os.path.join(
-                plot_dir,
+                scatter_dir,
                 f"{out_prefix}.{assay_type}.1d_scatter.{data_type}.{label}.{img_type}",
             ),
         )
@@ -237,7 +253,7 @@ def run(args=None):
         pass
 
     if assay_type in SPATIAL_ASSAYS:
-        gex_adata = adatas.get("GEX", adatas[data_types[0]])
+        gex_adata = adatas.get("gex", adatas[data_types[0]])
         anns_indexed = anns.set_index("BARCODE")
         for rep_id, anns_rep in anns.groupby("REP_ID"):
             vis_adata = gex_adata[gex_adata.obs_names.isin(anns_rep["BARCODE"].values)].copy()
@@ -248,7 +264,7 @@ def run(args=None):
                 f"{sample}_{rep_id}",
                 anns_vis,
                 vis_adata,
-                plot_dir,
+                visium_dir,
                 spot_label=label,
                 path_label=ref_label,
                 title_info=metric_str,

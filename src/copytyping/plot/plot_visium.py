@@ -1,6 +1,7 @@
 import os
 import sys
 import shutil
+import logging
 
 import numpy as np
 import pandas as pd
@@ -58,18 +59,18 @@ def plot_visium_HE(
     trans=True,
     library_id=None,
 ):
-    plt.rcParams['pdf.fonttype'] = 42
-    plt.rcParams['ps.fonttype']  = 42
-    plt.rcParams['svg.fonttype'] = 'none'
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.rcParams["ps.fonttype"] = 42
+    plt.rcParams["svg.fonttype"] = "none"
 
-    n_clones = sum(1 for c in anns.columns if str.startswith(c, "clone")) + 1
+    n_clones = sum(1 for c in anns.columns if c.startswith("clone")) + 1
     clones = ["normal"] + [f"clone{i}" for i in range(1, n_clones)]
 
     # plot raw HE image
     ax = sq.pl.spatial_scatter(adata, color=None, library_id=library_id, return_ax=True)
     ax.figure.savefig(
         os.path.join(out_dir, f"{sample}.HE.raw.{fig_type}"), dpi=dpi, bbox_inches="tight",
-        transparent = trans
+        transparent=trans
     )
     plt.close(ax.figure)
 
@@ -96,7 +97,7 @@ def plot_visium_HE(
         os.path.join(out_dir, f"{sample}.{spot_label}.trans.{fig_type}"),
         dpi=dpi,
         bbox_inches="tight",
-        transparent = trans
+        transparent=trans
     )
     plt.close(ax.figure)
 
@@ -112,7 +113,7 @@ def plot_visium_HE(
         os.path.join(out_dir, f"{sample}.{spot_label}.{fig_type}"),
         dpi=dpi,
         bbox_inches="tight",
-        transparent = trans
+        transparent=trans
     )
     plt.close(ax.figure)
 
@@ -128,7 +129,7 @@ def plot_visium_HE(
         os.path.join(out_dir, f"{sample}.{path_label}.{fig_type}"),
         dpi=dpi,
         bbox_inches="tight",
-        transparent = trans
+        transparent=trans
     )
     plt.close(ax.figure)
 
@@ -142,15 +143,15 @@ def plot_visium_HE(
             cmap="magma_r",
             vmin=0,
             vmax=1,
-            title=f"coptyping inferred spot proportion - {clone}",
+            title=f"copytyping inferred spot proportion - {clone}",
             return_ax=True,
         )
 
         ax.figure.savefig(
-            f"{out_dir}/{sample}.spot_proportion.{clone}.{fig_type}",
+            os.path.join(out_dir, f"{sample}.spot_proportion.{clone}.{fig_type}"),
             dpi=dpi,
             bbox_inches="tight",
-            transparent = trans
+            transparent=trans
         )
         plt.close(ax.figure)
     return
@@ -159,10 +160,10 @@ def plot_visium_HE(
 if __name__ == "__main__":
     _, sample, visium_file, ann_file, validate_file, out_dir = sys.argv
 
-    print(f"plot visium for {sample}")
+    logging.info(f"plot visium for {sample}")
     os.makedirs(out_dir, exist_ok=True)
     adata: sc.AnnData = sc.read_h5ad(visium_file)
-    print(adata)
+    logging.info(adata)
 
     anns = load_visium_path_annotation(
         validate_file,
@@ -175,4 +176,4 @@ if __name__ == "__main__":
     )
 
     plot_visium_HE(sample, anns, adata, out_dir, title_info=metric_str)
-    print("done")
+    logging.info("done")

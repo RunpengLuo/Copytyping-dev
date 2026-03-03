@@ -58,12 +58,13 @@ class Spot_Model(Base_Model):
             )
             cell_types = self.barcodes[ref_label].unique()
             logging.info(f"Observed cell_types: {cell_types}")
-            logging.info(f"Black list: {BLACK_LIST}")
-            is_normal_cell = (~self.barcodes[ref_label].isin(BLACK_LIST)).to_numpy()
+            logging.info(f"Black list: {BLACK_LIST_CELLTYPE}")
+            is_normal_cell = (~self.barcodes[ref_label].isin(BLACK_LIST_CELLTYPE)).to_numpy()
         else:
             logging.info("infer normal cells using allele-only cell model")
             pure_model = Cell_Model(
-                self.barcodes, self.assay_type, self.data_types, self.data_sources
+                self.barcodes, self.assay_type, self.data_types, self.data_sources,
+                work_dir=self.work_dir,
             )
             allele_params = pure_model.fit(
                 "allele_only",

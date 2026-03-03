@@ -1,17 +1,10 @@
 import os
-import sys
 
 import pandas as pd
 import numpy as np
 import scanpy as sc
 from scanpy import AnnData
 
-# from matplotlib.colors import TwoSlopeNorm
-# import matplotlib.colors as mcolors
-# import seaborn as sns
-# from scipy.cluster.hierarchy import linkage, leaves_list
-# from matplotlib.collections import LineCollection
-# from scipy import sparse, stats
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
@@ -64,11 +57,9 @@ def plot_umap_copynumber(
         plt.tight_layout()
         pdf.savefig(fig, dpi=dpi)
         plt.close()
-        pdf.close()
     return
 
 
-# plot UMAP
 def plot_umap_total_expression(
     sx_data: SX_Data,
     anns: pd.DataFrame,
@@ -81,4 +72,4 @@ def plot_umap_total_expression(
     filename=None,
     **kwargs,
 ):
-    pass
+    raise NotImplementedError("plot_umap_total_expression is not yet implemented")

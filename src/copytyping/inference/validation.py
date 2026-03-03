@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -37,16 +38,16 @@ def evaluate_malignant_accuracy(
     )
     cm = confusion_matrix(y_true, y_pred_hard)
 
-    print("==================================================")
-    print("ROC AUC (hard classification):", auc_from_hard)
+    logging.info("==================================================")
+    logging.info("ROC AUC (hard classification): %s", auc_from_hard)
     auc_from_post = None
     if tumor_post in anns:
         auc_from_post = roc_auc_score(y_true, anns[tumor_post])
-        print("ROC AUC (soft classification):", auc_from_post)
+        logging.info("ROC AUC (soft classification): %s", auc_from_post)
 
-    print("Confusion matrix:\n", cm)
-    print("\nClassification report:\n", acc_report)
-    print(
+    logging.info("Confusion matrix:\n%s", cm)
+    logging.info("\nClassification report:\n%s", acc_report)
+    logging.info(
         f"#NA={na_count}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}, accuracy={accuracy:.4f}"
     )
 
@@ -84,5 +85,5 @@ def refine_labels_by_reference(
         (anns[ref_label] != "Tumor_cell") & (anns[cell_label] != "normal"), out_label
     ] = "NA"
     num_na_after = (anns[out_label] == "NA").sum()
-    print(f"#NA before/after refinement={num_na_before}->{num_na_after} / {len(anns)}")
+    logging.info(f"#NA before/after refinement={num_na_before}->{num_na_after} / {len(anns)}")
     return anns

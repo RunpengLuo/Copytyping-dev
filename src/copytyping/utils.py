@@ -20,7 +20,7 @@ ATAC_ASSAYS = {"scATAC", "multiome"}
 SPATIAL_ASSAYS = {"VISIUM"}
 ALL_ASSAYS = ["scRNA", "scATAC", "multiome", "VISIUM"]
 
-BLACK_LIST = {
+BLACK_LIST_CELLTYPE = {
     "Tumor_cell",
     "tumor",
     "Tumor",  # tumor labels / variants
@@ -30,6 +30,7 @@ BLACK_LIST = {
     "NA",  # missing labels
 }
 
+NA_CELLTYPE = {"Unknown", "NA"}
 
 def get_ord2chr(ch="chr"):
     return [f"{ch}{i}" for i in range(1, 23)] + [f"{ch}X", f"{ch}Y"]
