@@ -1,6 +1,20 @@
 [project]
 name = "copytyping"
 version = "0.0.1"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "pyranges",
+    "pysam",
+    "PyYAML",
+    "scanpy",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "squidpy",
+    "statsmodels",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

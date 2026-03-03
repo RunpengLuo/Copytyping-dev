@@ -16,6 +16,9 @@ dependencies:
   - scikit-learn
   - scipy
   - seaborn
+  - scanpy
+  - squidpy
+  - statsmodels
   - pip
   - pip:
     - PyYAML
