@@ -5,34 +5,18 @@ channels:
   - defaults
 dependencies:
   - python>=3.11
-  - whatshap
   - bcftools>=1.19
-  - samtools>=1.19
-  - biopython
-  - hmmlearn
+  - bedtools
+  - tabix
   - matplotlib-base
-  - mosdepth
-  - pandas
-  - cmake
-  - cxx-compiler
-  - make
-  - psutil
-  - pyomo
   - numpy
+  - pandas
   - pysam
-  - requests
-  - seaborn
+  - pyranges
   - scikit-learn
   - scipy
-  - shapeit
-  - bedtools
-  - pybedtools
-  - pyranges
-  - tabix
-  - coincbc
+  - seaborn
   - pip
   - pip:
     - PyYAML
-    - kneed
-    - numba
 

@@ -1,31 +1,28 @@
 import os
 import sys
+import logging
 
 import pandas as pd
 import numpy as np
 import scanpy as sc
 from scanpy import AnnData
 
+import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import seaborn as sns
 from scipy.cluster.hierarchy import linkage, leaves_list
 from matplotlib.collections import LineCollection
 from scipy import sparse
 import matplotlib.pyplot as plt
-import seaborn as sns
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle, Polygon
-import matplotlib.cm as cm
-from collections import OrderedDict
 
 from copytyping.utils import get_chr_sizes
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.plot.plot_cnp import *
 
 from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
-
-import logging
 
 # Silence fontTools subsetter chatter
 logging.getLogger("fontTools.subset").setLevel(logging.ERROR)
@@ -213,9 +210,9 @@ def plot_heatmap(
     ax.set_yticklabels(yticklabels)
     ax.tick_params(axis="y", length=0)
 
-    if not ylabel is None:
+    if ylabel is not None:
         ax.set_ylabel(ylabel, rotation=0, ha="right", va="center")
-    if not title is None:
+    if title is not None:
         ax.set_title(title)
     return x_edges, y_edges, C
 
@@ -379,7 +376,7 @@ def plot_cnv_heatmap(
     title_info="",
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
-    print(f"plot CNV heatmap val={val}")
+    logging.info(f"plot CNV heatmap val={val}")
 
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
@@ -398,7 +395,7 @@ def plot_cnv_heatmap(
         uniq_labels = [lab for lab in uniq_labels if lab in np.unique(cell_labels)]
 
     # order props by unique labels, since data also get ordered in prepare step
-    if not proportions is None:
+    if proportions is not None:
         ord_props = []
         for lab in uniq_labels:
             idx = np.where(cell_labels == lab)[0]
@@ -477,8 +474,8 @@ def plot_cnv_heatmap(
 
     ##################################################
     # sort within each label group by tumor proportions
-    if not proportions is None:
-        print("plot tumor proportions")
+    if proportions is not None:
+        logging.info("plot tumor proportions")
         assert agg_size == 1, "no aggregation allowed"
         N = data_matrix.shape[0]
         assert len(proportions) == N
@@ -533,7 +530,7 @@ def plot_cnv_heatmap(
     ##################################################
     # add proportion vectors
     extra_pad = 0.0
-    if not proportions is None:
+    if proportions is not None:
         fig.canvas.draw()
         bbox = axes[0].get_position()
         cbar_width = 0.01  # in figure coords
@@ -586,7 +583,7 @@ def plot_cnv_heatmap(
     cb = fig.colorbar(sm, cax=cax)
     cb.set_ticks(cticks)
 
-    if not filename is None:
+    if filename is not None:
         plt.savefig(filename, dpi=dpi, bbox_inches="tight", transparent=transparent)
         plt.close()
         return

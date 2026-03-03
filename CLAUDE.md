@@ -17,7 +17,7 @@ conda activate copytyping  # (or whatever name is set in environment.yaml)
 pip install -e .
 ```
 
-External tools required on PATH: `bedtools`, `bcftools`, `samtools`, `mosdepth`, `whatshap`.
+External tools required on PATH: `bedtools`, `bcftools`, `tabix`.
 
 ## Running the Tool
 
