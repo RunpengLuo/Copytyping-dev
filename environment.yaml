@@ -17,9 +17,7 @@ dependencies:
   - scipy
   - seaborn
   - scanpy
-  - squidpy
+  - squidpy>=1.4.1
   - statsmodels
-  - pip
-  - pip:
-    - PyYAML
+  - pyyaml
 

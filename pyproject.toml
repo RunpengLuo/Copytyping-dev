@@ -12,7 +12,7 @@ dependencies = [
     "scikit-learn",
     "scipy",
     "seaborn",
-    "squidpy",
+    "squidpy>=1.4.1",
     "statsmodels",
 ]
 

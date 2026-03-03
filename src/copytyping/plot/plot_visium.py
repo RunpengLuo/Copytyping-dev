@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 
 import scanpy as sc
-import squidpy as sq
 
 from copytyping.utils import *
 
@@ -59,6 +58,8 @@ def plot_visium_HE(
     trans=True,
     library_id=None,
 ):
+    import squidpy as sq
+
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
     plt.rcParams["svg.fonttype"] = "none"
