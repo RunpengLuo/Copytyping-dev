@@ -48,6 +48,7 @@ def cond_negbin_logpmf(
     T: np.ndarray,
     pi_gk: np.ndarray,
     inv_phi: np.ndarray,
+    eps: float = 1e-12,
 ) -> np.ndarray:
     """compute loglik conditioned on labels per bin per cell per clone
         nb_ll_{g,n,k} = logP(X_{g,n}|l_n=k;param)
@@ -57,12 +58,14 @@ def cond_negbin_logpmf(
         T (np.ndarray): (N,), library size
         pi_gk (np.ndarray): (G, K),
         inv_phi (np.ndarray): (G,)
+        eps (float): floor for mu to avoid log(0) NaNs
     Returns:
         np.ndarray: (G,N,K)
     """
     (G, N) = X.shape
     K = pi_gk.shape[1]
     mu_gnk = pi_gk[:, None, :] * T[None, :, None]  # (G,N,K)
+    mu_gnk = np.clip(mu_gnk, eps, None)
     X_gnk = X[:, :, None]  # (G, N, K)
 
     inv_phi = np.broadcast_to(np.atleast_1d(inv_phi)[:, None, None], (G, N, K))
@@ -175,7 +178,9 @@ def cond_negbin_logpmf_theta(
 
 ##################################################
 # fit functions
-def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds):
+def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds, eps=1e-12):
+    mu_gnk = np.clip(mu_gnk, eps, None)
+
     def neg_Q_invphi(invphi):
         if invphi <= 0.0:
             return np.inf

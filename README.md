@@ -7,7 +7,7 @@ Copy-typing infers per-cell/spot clone labels for single-cell and spatial transc
 ```sh
 # Create environment and install
 conda env create -f environment.yaml
-conda activate copytyping
+conda activate copytyping-env
 pip install -e .
 ```
 
@@ -59,15 +59,19 @@ copytyping inference \
 Each input directory (`--gex_dir` or `--atac_dir`) must contain:
 
 ```
-barcodes.tsv.gz        # cell/spot barcodes
-cnv_segments.tsv       # HATCHet2 segment copy-number profile
-X_count.npz            # B-allele count matrix (cells × segments)
-Y_count.npz            # total allele count matrix
-D_count.npz            # read depth ratio matrix
-{assay_type}.h5ad      # AnnData with cell-type annotations (optional)
+barcodes.tsv.gz        # cell/spot barcodes, one per line, format: {barcode}_{rep_id}
+cnv_segments.tsv       # CNV profile: columns #CHR, START, END, CNP, PROPS
+X_count.npz            # feature count matrix  (bins × cells), scipy sparse
+Y_count.npz            # B-allele count matrix (bins × cells), scipy sparse
+D_count.npz            # total allele count matrix (bins × cells), scipy sparse
+{assay_type}.h5ad      # AnnData for GEX assays (scRNA, multiome, VISIUM)
 ```
 
-The `.h5ad` file is optional but enables validation against reference cell-type labels (see **`--ref_label`**).
+`cnv_segments.tsv` columns:
+- **CNP**: semicolon-separated per-clone copy numbers, e.g. `1|1;1|0;2|1` (normal;clone1;clone2)
+- **PROPS**: semicolon-separated bulk clone proportions, e.g. `0.30;0.30;0.40`
+
+Cell-type reference labels can be supplied via **`--cell_type`** (a TSV with `BARCODE` + ref-label columns) instead of embedding them in the `.h5ad`.
 
 ### Options
 
@@ -76,14 +80,14 @@ The `.h5ad` file is optional but enables validation against reference cell-type 
 | Option | Default | Description |
 |---|---|---|
 | `--method` | `copytyping` | Assignment method: `copytyping` (EM), `kmeans`, `ward`, `leiden` |
-| `--niters` | `3000` | Maximum EM iterations |
+| `--niters` | `100` | Maximum EM iterations |
 | `--tau` | `50.0` | Initial Beta-Binomial dispersion (BAF); over-dispersion = 1/τ |
 | `--phi` | `30.0` | Initial Negative-Binomial dispersion (RDR); over-dispersion = 1/φ |
 | `--fix_BB_dispersion` | off | Fix BB dispersion after initialization |
 | `--fix_NB_dispersion` | off | Fix NB dispersion after initialization |
 | `--share_BB_dispersion` | off | Share BB dispersion across CN states |
 | `--share_NB_dispersion` | off | Share NB dispersion across CN states |
-| `--fix_tumor_pruity` | off | Fix per-spot tumor purity (Visium only) |
+| `--fix_tumor_purity` | off | Fix per-spot tumor purity (Visium only) |
 
 #### Assignment thresholds
 
@@ -91,7 +95,8 @@ The `.h5ad` file is optional but enables validation against reference cell-type 
 |---|---|---|
 | `--posterior_thres` | `0.50` | Label cell/spot as unassigned if max posterior < threshold |
 | `--margin_thres` | `0.10` | Label cell/spot as unassigned if top-2 margin < threshold |
-| `--ref_label` | `cell_type` | Column in `.h5ad` obs used as reference label for evaluation |
+| `--cell_type` | — | TSV file with `BARCODE` + ref-label columns for evaluation |
+| `--ref_label` | `cell_type` | Column name in `--cell_type` file used as reference label |
 | `--refine_label_by_reference` | off | Mark unassigned if prediction disagrees with reference cell type |
 
 #### Plotting
