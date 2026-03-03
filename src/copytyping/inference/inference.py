@@ -64,6 +64,12 @@ def run(args=None):
 
     ##################################################
     # load data
+    cell_type_df = None
+    if args.get("cell_type") is not None:
+        cell_type_df = pd.read_table(args["cell_type"])
+        assert "BARCODE" in cell_type_df.columns
+        assert ref_label in cell_type_df.columns
+    
     data_sources = {}
     adatas = {}
     for data_type in data_types:
@@ -75,28 +81,29 @@ def run(args=None):
             args[f"{data_type}_D_count"],
             data_type,
         )
+
+        if cell_type_df is not None:
+            sx_data.barcodes = pd.merge(
+                left=sx_data.barcodes,
+                right=cell_type_df[["BARCODE", ref_label]],
+                on="BARCODE",
+                how="left",
+                validate="1:1",
+                sort=False,
+            )
+            sx_data.barcodes[ref_label] = (
+                sx_data.barcodes[ref_label].fillna("Unknown").astype(str)
+            )
+            if sx_data.barcodes[ref_label].isin(NA_CELLTYPE).all():
+                logging.warning(
+                    f"all {data_type} barcodes have uninformative {ref_label} labels "
+                    f"(all in NA_CELLTYPE={NA_CELLTYPE})"
+                )
+                sx_data.barcodes = sx_data.barcodes.drop(columns=[ref_label])
+
         if args.get(f"{data_type}_h5ad") is not None:
-            adata: AnnData = sc.read_h5ad(args[f"{data_type}_h5ad"])
-            if ref_label in adata.obs.columns:
-                obs_df = adata.obs.reset_index(names=["BARCODE"])
-                sx_data.barcodes = pd.merge(
-                    left=sx_data.barcodes,
-                    right=obs_df[["BARCODE", ref_label]],
-                    on="BARCODE",
-                    how="left",
-                    validate="1:1",
-                    sort=False,
-                )
-                sx_data.barcodes[ref_label] = (
-                    sx_data.barcodes[ref_label].fillna("Unknown").astype(str)
-                )
-                if sx_data.barcodes[ref_label].isin(NA_CELLTYPE).all():
-                    logging.warning(
-                        f"all {data_type} barcodes have uninformative {ref_label} labels "
-                        f"(all in NA_CELLTYPE={NA_CELLTYPE})"
-                    )
-                    sx_data.barcodes = sx_data.barcodes.drop(columns=[ref_label])
-            adatas[data_type] = adata
+            # TODO add cell_type column here/overwrite from input cell_type_df?
+            adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
         data_sources[data_type] = sx_data
     barcodes: pd.DataFrame = data_sources[data_types[0]].barcodes.copy()
     cnv_blocks = data_sources[data_types[0]].cnv_blocks

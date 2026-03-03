@@ -27,6 +27,20 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="/path/to/allele/<assay_type>",
     )
     parser.add_argument(
+        "--cell_type",
+        required=False,
+        type=str,
+        default=None,
+        help="/path/to/cell_types.tsv.gz, with header BARCODE and <ref_label>",
+    )
+    parser.add_argument(
+        "--ref_label",
+        required=False,
+        default="cell_type",
+        type=str,
+        help="Reference label colname in --cell_type, (default: cell_type)",
+    )
+    parser.add_argument(
         "--method",
         required=False,
         type=str,
@@ -63,8 +77,8 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         "--niters",
         required=False,
         type=int,
-        default=3000,
-        help="num_iters=3000",
+        default=100,
+        help="num_iters=100",
     )
     parser.add_argument(
         "--laplace",
@@ -117,7 +131,7 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="share Beta-binomial dispersion across CN states in M-step",
     )
     parser.add_argument(
-        "--fix_tumor_pruity",
+        "--fix_tumor_purity",
         required=False,
         action="store_true",
         default=False,
@@ -145,13 +159,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         action="store_true",
         default=False,
         help=f"mark unassigned if predicted label disagree with cell type (if available).",
-    )
-    parser.add_argument(
-        "--ref_label",
-        required=False,
-        default="cell_type",
-        type=str,
-        help="Reference label colname in h5ad, (default: cell_type)",
     )
 
 
