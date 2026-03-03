@@ -10,7 +10,6 @@ import squidpy as sq
 
 from copytyping.utils import *
 
-# import infercnvpy
 import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.patches as mpatches
@@ -56,7 +55,8 @@ def plot_visium_HE(
     size=1.5,
     title_info="",
     fig_type="svg",
-    trans=True
+    trans=True,
+    library_id=None,
 ):
     plt.rcParams['pdf.fonttype'] = 42
     plt.rcParams['ps.fonttype']  = 42
@@ -66,7 +66,7 @@ def plot_visium_HE(
     clones = ["normal"] + [f"clone{i}" for i in range(1, n_clones)]
 
     # plot raw HE image
-    ax = sq.pl.spatial_scatter(adata, color=None, library_id=None, return_ax=True)
+    ax = sq.pl.spatial_scatter(adata, color=None, library_id=library_id, return_ax=True)
     ax.figure.savefig(
         os.path.join(out_dir, f"{sample}.HE.raw.{fig_type}"), dpi=dpi, bbox_inches="tight",
         transparent = trans
@@ -87,6 +87,7 @@ def plot_visium_HE(
         adata,
         color=spot_label,
         size=size,
+        library_id=library_id,
         title=f"Copytyping assignments\n{title_info}",
         alpha=alpha,
         return_ax=True,
@@ -103,6 +104,7 @@ def plot_visium_HE(
         adata,
         color=spot_label,
         size=size,
+        library_id=library_id,
         title=f"Copytyping assignments\n{title_info}",
         return_ax=True,
     )
@@ -118,6 +120,7 @@ def plot_visium_HE(
         adata,
         color=path_label,
         size=size,
+        library_id=library_id,
         title=path_label,
         return_ax=True,
     )
@@ -135,11 +138,12 @@ def plot_visium_HE(
             adata,
             color=clone,
             size=size,
+            library_id=library_id,
             cmap="magma_r",
             vmin=0,
             vmax=1,
             title=f"coptyping inferred spot proportion - {clone}",
-            return_ax=True,  # this returns a matplotlib Figure
+            return_ax=True,
         )
 
         ax.figure.savefig(

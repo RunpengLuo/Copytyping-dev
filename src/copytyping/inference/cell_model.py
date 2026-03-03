@@ -1,5 +1,4 @@
 import os
-import sys
 import copy
 import logging
 
@@ -13,8 +12,6 @@ from copytyping.sx_data.sx_data import *
 from copytyping.inference.model_utils import *
 from copytyping.inference.likelihood_funcs import *
 from copytyping.inference.base_model import *
-
-from scipy.special import logsumexp
 
 
 ##################################################
@@ -169,7 +166,7 @@ class Cell_Model(Base_Model):
                 props_gk_cnv = clone_pi_gk(lambda_g, sx_data.C)[nb_mask]
                 mu_gnk = (
                     props_gk_cnv[:, None, :] * sx_data.T[None, :, None]
-                )  # (G, 1, K)
+                )  # (G_nb, N, K)
                 X_gnk = sx_data.X[nb_mask][:, :, None]  # (G, N, 1)
 
                 if share_params.get(f"{data_type}-inv_phi", False):

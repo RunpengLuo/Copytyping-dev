@@ -238,14 +238,12 @@ def check_arguments_inference(args: dict):
         x_count = os.path.join(atac_dir, "X_count.npz")
         y_count = os.path.join(atac_dir, "Y_count.npz")
         d_count = os.path.join(atac_dir, "D_count.npz")
-        h5ad = os.path.join(atac_dir, f"scATAC.h5ad")
-        for file in [cnv_segments, barcodes, x_count, y_count, d_count, h5ad]:
+        for file in [cnv_segments, barcodes, x_count, y_count, d_count]:
             assert os.path.exists(file), f"missing file: {file}"
         args["atac_barcodes"] = barcodes
         args["atac_cnv_segments"] = cnv_segments
         args["atac_X_count"] = x_count
         args["atac_Y_count"] = y_count
         args["atac_D_count"] = d_count
-        args["atac_h5ad"] = h5ad
     args["data_types"] = data_types
     return args

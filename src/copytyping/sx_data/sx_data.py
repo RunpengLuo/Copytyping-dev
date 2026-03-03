@@ -25,6 +25,10 @@ class SX_Data:
         self.barcodes = pd.read_table(
             bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
         )
+        # Parse REP_ID from barcode suffix (format: {barcode}_{rep_id})
+        self.barcodes["REP_ID"] = (
+            self.barcodes["BARCODE"].str.rsplit("_", n=1).str[-1]
+        )
         self.cnv_blocks = pd.read_table(cnp_file, sep="\t")
         self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
             self.cnv_blocks, laplace=laplace
@@ -54,8 +58,8 @@ class SX_Data:
 
         if verbose:
             logging.info(f"{data_type} data is loaded #cells={self.N}, #bins={self.G}")
-            logging.info(f"#effective imbalanced CNA bins={self.nrows_eff_allele}")
-            logging.info(f"#effective CNA features={self.nrows_eff_feat}")
+            logging.info(f"#effective imbalanced CNA bins={self.nrows_imbalanced}")
+            logging.info(f"#effective aneuploid CNA bins={self.nrows_aneuploid}")
         return
 
     def apply_mask_shallow(self, mask_id="CNP", additional_mask=None):

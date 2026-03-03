@@ -23,7 +23,6 @@ def kmeans_copytyping(sc_model: Cell_Model, params: dict):
         features.append(my_features)
     data_matrix = np.concatenate(features, axis=1)
 
-    anns = sc_model.barcodes.copy(deep=True)
     ncenters = sc_model.num_clones
     kmeans = cluster.KMeans(n_clusters=ncenters, init="k-means++")
     kmeans.fit(data_matrix)
@@ -41,7 +40,6 @@ def leiden_copytyping(
         features.append(my_features)
     data_matrix = np.concatenate(features, axis=1)
 
-    anns = sc_model.barcodes.copy(deep=True)
     adata = AnnData(X=data_matrix)
     sc.pp.pca(adata)
     sc.pp.neighbors(adata, metric="euclidean")
@@ -63,7 +61,6 @@ def ward_copytyping(
         features.append(my_features)
     data_matrix = np.concatenate(features, axis=1)
 
-    anns = sc_model.barcodes.copy(deep=True)
     ncenters = sc_model.num_clones
 
     hier = cluster.AgglomerativeClustering(

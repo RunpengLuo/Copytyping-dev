@@ -139,6 +139,7 @@ def run(args=None):
     )
     logging.info(f"clone fractions: {clone_props}")
     ##################################################
+    metric_str = ""
     if ref_label in barcodes.columns:
         logging.info("evaluate performance against reference labels")
         if args["refine_label_by_celltype"]:
@@ -236,9 +237,26 @@ def run(args=None):
         pass
 
     if assay_type in SPATIAL_ASSAYS:
-        # TODO
-        pass
-        # plot_visium_HE(sample, anns, adata)
+        gex_adata = adatas.get("GEX", adatas[data_types[0]])
+        anns_indexed = anns.set_index("BARCODE")
+        for rep_id, anns_rep in anns.groupby("REP_ID"):
+            vis_adata = gex_adata[gex_adata.obs_names.isin(anns_rep["BARCODE"].values)].copy()
+            anns_vis = anns_indexed.reindex(vis_adata.obs_names)
+            if ref_label not in anns_vis.columns:
+                anns_vis[ref_label] = "Unknown"
+            plot_visium_HE(
+                f"{sample}_{rep_id}",
+                anns_vis,
+                vis_adata,
+                plot_dir,
+                spot_label=label,
+                path_label=ref_label,
+                title_info=metric_str,
+                fig_type=img_type,
+                dpi=dpi,
+                trans=transparent,
+                library_id=rep_id,
+            )
 
 
 if __name__ == "__main__":

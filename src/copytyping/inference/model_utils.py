@@ -147,7 +147,7 @@ def estimate_tumor_proportion(sx_data: SX_Data, base_props: np.ndarray):
         )
         l = np.count_nonzero(m)
         if l == 0:
-            return np.nan
+            return np.nan, np.nan
 
         model = BAF_Binom(
             endog=B_bin[m],

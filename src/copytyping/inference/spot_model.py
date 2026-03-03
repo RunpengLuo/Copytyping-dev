@@ -1,5 +1,4 @@
 import os
-import sys
 import copy
 
 import numpy as np
@@ -101,7 +100,7 @@ class Spot_Model(Base_Model):
             )
 
         fix_params = {key: False for key in params.keys()}
-        if not init_fix_params is None:
+        if init_fix_params is not None:
             for key in init_fix_params.keys():
                 fix_params[key] = init_fix_params[key]
 
@@ -180,21 +179,28 @@ class Spot_Model(Base_Model):
         # parameters
         lambda_g = params[f"{data_type}-lambda"]
         rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
-        # props_gk = clone_pi_gk(lambda_g, sx_data.C)
         p_gk = sx_data.BAF
 
         nb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
         bb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
 
-        # dispersions
-        inv_phi_g = params[f"{data_type}-inv_phi"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0]
-        tau_g = params[f"{data_type}-tau"][lambda_g[sx_data.MASK["IMBALANCED"]] > 0]
-
-        # inputs
-        X_gn = sx_data.X[nb_mask, :]  # (G, N)
         T_n = sx_data.T  # (N,)
-        Y_gn = sx_data.Y[bb_mask, :]  # (G, N)
-        D_gn = sx_data.D[bb_mask, :]  # (G, N)
+
+        # NB inputs and dispersions — only needed for total_only / hybrid
+        X_gn = None
+        inv_phi_g = None
+        if fit_mode in {"total_only", "hybrid"}:
+            inv_phi_g = params[f"{data_type}-inv_phi"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0]
+            X_gn = sx_data.X[nb_mask, :]  # (G_nb, N)
+
+        # BB inputs and dispersions — only needed for allele_only / hybrid
+        Y_gn = None
+        D_gn = None
+        tau_g = None
+        if fit_mode in {"allele_only", "hybrid"}:
+            tau_g = params[f"{data_type}-tau"][lambda_g[sx_data.MASK["IMBALANCED"]] > 0]
+            Y_gn = sx_data.Y[bb_mask, :]  # (G_bb, N)
+            D_gn = sx_data.D[bb_mask, :]  # (G_bb, N)
 
         ##################################################
         # update tumor proportion via MLE
@@ -204,26 +210,27 @@ class Spot_Model(Base_Model):
 
                 def neg_Q_theta(theta):
                     theta = np.array([theta], dtype=float)
-                    ll_nb = cond_negbin_logpmf_theta(
-                        X=X_gn[:, n : n + 1],
-                        T=np.array([T_n[n]], dtype=float),
-                        lam_g=lambda_g[nb_mask],
-                        inv_phi=inv_phi_g,
-                        rdrs_gk=rdrs_gk[nb_mask],
-                        theta=theta,
-                    )  # (Gtot, 1, K)
-
-                    ll_bb = cond_betabin_logpmf_theta(
-                        Y=Y_gn[:, n : n + 1],
-                        D=D_gn[:, n : n + 1],
-                        tau=tau_g,
-                        p=p_gk[bb_mask],
-                        rdrs_gk=rdrs_gk[bb_mask],
-                        theta=theta,
-                    )
-
-                    Q = np.sum(ll_nb[:, 0, :] * gamma[n][None, :])
-                    Q += np.sum(ll_bb[:, 0, :] * gamma[n][None, :])
+                    Q = 0.0
+                    if fit_mode in {"total_only", "hybrid"}:
+                        ll_nb = cond_negbin_logpmf_theta(
+                            X=X_gn[:, n : n + 1],
+                            T=np.array([T_n[n]], dtype=float),
+                            lam_g=lambda_g[nb_mask],
+                            inv_phi=inv_phi_g,
+                            rdrs_gk=rdrs_gk[nb_mask],
+                            theta=theta,
+                        )  # (G_nb, 1, K)
+                        Q += np.sum(ll_nb[:, 0, :] * gamma[n][None, :])
+                    if fit_mode in {"allele_only", "hybrid"}:
+                        ll_bb = cond_betabin_logpmf_theta(
+                            Y=Y_gn[:, n : n + 1],
+                            D=D_gn[:, n : n + 1],
+                            tau=tau_g,
+                            p=p_gk[bb_mask],
+                            rdrs_gk=rdrs_gk[bb_mask],
+                            theta=theta,
+                        )
+                        Q += np.sum(ll_bb[:, 0, :] * gamma[n][None, :])
                     return -Q
 
                 res = minimize_scalar(
@@ -286,7 +293,7 @@ class Spot_Model(Base_Model):
                     params[f"{data_type}-tau"][imbalanced_idx] = mle_tau(
                         Y_gnk[local_idx : local_idx + 1],
                         D_gnk[local_idx : local_idx + 1],
-                        p_gnk[local_idx : local_idx + 1],
+                        p_hat[local_idx : local_idx + 1],
                         gamma_gnk,
                         logtau_bounds,
                     )
