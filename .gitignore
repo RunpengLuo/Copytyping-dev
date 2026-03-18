@@ -2,8 +2,9 @@ results
 data
 CLAUDE.md
 **/__pycache__/
-test*
+test/
 run.sh
+example/atac_test_out/
 tmp/
 .DS_Store
 *.sh

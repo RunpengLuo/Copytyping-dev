@@ -438,58 +438,73 @@ def plot_cross_heatmap(
     bcol="Decision",
 ):
     """
-    Plot heatmap to cross-check assignments and other method's result
+    Plot heatmap to cross-check assignments vs reference cell types.
+
+    Rows = predicted labels (acol), columns = reference cell types (bcol).
+    Color encodes row-normalized fraction so each predicted label's distribution
+    is directly comparable. Raw counts are annotated in each cell.
     """
-    avals = assign_df[acol].unique().tolist()
-    bvals = assign_df[bcol].unique().tolist()
-    num_avals = len(avals)
-    num_bvals = len(bvals)
+    # --- build pivot table (counts) ---
     data = pd.pivot_table(
         assign_df, index=acol, columns=bcol, aggfunc="size", fill_value=0
     ).astype(int)
     logging.info(data)
 
-    fig, axes = plt.subplots(
-        num_avals,
-        1,
-        figsize=(6, 6),
-        gridspec_kw={"height_ratios": [1] * num_avals},
-        # constrained_layout=True
+    # sort rows: normal first, then clones, NA last
+    row_order = (
+        [r for r in ["normal"] if r in data.index]
+        + sorted([r for r in data.index if r.startswith("clone")])
+        + [r for r in data.index if r not in ["normal"] and not r.startswith("clone")]
     )
+    # sort columns: put tumor-like labels first
+    tumor_first = [c for c in data.columns if c.lower() in {"tumor", "tumor_cell"}]
+    other_cols = [c for c in data.columns if c not in tumor_first]
+    col_order = tumor_first + other_cols
 
-    if num_avals == 1:
-        axes = [axes]
-    for i, aval in enumerate(avals):
-        row = np.array(data.loc[aval, bvals].tolist()).reshape(1, num_bvals)
-        ax = axes[i]
-        im = ax.imshow(
-            row, aspect="auto", cmap="RdYlGn", vmin=np.min(row), vmax=np.max(row)
-        )
-        for j in range(num_bvals):
+    data = data.loc[row_order, col_order]
+    counts = data.to_numpy(dtype=float)
+
+    # row-normalise → fraction of each predicted label
+    row_sums = counts.sum(axis=1, keepdims=True)
+    fractions = np.divide(counts, row_sums, where=row_sums > 0, out=np.zeros_like(counts))
+
+    num_rows, num_cols = counts.shape
+    cell_w = max(0.7, 8.0 / num_cols)
+    cell_h = 1.2
+    fig_w = max(8, cell_w * num_cols + 2)
+    fig_h = max(3, cell_h * num_rows + 1.5)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    im = ax.imshow(fractions, aspect="auto", cmap="RdYlGn", vmin=0, vmax=1)
+
+    # annotate with raw counts; auto-size font to fit cells
+    font_size = max(6, min(11, int(280 / num_cols)))
+    for i in range(num_rows):
+        for j in range(num_cols):
+            n = int(counts[i, j])
+            frac = fractions[i, j]
+            text_color = "white" if frac < 0.35 or frac > 0.75 else "black"
             ax.text(
-                j,
-                0,
-                row[0, j],
-                ha="center",
-                va="center",
-                color="white",
-                fontweight="bold",
-                fontsize=24,
+                j, i, str(n),
+                ha="center", va="center",
+                color=text_color, fontsize=font_size, fontweight="bold",
             )
-        if i != num_avals - 1:
-            ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_ylabel(aval, rotation=45, labelpad=50)
-        cbar = plt.colorbar(im, ax=ax, orientation="vertical", fraction=0.02, pad=0.02)
-        cbar.ax.tick_params(labelsize=8)
 
-    axes[0].set_title(
-        f"Cell Assignment Heatmap {sample}", fontweight="bold", fontsize=18
-    )
-    axes[-1].set_xticks(np.arange(num_bvals), labels=bvals)
-    axes[-1].tick_params("x", length=0, width=0, gridOn=False, left=False, right=False)
+    ax.set_xticks(np.arange(num_cols))
+    ax.set_xticklabels(col_order, rotation=45, ha="right", fontsize=9)
+    ax.set_yticks(np.arange(num_rows))
+    ax.set_yticklabels(row_order, fontsize=10)
+    ax.tick_params(length=0)
+    ax.set_xlabel(bcol, fontsize=10)
+    ax.set_ylabel(acol, fontsize=10)
+    ax.set_title(f"Cell Assignment Heatmap  {sample}", fontweight="bold", fontsize=13, pad=10)
+
+    cbar = plt.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label("Fraction within predicted label", fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+
     plt.tight_layout()
-
-    plt.savefig(outfile, dpi=300)
+    plt.savefig(outfile, dpi=300, bbox_inches="tight")
     plt.close()
     return

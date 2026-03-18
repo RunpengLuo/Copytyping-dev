@@ -10,23 +10,29 @@ from sklearn.metrics import (
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 
 
+TUMOR_LABELS = {"Tumor", "Tumor_cell", "tumor"}
+UNKNOWN_LABELS = {"Unknown", "NA"}
+
+
 def evaluate_malignant_accuracy(
     anns: pd.DataFrame,
     cell_label="cell_label",
     cell_type="cell_type",
-    tumor_type="Tumor_cell",
     tumor_post="tumor",
 ):
     """
     true-positive: tumor cell be assigned to one of tumor clones.
+    Cells with Unknown cell_type are excluded from all metrics.
     """
-    # Hard label evaluation
-    y_true = (anns[cell_type] == tumor_type).to_numpy(dtype=int)
-    y_pred_hard = (
-        anns[cell_label].str.startswith("clone")
-        | anns[cell_label].str.startswith("tumor")
-    ).to_numpy(dtype=int)
+    known_mask = ~anns[cell_type].isin(UNKNOWN_LABELS)
+    anns_known = anns[known_mask]
     na_count = int((anns[cell_label] == "NA").sum())
+
+    y_true = anns_known[cell_type].isin(TUMOR_LABELS).to_numpy(dtype=int)
+    y_pred_hard = (
+        anns_known[cell_label].str.startswith("clone")
+        | anns_known[cell_label].str.startswith("tumor")
+    ).to_numpy(dtype=int)
 
     precision, recall, f1, _ = precision_recall_fscore_support(
         y_true, y_pred_hard, average="binary"
@@ -41,8 +47,8 @@ def evaluate_malignant_accuracy(
     logging.info("==================================================")
     logging.info("ROC AUC (hard classification): %s", auc_from_hard)
     auc_from_post = None
-    if tumor_post in anns:
-        auc_from_post = roc_auc_score(y_true, anns[tumor_post])
+    if tumor_post in anns_known:
+        auc_from_post = roc_auc_score(y_true, anns_known[tumor_post])
         logging.info("ROC AUC (soft classification): %s", auc_from_post)
 
     logging.info("Confusion matrix:\n%s", cm)
@@ -79,10 +85,10 @@ def refine_labels_by_reference(
     num_na_before = (anns[cell_label] == "NA").sum()
     anns[out_label] = anns[cell_label]
     anns.loc[
-        (anns[ref_label] == "Tumor_cell") & (anns[cell_label] == "normal"), out_label
+        anns[ref_label].isin(TUMOR_LABELS) & (anns[cell_label] == "normal"), out_label
     ] = "NA"
     anns.loc[
-        (anns[ref_label] != "Tumor_cell") & (anns[cell_label] != "normal"), out_label
+        (~anns[ref_label].isin(TUMOR_LABELS)) & (anns[cell_label] != "normal"), out_label
     ] = "NA"
     num_na_after = (anns[out_label] == "NA").sum()
     logging.info(f"#NA before/after refinement={num_na_before}->{num_na_after} / {len(anns)}")

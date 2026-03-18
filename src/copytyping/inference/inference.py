@@ -49,9 +49,11 @@ def run(args=None):
     os.makedirs(out_dir, exist_ok=True)
     plot_dir = os.path.join(out_dir, "plots")
     heatmap_dir = os.path.join(plot_dir, "heatmaps")
+    heatmap_agg1_dir = os.path.join(heatmap_dir, "agg1")
+    heatmap_aggx_dir = os.path.join(heatmap_dir, f"agg{args['heatmap_agg']}")
     scatter_dir = os.path.join(plot_dir, "scatter")
     validation_dir = os.path.join(plot_dir, "validation")
-    for d in [heatmap_dir, scatter_dir, validation_dir]:
+    for d in [heatmap_agg1_dir, heatmap_aggx_dir, scatter_dir, validation_dir]:
         os.makedirs(d, exist_ok=True)
     if assay_type in SPATIAL_ASSAYS:
         visium_dir = os.path.join(plot_dir, "visium")
@@ -217,7 +219,7 @@ def run(args=None):
             for my_label in [label, ref_label]:
                 if my_label not in anns:
                     continue
-                for agg in [1, agg_size]:
+                for (agg, agg_dir) in [(1, heatmap_agg1_dir), (agg_size, heatmap_aggx_dir)]:
                     plot_cnv_heatmap(
                         sample,
                         data_type,
@@ -231,8 +233,8 @@ def run(args=None):
                         agg_size=agg,
                         lab_type=my_label,
                         filename=os.path.join(
-                            heatmap_dir,
-                            f"{out_prefix}.{assay_type}.{val}_heatmap.{data_type}.agg{agg}.{my_label}.{img_type}",
+                            agg_dir,
+                            f"{out_prefix}.{assay_type}.{val}_heatmap.{data_type}.{my_label}.{img_type}",
                         ),
                         dpi=dpi,
                         figsize=(20, 6 if agg > 1 else 15),
