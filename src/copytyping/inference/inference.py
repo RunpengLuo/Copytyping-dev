@@ -104,8 +104,21 @@ def run(args=None):
                 sx_data.barcodes = sx_data.barcodes.drop(columns=[ref_label])
 
         if args.get(f"{data_type}_h5ad") is not None:
-            # TODO add cell_type column here/overwrite from input cell_type_df?
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
+            if cell_type_df is not None and ref_label in cell_type_df.columns:
+                ct_map = cell_type_df.set_index("BARCODE")[ref_label]
+                adata = adatas[data_type]
+                if ref_label in adata.obs.columns:
+                    logging.warning(
+                        f"overwriting existing '{ref_label}' column in "
+                        f"{data_type} h5ad obs with values from cell_type_df"
+                    )
+                adata.obs[ref_label] = (
+                    adata.obs_names.to_series()
+                    .map(ct_map)
+                    .fillna("Unknown")
+                    .values
+                )
         data_sources[data_type] = sx_data
     barcodes: pd.DataFrame = data_sources[data_types[0]].barcodes.copy()
     cnv_blocks = data_sources[data_types[0]].cnv_blocks
