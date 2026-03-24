@@ -26,9 +26,7 @@ class SX_Data:
             bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
         )
         # Parse REP_ID from barcode suffix (format: {barcode}_{rep_id})
-        self.barcodes["REP_ID"] = (
-            self.barcodes["BARCODE"].str.rsplit("_", n=1).str[-1]
-        )
+        self.barcodes["REP_ID"] = self.barcodes["BARCODE"].str.rsplit("_", n=1).str[-1]
         self.cnv_blocks = pd.read_table(cnp_file, sep="\t")
         self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
             self.cnv_blocks, laplace=laplace
@@ -78,6 +76,7 @@ class SX_Data:
             "cnv_blocks": self.cnv_blocks[mask],
         }
         return M, mask
+
 
 def get_cnp_mask(A, B, C, and_mask=None):
     """return 1d mask, False if the bin should be discarded during modelling"""

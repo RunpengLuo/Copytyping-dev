@@ -39,7 +39,9 @@ def plot_cnv_profile(
     )  # first column is normal
     h = height / num_clones
 
-    bulk_props = np.array([float(v) for v in str(cnv_blocks["PROPS"].iloc[0]).split(";")])
+    bulk_props = np.array(
+        [float(v) for v in str(cnv_blocks["PROPS"].iloc[0]).split(";")]
+    )
 
     wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
     bins_chs = cnv_blocks.groupby(by="#CHR", sort=False, observed=True)
@@ -60,15 +62,19 @@ def plot_cnv_profile(
             seg_end = ch_offset + (wl_end - wl_start)
 
             bins_seg = bins_ch.loc[
-                (bins_ch["START"] >= wl_start) & (bins_ch["END"] <= wl_end), :
+                (bins_ch["END"] > wl_start) & (bins_ch["START"] < wl_end), :
             ]
             if bins_seg.empty:
                 ch_offset = seg_end
                 continue
 
-            # global bin coords
-            bin_starts = (bins_seg["START"] - wl_start + ch_offset).to_numpy()
-            bin_ends = (bins_seg["END"] - wl_start + ch_offset).to_numpy()
+            # global bin coords (clip to whitelist region)
+            bin_starts = (
+                bins_seg["START"].clip(lower=wl_start) - wl_start + ch_offset
+            ).to_numpy()
+            bin_ends = (
+                bins_seg["END"].clip(upper=wl_end) - wl_start + ch_offset
+            ).to_numpy()
             # update global offsets
             ch_offset = seg_end
             if si < len(wl_segments_ch) - 1:
@@ -79,13 +85,12 @@ def plot_cnv_profile(
                 x0, bin_end = bin_starts[bi], bin_ends[bi]
                 w = bin_end - x0
                 bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]  # ignore normal cnp
-                cnv_set = set(bin_cnvs)
                 for k in range(num_clones):
                     cna, cnb = (
                         int(bin_cnvs[num_clones - k - 1].split("|")[0]),
                         int(bin_cnvs[num_clones - k - 1].split("|")[1]),
                     )
-                    color = state_style.get((cna, cnb), ("white", None))
+                    color = state_style.get((cna, cnb), state_style["default"])
                     y0 = k * h
                     rect = Rectangle(
                         (x0, y0),
@@ -98,32 +103,19 @@ def plot_cnv_profile(
                     )
                     ax.add_patch(rect)
 
-                    # plot mirrored events
-                    if (f"{cnb}|{cna}" in cnv_set) and (cna != cnb):
-                        if cna < cnb:  # right triangle
-                            trig = Polygon(
-                                [
-                                    [x0, y0 + h],
-                                    [x0 + w, y0 + h / 2],
-                                    [x0, y0],
-                                ],  # top-left → mid-right → bottom-left
-                                linewidth=0,
-                                closed=True,
-                                facecolor=BLACK,
-                                transform=ax.get_xaxis_transform(),
-                            )
-                        else:
-                            trig = Polygon(
-                                [
-                                    [x0 + w, y0 + h],
-                                    [x0, y0 + h / 2],
-                                    [x0 + w, y0],
-                                ],  # top-left → mid-right → bottom-left
-                                linewidth=0,
-                                closed=True,
-                                facecolor=BLACK,
-                                transform=ax.get_xaxis_transform(),
-                            )
+                    # plot mirrored events: cnb > cna means B allele has more copies
+                    if cnb > cna:
+                        trig = Polygon(
+                            [
+                                [x0, y0 + h],
+                                [x0 + w, y0 + h / 2],
+                                [x0, y0],
+                            ],  # top-left → mid-right → bottom-left
+                            linewidth=0,
+                            closed=True,
+                            facecolor=BLACK,
+                            transform=ax.get_xaxis_transform(),
+                        )
                         ax.add_patch(trig)
             # plot segment bound (centromere) as dashed line
             if si < len(wl_segments_ch) - 1:
@@ -250,6 +242,27 @@ def plot_cnv_legend(ax: plt.Axes):
         )
 
         leg_x = group_x0 + group_w + gap_groups
+
+    # --- CN>7 default box ----------------------------------------------------
+    default_color = state_style["default"]
+    group_x0 = leg_x
+    rect = Rectangle(
+        (group_x0, 0.0),
+        pair_w,
+        pair_h,
+        facecolor=default_color,
+        edgecolor="black",
+    )
+    ax.add_patch(rect)
+    ax.text(
+        group_x0 + pair_w / 2.0,
+        pair_h + 0.1,
+        "Total CN>7",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+    )
+    leg_x = group_x0 + pair_w + gap_groups
 
     # --- mirrored CNA symbol on the right ------------------------------------
     # leave a clear gap after the last CN group
@@ -400,21 +413,22 @@ def get_cn_colors():
         tcn_states.setdefault(int(a + b), []).append((a, b))
 
     fixed_colors = {
-        1: ["#add9e5"],  # light blue
-        2: ["#d4d4d4", "#818486"],  # greys
-        3: ["#fafad1", "#ffd702"],  # yellow shades
-        4: ["#ffdead", "#ffa602", "#ff8c00"],  # oranges
-        5: ["#fa7f73", "#ff0000", "#8c0000"],  # reds
-        6: ["#dea0de", "#d970d6", "#800080", "#4a0082"],  # purples/blue-purple
+        1: ["#4a9bc4"],  # medium blue (loss)
+        2: ["#a8a8a8", "#505050"],  # medium greys (diploid)
+        3: ["#c8c000", "#a07800"],  # golden yellows (3-copy)
+        4: ["#e09050", "#c06800", "#904000"],  # ambers/oranges (4-copy)
+        5: ["#e84030", "#b00000", "#700000"],  # reds (5-copy)
+        6: ["#cc80cc", "#a030a0", "#680068", "#400050"],  # purples
         7: [
-            "#c0b7f0",
-            "#a485f4",
-            "#6f42c1",
-            "#4b0082",
-            "#2e0854",
+            "#9080e0",
+            "#6848c8",
+            "#4c20a0",
+            "#340070",
+            "#1c0040",
         ],  # violet → indigo gradient
     }
 
+    default_color = "#333333"
     state_style = {}
     for total, states in tcn_states.items():
         uniq_pairs = sorted({tuple(sorted(s, reverse=True)) for s in states})
@@ -422,4 +436,237 @@ def get_cn_colors():
         for pair, color in zip(uniq_pairs, colors):
             state_style[pair] = color
             state_style[pair[::-1]] = color
+    state_style["default"] = default_color
     return state_style, tcn_states
+
+
+_ASCN_COLORS = [
+    "#2166AC",  # CN=0  blue (homozygous deletion)
+    "#A8A8A8",  # CN=1  grey (neutral)
+    "#FDBE85",  # CN=2  light peach
+    "#FD8D3C",  # CN=3  light orange
+    "#F46D43",  # CN=4  orange
+    "#E8352E",  # CN=5  red
+    "#CC1620",  # CN=6  medium-dark red
+    "#B0000E",  # CN=7  dark red
+    "#8B0000",  # CN=8  deeper red
+    "#660000",  # CN=9  very dark red
+    "#400000",  # CN=10 darkest red
+]
+
+
+def ascn_color(cn: int) -> str:
+    """Return a hex color for an integer allele copy number (0-10)."""
+    return _ASCN_COLORS[max(0, min(cn, 10))]
+
+
+def plot_ascn_profile(
+    ax: plt.Axes,
+    cnv_blocks: pd.DataFrame,
+    wl_segments: pd.DataFrame,
+    width=20,
+    height=1,
+    title=None,
+    ylabel=None,
+    plot_chrname=True,
+    plot_prop=True,
+    plot_clone_name=True,
+):
+    """
+    Plot allele-specific CN profile with two sub-bars (A/B) per clone.
+    Same genome layout as plot_cnv_profile but each clone row is split into
+    an upper A-allele bar and a lower B-allele bar, colored by individual
+    integer copy number on a blue->grey->red scale.
+    """
+    num_clones = len(str(cnv_blocks.iloc[0]["CNP"]).split(";")) - 1
+    h = height / num_clones
+    h_sub = h / 2
+
+    bulk_props = np.array(
+        [float(v) for v in str(cnv_blocks["PROPS"].iloc[0]).split(";")]
+    )
+
+    wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
+    bins_chs = cnv_blocks.groupby(by="#CHR", sort=False, observed=True)
+
+    ch_offset = 0
+    ch_coords = []
+    chs = cnv_blocks["#CHR"].unique()
+    for ch in chs:
+        ch_coords.append(ch_offset)
+        wl_segments_ch = wl_segments_chs.get_group(ch)
+        bins_ch = bins_chs.get_group(ch)
+        for si in range(len(wl_segments_ch)):
+            wl_segment = wl_segments_ch.iloc[si]
+            wl_start = wl_segment["START"]
+            wl_end = wl_segment["END"]
+            seg_end = ch_offset + (wl_end - wl_start)
+
+            bins_seg = bins_ch.loc[
+                (bins_ch["END"] > wl_start) & (bins_ch["START"] < wl_end), :
+            ]
+            if bins_seg.empty:
+                ch_offset = seg_end
+                continue
+
+            bin_starts = (
+                bins_seg["START"].clip(lower=wl_start) - wl_start + ch_offset
+            ).to_numpy()
+            bin_ends = (
+                bins_seg["END"].clip(upper=wl_end) - wl_start + ch_offset
+            ).to_numpy()
+            ch_offset = seg_end
+            if si < len(wl_segments_ch) - 1:
+                pass  # centromere offset
+
+            for bi in range(len(bins_seg)):
+                x0, bin_end = bin_starts[bi], bin_ends[bi]
+                w = bin_end - x0
+                bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]
+                for k in range(num_clones):
+                    clone_cn = bin_cnvs[num_clones - k - 1]
+                    cna_str, cnb_str = clone_cn.split("|")
+                    cna, cnb = int(cna_str), int(cnb_str)
+                    y0 = k * h
+                    # B allele (bottom half)
+                    rect_b = Rectangle(
+                        (x0, y0),
+                        w,
+                        h_sub,
+                        facecolor=ascn_color(cnb),
+                        edgecolor=BLACK,
+                        transform=ax.get_xaxis_transform(),
+                        linewidth=0,
+                    )
+                    ax.add_patch(rect_b)
+                    # A allele (top half)
+                    rect_a = Rectangle(
+                        (x0, y0 + h_sub),
+                        w,
+                        h_sub,
+                        facecolor=ascn_color(cna),
+                        edgecolor=BLACK,
+                        transform=ax.get_xaxis_transform(),
+                        linewidth=0,
+                    )
+                    ax.add_patch(rect_a)
+
+            if si < len(wl_segments_ch) - 1:
+                ax.vlines(
+                    ch_offset,
+                    ymin=0,
+                    ymax=1,
+                    transform=ax.get_xaxis_transform(),
+                    linewidth=1,
+                    colors=BLACK,
+                    linestyles="dashed",
+                )
+        ax.vlines(
+            ch_offset,
+            ymin=0,
+            ymax=1,
+            transform=ax.get_xaxis_transform(),
+            linewidth=1,
+            colors=BLACK,
+        )
+    ch_coords.append(ch_offset)
+
+    # clone separation lines
+    if num_clones > 1:
+        ax.hlines(
+            y=[h * (i + 1) for i in range(num_clones - 1)],
+            xmin=0,
+            xmax=ch_offset,
+            colors=BLACK,
+            linewidth=1,
+            transform=ax.get_xaxis_transform(),
+        )
+
+    ax.grid(False)
+    ax.set_xlim(0, ch_offset)
+    ax.set_xlabel("")
+    if plot_chrname:
+        ax.set_xticks(
+            [
+                ch_coords[i] + (ch_coords[i + 1] - ch_coords[i]) // 2
+                for i in range(len(ch_coords) - 1)
+            ]
+        )
+        ax.set_xticklabels(chs, rotation=60, fontsize=8)
+        ax.tick_params(
+            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
+        )
+    else:
+        ax.set_xticks([])
+        ax.set_xticklabels([])
+
+    # Y-axis: clone name at center, A/B sub-labels
+    ax.set_yticks([h * (i + 0.5) for i in range(num_clones)])
+    ylabels = []
+    for ci in range(num_clones, 0, -1):
+        prop = round(bulk_props[ci] * 100, 1)
+        cname = str(ci)
+        if plot_clone_name:
+            cname = f"clone {cname}"
+        if plot_prop:
+            cname = f"{cname} ({prop}%)"
+        ylabels.append(cname)
+    ax.set_yticklabels(ylabels)
+
+    # A/B sub-labels via minor ticks
+    minor_positions = []
+    minor_labels = []
+    for k in range(num_clones):
+        minor_positions.append(k * h + h_sub * 0.5)
+        minor_labels.append("B")
+        minor_positions.append(k * h + h_sub * 1.5)
+        minor_labels.append("A")
+    ax.set_yticks(minor_positions, minor=True)
+    ax.set_yticklabels(minor_labels, minor=True, fontsize=6)
+    ax.tick_params(axis="y", which="minor", left=False, right=False, pad=2)
+
+    ax.set_ylim(0, num_clones * h)
+    ax.tick_params(axis="y", which="major", left=False, right=False)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, rotation=0, ha="right", va="center")
+    if title is not None:
+        ax.set_title(title)
+    return ax
+
+
+def plot_ascn_legend(ax: plt.Axes):
+    """Draw a horizontal color bar legend for allele CN 0-10."""
+    ax.axis("off")
+
+    box_w = 2.0
+    box_h = 0.6
+    x0 = 0.0
+
+    for cn in range(11):
+        rect = Rectangle(
+            (x0 + cn * box_w, 0.0),
+            box_w,
+            box_h,
+            facecolor=ascn_color(cn),
+            edgecolor="black",
+        )
+        ax.add_patch(rect)
+        ax.text(
+            x0 + cn * box_w + box_w / 2.0,
+            -0.15,
+            str(cn),
+            ha="center",
+            va="top",
+            fontsize=9,
+        )
+
+    total_w = 11 * box_w
+    ax.text(
+        -0.5, box_h / 2.0, "Allele copy number", fontsize=12, ha="right", va="center"
+    )
+
+    ax.set_xlim(-2.0, total_w + 1.0)
+    ax.set_ylim(-0.6, box_h + 0.4)
+    ax.set_aspect("auto")
+    return ax

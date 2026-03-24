@@ -21,7 +21,7 @@ from copytyping.inference.spot_model import *
 from copytyping.inference.validation import *
 from copytyping.plot.plot_common import *
 from copytyping.plot.plot_cell import *
-from copytyping.plot.plot_visium import plot_visium_HE
+from copytyping.plot.plot_visium import plot_visium_panel, plot_visium_debug
 from copytyping.plot.plot_umap import *
 
 """
@@ -47,31 +47,29 @@ def run(args=None):
     if out_prefix == "":
         out_prefix = str(sample)
     os.makedirs(out_dir, exist_ok=True)
+    add_file_logging(out_dir)
     plot_dir = os.path.join(out_dir, "plots")
     heatmap_dir = os.path.join(plot_dir, "heatmaps")
     heatmap_agg1_dir = os.path.join(heatmap_dir, "agg1")
     heatmap_aggx_dir = os.path.join(heatmap_dir, f"agg{args['heatmap_agg']}")
-    scatter_dir = os.path.join(plot_dir, "scatter")
-    validation_dir = os.path.join(plot_dir, "validation")
-    for d in [heatmap_agg1_dir, heatmap_aggx_dir, scatter_dir, validation_dir]:
+    scatter_dir = plot_dir
+    validation_dir = plot_dir
+    for d in [heatmap_agg1_dir, heatmap_aggx_dir, plot_dir]:
         os.makedirs(d, exist_ok=True)
     if assay_type in SPATIAL_ASSAYS:
-        visium_dir = os.path.join(plot_dir, "visium")
-        os.makedirs(visium_dir, exist_ok=True)
+        visium_dir = plot_dir
     work_dir = os.path.join(out_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
     verbosity = args["verbosity"]
 
     logging.info(f"sample={sample}, assay_type={assay_type}, data_types={data_types}")
 
-    ##################################################
-    # load data
     cell_type_df = None
     if args.get("cell_type") is not None:
         cell_type_df = pd.read_table(args["cell_type"])
         assert "BARCODE" in cell_type_df.columns
         assert ref_label in cell_type_df.columns
-    
+
     data_sources = {}
     adatas = {}
     for data_type in data_types:
@@ -114,19 +112,14 @@ def run(args=None):
                         f"{data_type} h5ad obs with values from cell_type_df"
                     )
                 adata.obs[ref_label] = (
-                    adata.obs_names.to_series()
-                    .map(ct_map)
-                    .fillna("Unknown")
-                    .values
+                    adata.obs_names.to_series().map(ct_map).fillna("Unknown").values
                 )
         data_sources[data_type] = sx_data
     barcodes: pd.DataFrame = data_sources[data_types[0]].barcodes.copy()
     cnv_blocks = data_sources[data_types[0]].cnv_blocks
 
-    ##################################################
-    # load config parameters
     method = args["method"]
-    fit_mode = "hybrid"  # allele + total
+    fit_mode = args.get("fit_mode", "hybrid")
     label = f"{method}-label"
     num_iters = args["niters"]
     posterior_thres = args["posterior_thres"]
@@ -141,9 +134,7 @@ def run(args=None):
         share_params[f"{data_type}-inv_phi"] = args["share_NB_dispersion"]
         fix_params[f"{data_type}-tau"] = args["fix_BB_dispersion"]
         share_params[f"{data_type}-tau"] = args["share_BB_dispersion"]
-        fix_params[f"{data_type}-theta"] = (
-            assay_type in SPOT_ASSAYS and args["fix_tumor_purity"]
-        )
+        fix_params[f"{data_type}-theta"] = assay_type in SPOT_ASSAYS
 
     if assay_type in CELL_ASSAYS:
         model = Cell_Model
@@ -174,9 +165,10 @@ def run(args=None):
         label=label,
         posterior_thres=posterior_thres,
         margin_thres=margin_thres,
+        tumorprop_threshold=args["tumorprop_threshold"],
     )
     logging.info(f"clone fractions: {clone_props}")
-    ##################################################
+    metric = {}
     metric_str = ""
     if ref_label in barcodes.columns:
         logging.info("evaluate performance against reference labels")
@@ -184,8 +176,9 @@ def run(args=None):
             anns = refine_labels_by_reference(
                 anns, ref_label, label, f"{label}-refined"
             )
+        tumor_post = "tumor_purity" if assay_type in SPATIAL_ASSAYS else "tumor"
         metric, metric_str = evaluate_malignant_accuracy(
-            anns, cell_label=label, cell_type=ref_label
+            anns, cell_label=label, cell_type=ref_label, tumor_post=tumor_post
         )
         metric["SAMPLE"] = sample
         pd.DataFrame([metric]).to_csv(
@@ -197,7 +190,9 @@ def run(args=None):
         plot_cross_heatmap(
             anns,
             sample,
-            os.path.join(validation_dir, f"{out_prefix}.{assay_type}.cross_heatmap.png"),
+            os.path.join(
+                validation_dir, f"{out_prefix}.{assay_type}.cross_heatmap.png"
+            ),
             acol=label,
             bcol=ref_label,
         )
@@ -214,7 +209,6 @@ def run(args=None):
         lab_type=ref_label if ref_label in anns else label,
     )
 
-    ##################################################
     wl_segments = read_whitelist_segments(args["region_bed"])
     genome_size = args["genome_size"]
     agg_size = args["heatmap_agg"]
@@ -223,16 +217,16 @@ def run(args=None):
     transparent = args["transparent"]
     for data_type in data_types:
         sx_data: SX_Data = data_sources[data_type]
-        # adata: AnnData = adatas[data_type]
-
-        # plot heatmap
         for val in ["BAF", "pi_gk", "log2RDR"]:
             if val != "BAF" and f"{data_type}-lambda" not in model_params:
                 continue
             for my_label in [label, ref_label]:
                 if my_label not in anns:
                     continue
-                for (agg, agg_dir) in [(1, heatmap_agg1_dir), (agg_size, heatmap_aggx_dir)]:
+                agg_levels = [(1, heatmap_agg1_dir)]
+                if assay_type not in SPATIAL_ASSAYS:
+                    agg_levels.append((agg_size, heatmap_aggx_dir))
+                for agg, agg_dir in agg_levels:
                     plot_cnv_heatmap(
                         sample,
                         data_type,
@@ -254,11 +248,10 @@ def run(args=None):
                         transparent=transparent,
                     )
 
-        # plot 1d aggregated scatter plot
         plot_rdr_baf_1d_aggregated(
             sx_data,
             anns,
-            None,
+            model_params.get(f"{data_type}-lambda", None),
             sample,
             data_type,
             genome_size,
@@ -266,34 +259,47 @@ def run(args=None):
             lab_type=label,
             filename=os.path.join(
                 scatter_dir,
-                f"{out_prefix}.{assay_type}.1d_scatter.{data_type}.{label}.{img_type}",
+                f"{out_prefix}.{assay_type}.1d_scatter.{data_type}.{label}.pdf",
             ),
         )
 
     if args["umap"]:
-        # TODO
-        pass
+        pass  # not yet implemented
 
     if assay_type in SPATIAL_ASSAYS:
         gex_adata = adatas.get("gex", adatas[data_types[0]])
         anns_indexed = anns.set_index("BARCODE")
+        visium_slices = []
         for rep_id, anns_rep in anns.groupby("REP_ID"):
-            vis_adata = gex_adata[gex_adata.obs_names.isin(anns_rep["BARCODE"].values)].copy()
+            vis_adata = gex_adata[
+                gex_adata.obs_names.isin(anns_rep["BARCODE"].values)
+            ].copy()
             anns_vis = anns_indexed.reindex(vis_adata.obs_names)
             if ref_label not in anns_vis.columns:
                 anns_vis[ref_label] = "Unknown"
-            plot_visium_HE(
-                f"{sample}_{rep_id}",
-                anns_vis,
-                vis_adata,
-                visium_dir,
-                spot_label=label,
-                path_label=ref_label,
-                title_info=metric_str,
-                fig_type=img_type,
+            visium_slices.append((rep_id, anns_vis, vis_adata))
+        visium_title = ""
+        if metric.get("ROC-AUC (soft)") is not None:
+            visium_title += f"AUC={metric['ROC-AUC (soft)']:.3f}"
+        plot_visium_panel(
+            sample,
+            visium_slices,
+            visium_dir,
+            spot_label=label,
+            path_label=ref_label,
+            dpi=dpi,
+            title_info=visium_title,
+        )
+        if hasattr(instance, "param_trace") and instance.param_trace:
+            plot_visium_debug(
+                sample,
+                visium_slices,
+                instance.param_trace,
+                barcodes=barcodes,
+                data_type=data_types[0],
+                out_dir=visium_dir,
+                ref_label=ref_label if ref_label in barcodes.columns else None,
                 dpi=dpi,
-                trans=transparent,
-                library_id=rep_id,
             )
 
 

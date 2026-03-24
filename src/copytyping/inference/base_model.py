@@ -84,6 +84,20 @@ class Base_Model:
             logging.info(f"{param_key}: {param_val}")
         return
 
+    def save_param_trace(self, param_trace: list):
+        if not param_trace or not self.work_dir:
+            return
+        for key in param_trace[0]:
+            vals = [p[key] for p in param_trace]
+            if isinstance(vals[0], np.ndarray):
+                df = pd.DataFrame(vals)
+            else:
+                df = pd.DataFrame({"value": vals})
+            df.index.name = "iter"
+            out_path = os.path.join(self.work_dir, f"{self.prefix}.trace.{key}.tsv")
+            df.to_csv(out_path, sep="\t")
+        logging.info(f"saved {len(param_trace[0])} parameter traces to {self.work_dir}")
+
     def predict(
         self,
         fit_mode: str,
@@ -91,31 +105,55 @@ class Base_Model:
         label: str,
         posterior_thres: float = 0.5,  # minimum required max posterior value
         margin_thres: float = 0.1,  # minimum gap between 1st and 2nd highest MAP value
+        tumorprop_threshold: float = 0.5,  # for spatial: set spots to normal if purity < threshold
     ):
         logging.info("Decode labels with MAP estimation")
-        posteriors = self._e_step(fit_mode, params)  # (N, K)
+        posteriors = self._e_step(fit_mode, params)
         anns = self.barcodes.copy(deep=True)
-        anns.loc[:, self.clones] = posteriors
 
-        # posterior probs being tumor cell.
-        anns["tumor"] = 1 - anns["normal"]
+        if self.assay_type in SPATIAL_ASSAYS:
+            # posteriors are over tumor clones only; normal is modeled via 1-theta
+            tumor_clones = self.clones[1:]
+            anns.loc[:, tumor_clones] = posteriors
 
-        # compute max posterior and margin
-        probs = anns[self.clones].to_numpy()  # (N, K)
-        probs_sorted = np.sort(probs, axis=1)
-        anns["max_posterior"] = probs_sorted[:, -1]
-        second_post = probs_sorted[:, -2]
-        anns["margin_delta"] = anns["max_posterior"] - second_post
+            theta_key = f"{self.data_types[0]}-theta"
+            anns["tumor_purity"] = params[theta_key]
 
-        # MAP label
-        anns[label] = anns[self.clones].idxmax(axis=1)
+            probs = anns[tumor_clones].to_numpy()
+            probs_sorted = np.sort(probs, axis=1)
+            anns["max_posterior"] = probs_sorted[:, -1]
+            if probs_sorted.shape[1] > 1:
+                anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
+            else:
+                anns["margin_delta"] = 1.0
 
-        # reject (NA) if low max_posterior or small margin_delta or
-        mask_na = (anns["max_posterior"] < posterior_thres) | (
-            anns["margin_delta"] < margin_thres
-        )
-        anns.loc[mask_na, label] = "NA"
-        # clone proportions among all barcodes (including NA)
+            anns[label] = anns[tumor_clones].idxmax(axis=1)
+
+            mask_normal = anns["tumor_purity"] < tumorprop_threshold
+            anns.loc[mask_normal, label] = "normal"
+            anns.loc[mask_normal, "max_posterior"] = 0.0
+            anns.loc[mask_normal, "margin_delta"] = 0.0
+            logging.info(
+                f"set {mask_normal.sum()} spots to normal "
+                f"(purity < {tumorprop_threshold})"
+            )
+        else:
+            anns.loc[:, self.clones] = posteriors
+            anns["tumor"] = 1 - anns["normal"]
+
+            probs = anns[self.clones].to_numpy()
+            probs_sorted = np.sort(probs, axis=1)
+            anns["max_posterior"] = probs_sorted[:, -1]
+            anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
+
+            anns[label] = anns[self.clones].idxmax(axis=1)
+
+            # reject ambiguous assignments below confidence thresholds
+            mask_na = (anns["max_posterior"] < posterior_thres) | (
+                anns["margin_delta"] < margin_thres
+            )
+            anns.loc[mask_na, label] = "NA"
+
         clone_props = {
             clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones
         }

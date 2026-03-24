@@ -4,6 +4,7 @@ import argparse
 
 from copytyping.utils import *
 
+
 def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--assay_type",
@@ -74,6 +75,14 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     ##################################################
     # Parameters
     parser.add_argument(
+        "--fit_mode",
+        required=False,
+        type=str,
+        default="hybrid",
+        choices=["hybrid", "allele_only", "total_only"],
+        help="Likelihood mode: hybrid (BAF+RDR), allele_only (BAF only), total_only (RDR only)",
+    )
+    parser.add_argument(
         "--niters",
         required=False,
         type=int,
@@ -130,14 +139,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default=False,
         help="share Beta-binomial dispersion across CN states in M-step",
     )
-    parser.add_argument(
-        "--fix_tumor_purity",
-        required=False,
-        action="store_true",
-        default=False,
-        help=f"fix tumor purity after init, spot assays only: {SPOT_ASSAYS}",
-    )
-
     # post selection
     parser.add_argument(
         "--posterior_thres",
@@ -154,13 +155,19 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="Assign cells/spots to NA if top-2 margin less than <posterior_thres>",
     )
     parser.add_argument(
+        "--tumorprop_threshold",
+        required=False,
+        default=0.50,
+        type=float,
+        help="For spatial assays, assign spots to normal if tumor purity < threshold",
+    )
+    parser.add_argument(
         "--refine_label_by_reference",
         required=False,
         action="store_true",
         default=False,
         help=f"mark unassigned if predicted label disagree with cell type (if available).",
     )
-
 
     ##################################################
     # plot parameters
@@ -233,7 +240,6 @@ def check_arguments_inference(args: dict):
         args["gex_Y_count"] = y_count
         args["gex_D_count"] = d_count
         args["gex_h5ad"] = h5ad
-        
 
     if assay_type in ATAC_ASSAYS:
         assert atac_dir is not None and os.path.isdir(atac_dir), (

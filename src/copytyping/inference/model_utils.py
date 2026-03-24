@@ -1,22 +1,17 @@
+import logging
+
 import numpy as np
 import pandas as pd
 
 from scipy.stats import (
     zscore,
     binom,
-    betabinom,
 )
 
-# from statsmodels.stats.multitest import multipletests
-# from scipy.optimize import minimize, minimize_scalar
-# import statsmodels.formula.api as smf
-# import statsmodels.api as sm
-# from statsmodels.distributions.empirical_distribution import ECDF
-from statsmodels.base.model import GenericLikelihoodModel
+from scipy.optimize import minimize_scalar
 from copytyping.sx_data.sx_data import SX_Data
 
 
-##################################################
 def compute_baseline_proportions(
     X: np.ndarray, T: np.ndarray, normal_labels: np.ndarray
 ) -> np.ndarray:
@@ -84,102 +79,77 @@ def empirical_rdr_gn(
     return rdr_matrix
 
 
-##################################################
-class BAF_Binom(GenericLikelihoodModel):
-    """
-    Binomial model endog ~ Bin(exposure, p), where p = exog @ params[:-1].
-    MLE: max_{params} sum_{s} log P(endog_s | exog_s; params)
-
-    Attributes
-    ----------
-    endog : array, (n_samples,)
-        Y values.
-
-    exog : array, (n_samples, n_features)
-        Design matrix.
-
-    exposure : array, (n_samples,)
-        Total number of trials. In BAF case, this is the total number of SNP-covering UMIs.
-    """
-
-    def __init__(self, endog, exog, exposure, offset, scaling, **kwargs):
-        super(BAF_Binom, self).__init__(endog, exog, **kwargs)
-        self.exposure = exposure
-        self.offset = offset
-        self.scaling = scaling
-
-    def nloglikeobs(self, params, eps=1e-10):
-        linear_term = self.exog @ params
-        p = self.scaling / (1 + np.exp(-linear_term + self.offset))
-        p = np.clip(p, eps, 1.0 - eps)
-        llf = binom.logpmf(self.endog, self.exposure, p)
-        return -llf
-
-    def fit(self, start_params=np.array([0.0]), maxiter=10_000, maxfun=5_000, **kwargs):
-        return super(BAF_Binom, self).fit(
-            start_params=start_params, maxiter=maxiter, maxfun=maxfun, **kwargs
-        )
-
-
 def estimate_tumor_proportion(sx_data: SX_Data, base_props: np.ndarray):
-    """Estimate tumor proportion by LOH states
-    base_props: (G, ) normalized baseline proportion.
+    """Estimate per-spot tumor purity using clonally imbalanced segments.
+
+    Selects bins where A≠B in clone 1 AND all tumor clones share identical
+    (A, B) copy numbers (i.e. the event is truncal / clonal).  For each spot,
+    fits theta via scalar MLE using the binomial model:
+
+        p_hat = (theta * mu_{g,k} * p_{g,k} + 0.5*(1-theta))
+                / (theta * mu_{g,k} + (1-theta))
+        Y_{g,n} ~ Binom(D_{g,n}, p_hat)
+
+    Spots with no valid coverage at the selected bins are left at theta=0.5.
+
+    Args:
+        sx_data: SX_Data instance providing A, B, C, BAF, Y, D arrays.
+        base_props: Array of shape (G,) with baseline proportions from normal
+            spots, used to compute clone-specific RDR (mu_{g,k}).
+
+    Returns:
+        Array of shape (N,) with per-spot tumor purity estimates in [1e-4, 1-1e-4].
     """
+    A_tumor = sx_data.A[:, 1:]  # (G, K_tumor)
+    B_tumor = sx_data.B[:, 1:]
 
-    def estimate_purity(
-        B_bin: np.ndarray,
-        D_bin: np.ndarray,
-        rdr_bin: np.ndarray,
-    ):
-        """
-        0.5 ( 1. - rho ) / (rho * RDR + 1. - rho) = B_count / Total_count for each LOH state.
-        Fits the binomial model: p_{g,n} = 0.5 / (1 + rdr_{g,n} * exp(-beta_n))
-        and returns rho = 1/(1+exp(beta)).
-        """
-        m = (
-            np.isfinite(B_bin)
-            & np.isfinite(D_bin)
-            & np.isfinite(rdr_bin)
-            & (D_bin > 0)
-            & (rdr_bin > 0)
-            & (B_bin >= 0)
-            & (B_bin <= D_bin)
-        )
-        l = np.count_nonzero(m)
-        if l == 0:
-            return np.nan, np.nan
+    # Imbalanced in the first tumor clone (all clones are identical, so this
+    # representative check is sufficient after the clonal-consistency filter below).
+    is_imbalanced = A_tumor[:, 0] != B_tumor[:, 0]
 
-        model = BAF_Binom(
-            endog=B_bin[m],
-            exog=np.ones((l, 1)),
-            exposure=D_bin[m],
-            offset=np.log(rdr_bin[m]),
-            scaling=0.5,
-        )
-        res = model.fit(start_params=np.array([0.0]), disp=False)
-        beta = float(np.atleast_1d(res.params)[0])
-        rho = 1.0 / (1.0 + np.exp(beta))
-        return float(np.clip(rho, 0.0, 1.0)), model.loglike(res.params)
+    # Clonal: all tumor clones carry the same (A, B) as clone 1.
+    is_clonal = np.ones(sx_data.G, dtype=bool)
+    for k in range(1, A_tumor.shape[1]):
+        is_clonal &= (A_tumor[:, k] == A_tumor[:, 0]) & (B_tumor[:, k] == B_tumor[:, 0])
+    clonal_imb = is_imbalanced & is_clonal
 
-    # spot by clone
-    props_nk = np.full((sx_data.N, sx_data.K), np.nan, dtype=np.float32)
-    lls_nk = np.full((sx_data.N, sx_data.K), np.nan, dtype=np.float32)
+    n_clonal_imb = np.sum(clonal_imb)
+    logging.info(f"init theta: {n_clonal_imb} clonal imbalanced bins")
 
+    if n_clonal_imb == 0:
+        logging.warning("no clonal imbalanced bins, setting theta=0.5")
+        return np.full(sx_data.N, 0.5, dtype=np.float32)
+
+    # clonal BAF and RDR (same across all tumor clones, use clone index 1)
     rdrs_gk = clone_rdr_gk(base_props, sx_data.C)
-    for n in range(sx_data.N):
-        for k in range(sx_data.K):
-            cna, cnb = sx_data.A[:, k], sx_data.B[:, k]
-            loh_mask = np.minimum(cna, cnb) == 0
-            if not np.any(loh_mask):
-                continue
-            loh_idxs = np.where(loh_mask)[0]
-            Y_bin = sx_data.Y[loh_idxs, n]
-            D_bin = sx_data.D[loh_idxs, n]
-            B_bin = np.where(cnb[loh_idxs] == 0, Y_bin, D_bin - Y_bin)
-            rdr_bin = rdrs_gk[loh_idxs, k]
-            props_nk[n, k], lls_nk[n, k] = estimate_purity(B_bin, D_bin, rdr_bin)
+    p_k = sx_data.BAF[clonal_imb, 1]  # (G_imb,)
+    mu_k = rdrs_gk[clonal_imb, 1]  # (G_imb,)
 
-    lls_nk[~np.isfinite(lls_nk)] = -np.inf
-    k_star = np.argmax(lls_nk, axis=1)  # (N,)
-    props = props_nk[np.arange(sx_data.N), k_star]
-    return props
+    # Y is B-allele count matching B copy number from CNP — no orientation needed
+    Y_bins = sx_data.Y[clonal_imb]  # (G_imb, N)
+    D_bins = sx_data.D[clonal_imb]  # (G_imb, N)
+
+    eps = 1e-10
+    theta_arr = np.full(sx_data.N, 0.5, dtype=np.float32)
+
+    for n in range(sx_data.N):
+        d_n = D_bins[:, n]
+        y_n = Y_bins[:, n]
+        valid = (d_n > 0) & (mu_k > 0) & np.isfinite(mu_k)
+        if valid.sum() == 0:
+            continue
+        d_v = d_n[valid].astype(np.float64)
+        y_v = y_n[valid].astype(np.float64)
+        mu_v = mu_k[valid]
+        p_v = p_k[valid]
+
+        def neg_ll(theta):
+            denom = theta * mu_v + (1 - theta)
+            p_hat = (theta * mu_v * p_v + 0.5 * (1 - theta)) / np.maximum(denom, eps)
+            p_hat = np.clip(p_hat, eps, 1 - eps)
+            return -np.sum(binom.logpmf(y_v, d_v, p_hat))
+
+        res = minimize_scalar(neg_ll, bounds=(1e-4, 1 - 1e-4), method="bounded")
+        theta_arr[n] = np.clip(res.x, 1e-4, 1 - 1e-4)
+
+    return theta_arr

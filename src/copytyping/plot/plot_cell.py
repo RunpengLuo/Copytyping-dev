@@ -136,7 +136,6 @@ def plot_heatmap(
     pc = ax.pcolormesh(
         x_edges, y_edges, C, cmap=cmap, norm=norm, shading="flat", rasterized=True
     )
-    ##################################################
     for ch_ofs in ch_coords:
         ax.vlines(
             ch_ofs,
@@ -159,7 +158,6 @@ def plot_heatmap(
             linestyles="dashed",
         )
 
-    ##################################################
     ax.set_xlim(0, ch_offset)
     ax.set_xlabel("")
     if plot_chrname:
@@ -177,9 +175,8 @@ def plot_heatmap(
         ax.set_xticks([])
         ax.set_xticklabels([])
 
-    ##################################################
-    # add cell labels
-    boundaries = np.r_[True, cell_labels[1:] != cell_labels[:-1]]  # shape (N,)
+    # detect contiguous label blocks for y-axis tick placement
+    boundaries = np.r_[True, cell_labels[1:] != cell_labels[:-1]]
     starts = np.flatnonzero(boundaries)
     ends = np.r_[starts[1:], N]
     labels_block = cell_labels[starts]
@@ -192,7 +189,6 @@ def plot_heatmap(
 
         proportion = round(100 * np.sum(cell_labels == label) / len(cell_labels), 1)
 
-        # rectangle per block
         rect = Rectangle(
             (0, y0),
             ch_offset,
@@ -374,6 +370,7 @@ def plot_cnv_heatmap(
     dpi=300,
     transparent=False,
     title_info="",
+    style="cnv",
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
     logging.info(f"plot CNV heatmap val={val}")
@@ -390,9 +387,12 @@ def plot_cnv_heatmap(
 
     # order cells by labels, aggregate same label cells
     uniq_labels = np.unique(cell_labels)
-    if lab_type in ["copytyping", "spot_label"]:
-        uniq_labels = [f"clone{c}" for c in range(sx_data.K - 1, 0, -1)] + ["normal", "NA"]
-        uniq_labels = [lab for lab in uniq_labels if lab in np.unique(cell_labels)]
+    if lab_type == "copytyping-label":
+        # pcolormesh y=0 is bottom, so reverse desired top-to-bottom order
+        desired = ["NA", "normal"] + [f"clone{c}" for c in range(1, sx_data.K)]
+        uniq_labels = [
+            lab for lab in reversed(desired) if lab in np.unique(cell_labels)
+        ]
 
     # order props by unique labels, since data also get ordered in prepare step
     if proportions is not None:
@@ -402,9 +402,7 @@ def plot_cnv_heatmap(
             ord_props.append(proportions[idx])
         proportions = np.concatenate(ord_props)
 
-    # cluster_by_val = proportions is None
     cluster_by_val = False
-    # print(f"cluster_by_val={cluster_by_val}")
     data_info = sx_data.cnv_blocks
     if val == "BAF":
         data_matrix, cell_labels = prepare_baf(
@@ -446,12 +444,10 @@ def plot_cnv_heatmap(
             norm = TwoSlopeNorm(vmin=0, vcenter=1, vmax=2)
             cticks = [0.0, 0.5, 1.0, 1.50, 2.0]
     elif val == "pi_gk":
-        # sample proportion
         data_matrix, cell_labels = prepare_pi_gk(
             sx_data, cell_labels, uniq_labels, base_props, agg_size, cluster_by_val
         )
 
-        # boundaries = np.linspace(0, 1, 11)   # [0.0, 0.1, ..., 1.0]
         colors = [
             "#1f77b4",
             "#3b8bc6",
@@ -466,14 +462,9 @@ def plot_cnv_heatmap(
         ]
         cticks = [0.0, 0.25, 0.5, 0.75, 1.0]
 
-        # cmap = mcolors.ListedColormap(colors, name="pi_disc")
-        # cmap.set_bad("white")
-        # norm = mcolors.BoundaryNorm(boundaries, cmap.N, clip=True)
         cmap = mcolors.LinearSegmentedColormap.from_list("pi_cont", colors, N=256)
         norm = mcolors.Normalize(vmin=data_matrix.min(), vmax=data_matrix.max())
 
-    ##################################################
-    # sort within each label group by tumor proportions
     if proportions is not None:
         logging.info("plot tumor proportions")
         assert agg_size == 1, "no aggregation allowed"
@@ -492,7 +483,6 @@ def plot_cnv_heatmap(
         cell_labels = cell_labels[idx]
         proportions = proportions[idx]
 
-    ##################################################
     fig, axes = plt.subplots(
         nrows=3, ncols=1, figsize=figsize, gridspec_kw={"height_ratios": hratios}
     )
@@ -509,26 +499,20 @@ def plot_cnv_heatmap(
         norm=norm,
     )
 
-    plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
-    plot_cnv_legend(axes[2])
+    profile_fn = plot_ascn_profile if style == "ascn" else plot_cnv_profile
+    legend_fn = plot_ascn_legend if style == "ascn" else plot_cnv_legend
+    profile_fn(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
+    legend_fn(axes[2])
 
-    ##################################################
     title = f"{sample} {data_type} {val} Heatmap"
     if agg_size > 1:
         title += f" (pseudobulk-{agg_size} cell for visualization)"
     if title_info != "":
         title += f"\n{title_info}"
-    fig.suptitle(
-        title,
-        y=0.99,  # move title up (0=bottom, 1=top)
-        fontsize=14,  # font size
-        fontweight="bold",  # bold
-    )
+    fig.suptitle(title, y=0.99, fontsize=14, fontweight="bold")
 
     fig.tight_layout(rect=[0.0, 0.0, 0.95, 0.99])
 
-    ##################################################
-    # add proportion vectors
     extra_pad = 0.0
     if proportions is not None:
         fig.canvas.draw()
@@ -544,25 +528,28 @@ def plot_cnv_heatmap(
                 bbox.height,
             ]
         )
-        # y = np.arange(N + 1)       # row edges
-        x = np.array([0, 1])  # two x-edges -> one column
-        C = proportions[:, None]  # (N, 1)
+        x = np.array([0, 1])
+        C = proportions[:, None]
+        purity_cmap = "magma_r"
         norm_vec = mcolors.Normalize(vmin=0.0, vmax=1.0)
         ax_vec.pcolormesh(
-            x, y_edges, C, cmap=cmap, norm=norm_vec, shading="flat", rasterized=True
+            x,
+            y_edges,
+            C,
+            cmap=purity_cmap,
+            norm=norm_vec,
+            shading="flat",
+            rasterized=True,
         )
-        ax_vec.set_xticks([0.5])  # one tick in the middle (x goes 0→1)
-        ax_vec.set_xticklabels(["tumor\nprop"], rotation=0)
+        ax_vec.set_xticks([0.5])
+        ax_vec.set_xticklabels(["purity"], rotation=0)
         ax_vec.tick_params(
             axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
         )
-        # ax_vec.tick_params(axis="x", length=0)
         ax_vec.set_yticks([])
         ax_vec.set_ylim(axes[0].get_ylim())
 
-    ##################################################
-    # add heatmap colorbars
-    fig.canvas.draw()  # ensure positions are up to date
+    fig.canvas.draw()  # ensure axis positions are finalised before adding colorbar
     bbox = axes[0].get_position()
 
     cbar_width = 0.01  # in figure coords
@@ -570,9 +557,9 @@ def plot_cnv_heatmap(
 
     cax = fig.add_axes(
         [
-            bbox.x1 + pad,  # left
-            bbox.y0,  # bottom
-            cbar_width,  # width
+            bbox.x1 + pad,
+            bbox.y0,
+            cbar_width,
             bbox.height / 5,
         ]
     )

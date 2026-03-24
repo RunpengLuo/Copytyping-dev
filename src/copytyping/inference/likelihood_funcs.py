@@ -38,8 +38,13 @@ def cond_betabin_logpmf(
     a = tau_gnk * p_gnk
     b = tau_gnk * (1.0 - p_gnk)
 
-    ll = (gammaln(D_gnk + 1) - gammaln(Y_gnk + 1) - gammaln(X_gnk + 1)
-          + betaln(Y_gnk + a, X_gnk + b) - betaln(a, b))
+    ll = (
+        gammaln(D_gnk + 1)
+        - gammaln(Y_gnk + 1)
+        - gammaln(X_gnk + 1)
+        + betaln(Y_gnk + a, X_gnk + b)
+        - betaln(a, b)
+    )
     return ll
 
 
@@ -129,8 +134,13 @@ def cond_betabin_logpmf_theta(
     a = tau_gnk * p_hat
     b = tau_gnk * (1.0 - p_hat)
 
-    ll = (gammaln(D_gnk + 1) - gammaln(Y_gnk + 1) - gammaln(X_gnk + 1)
-          + betaln(Y_gnk + a, X_gnk + b) - betaln(a, b))
+    ll = (
+        gammaln(D_gnk + 1)
+        - gammaln(Y_gnk + 1)
+        - gammaln(X_gnk + 1)
+        + betaln(Y_gnk + a, X_gnk + b)
+        - betaln(a, b)
+    )
     return ll
 
 

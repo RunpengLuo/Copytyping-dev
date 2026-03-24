@@ -1,10 +1,12 @@
 results
 data
 CLAUDE.md
+.claude/
 **/__pycache__/
 test/
 run.sh
 example/atac_test_out/
+simulations/sim_*/
 tmp/
 .DS_Store
 *.sh

@@ -47,9 +47,8 @@ class Cell_Model(Base_Model):
         params = self._init_base_params(fit_mode, init_params)
 
         # initialize baseline proportions
-        if (
-            fit_mode in {"total_only", "hybrid"}
-            and any(params.get(f"{dt}-lambda", None) is None for dt in self.data_types)
+        if fit_mode in {"total_only", "hybrid"} and any(
+            params.get(f"{dt}-lambda", None) is None for dt in self.data_types
         ):
             is_normal_cell = None
             if ref_label in self.barcodes.columns:
@@ -59,12 +58,17 @@ class Cell_Model(Base_Model):
                 cell_types = self.barcodes[ref_label].unique()
                 logging.info(f"Observed cell_types: {cell_types}")
                 logging.info(f"Black list: {BLACK_LIST_CELLTYPE}")
-                is_normal_cell = (~self.barcodes[ref_label].isin(BLACK_LIST_CELLTYPE)).to_numpy()
+                is_normal_cell = (
+                    ~self.barcodes[ref_label].isin(BLACK_LIST_CELLTYPE)
+                ).to_numpy()
 
             if is_normal_cell is None or np.sum(is_normal_cell) == 0:
                 logging.info("infer normal cells using allele-only cell model")
                 pure_model = Cell_Model(
-                    self.barcodes, self.assay_type, self.data_types, self.data_sources,
+                    self.barcodes,
+                    self.assay_type,
+                    self.data_types,
+                    self.data_sources,
                     work_dir=self.work_dir,
                 )
                 allele_params = pure_model.fit(
@@ -145,7 +149,7 @@ class Cell_Model(Base_Model):
         params: dict,
         fix_params: dict,
         share_params: dict,
-        invphi_bounds=(1 / 100, 1 / 10),
+        invphi_bounds=(1 / 100, 1 / 2),
         logtau_bounds=(np.log(50), np.log(200)),
         t=0,
         eps=1e-10,
@@ -176,7 +180,9 @@ class Cell_Model(Base_Model):
                         X_gnk, mu_gnk, gamma_gnk, invphi_bounds
                     )
                 else:
-                    nb_valid_in_aneuploid = np.where(lambda_g[sx_data.MASK["ANEUPLOID"]] > 0)[0]
+                    nb_valid_in_aneuploid = np.where(
+                        lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
+                    )[0]
                     for local_idx, aneuploid_idx in enumerate(nb_valid_in_aneuploid):
                         params[f"{data_type}-inv_phi"][aneuploid_idx] = mle_invphi(
                             X_gnk[local_idx : local_idx + 1],
@@ -223,7 +229,9 @@ class Cell_Model(Base_Model):
         assert fit_mode in allowed_fit_mode
         logging.info(f"Start cell model inference, fit_mode={fit_mode}")
 
-        params, fix_params = self._init_params(fit_mode, fix_params, init_params, share_params)
+        params, fix_params = self._init_params(
+            fit_mode, fix_params, init_params, share_params
+        )
         if self.verbose:
             self.print_params(params, fit_mode)
 
@@ -254,7 +262,9 @@ class Cell_Model(Base_Model):
             prev_ll = ll
 
         if self.verbose:
-            out_loss_file = os.path.join(self.work_dir, f"{self.prefix}.log_likelihoods.png")
+            out_loss_file = os.path.join(
+                self.work_dir, f"{self.prefix}.log_likelihoods.png"
+            )
             plot_loss(ll_trace, out_loss_file, val_type="log-likelihood")
             # TODO store parameter traces?
         return params

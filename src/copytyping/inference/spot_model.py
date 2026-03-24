@@ -16,7 +16,6 @@ from scipy.optimize import minimize_scalar
 from scipy.special import logsumexp
 
 
-##################################################
 class Spot_Model(Base_Model):
     """Spot EM model, estimate tumor purity for each spot."""
 
@@ -33,9 +32,11 @@ class Spot_Model(Base_Model):
         super().__init__(
             barcodes, assay_type, data_types, data_sources, work_dir, prefix, verbose
         )
+        # latent variable ranges over tumor clones only (normal modeled by 1-theta)
+        self.tumor_clones = self.clones[1:]
+        self.K_tumor = len(self.tumor_clones)
         return
 
-    ##################################################
     def _init_params(
         self,
         fit_mode: str,
@@ -59,11 +60,16 @@ class Spot_Model(Base_Model):
             cell_types = self.barcodes[ref_label].unique()
             logging.info(f"Observed cell_types: {cell_types}")
             logging.info(f"Black list: {BLACK_LIST_CELLTYPE}")
-            is_normal_cell = (~self.barcodes[ref_label].isin(BLACK_LIST_CELLTYPE)).to_numpy()
+            is_normal_cell = (
+                ~self.barcodes[ref_label].isin(BLACK_LIST_CELLTYPE)
+            ).to_numpy()
         else:
             logging.info("infer normal cells using allele-only cell model")
             pure_model = Cell_Model(
-                self.barcodes, self.assay_type, self.data_types, self.data_sources,
+                self.barcodes,
+                self.assay_type,
+                self.data_types,
+                self.data_sources,
                 work_dir=self.work_dir,
             )
             allele_params = pure_model.fit(
@@ -100,59 +106,92 @@ class Spot_Model(Base_Model):
                 sx_data, params[f"{data_type}-lambda"]
             )
 
+        # estimate BB dispersion from normal spots (known genotype p=0.5)
+        if fit_mode in {"allele_only", "hybrid"}:
+            tau_key = f"{data_type}-tau"
+            imb_mask = sx_data.MASK["IMBALANCED"]
+            Y_normal = sx_data.Y[imb_mask][:, is_normal_cell]
+            D_normal = sx_data.D[imb_mask][:, is_normal_cell]
+            logtau_bounds = (np.log(5), np.log(500))
+            n_imb = imb_mask.sum()
+            tau_from_normal = np.full(
+                n_imb, init_params.get("tau0", 50.0), dtype=np.float32
+            )
+            for g in range(n_imb):
+                y = Y_normal[g : g + 1, :, None].astype(np.float64)
+                d = D_normal[g : g + 1, :, None].astype(np.float64)
+                if d.sum() == 0:
+                    continue
+                p = np.full_like(y, 0.5)
+                w = np.ones_like(y)
+                tau_from_normal[g] = mle_tau(y, d, p, w, logtau_bounds)
+            params[tau_key] = tau_from_normal
+            logging.info(
+                f"BB tau from normal spots: "
+                f"median={np.median(tau_from_normal):.1f}, "
+                f"mean={np.mean(tau_from_normal):.1f}"
+            )
+
         fix_params = {key: False for key in params.keys()}
         if init_fix_params is not None:
             for key in init_fix_params.keys():
                 fix_params[key] = init_fix_params[key]
 
+        # always fix theta and tau for spot model
+        fix_params[f"{data_type}-theta"] = True
+        fix_params[f"{data_type}-tau"] = True
+
         return params, fix_params
 
-    ##################################################
     def compute_log_likelihood(self, fit_mode: str, params: dict):
-        """compute log-likelihoods per spot per clone. (N, K)"""
-        global_lls = np.zeros((self.N, self.K), dtype=np.float32)
+        """compute log-likelihoods per tumor spot per tumor clone. (N_tumor, K_tumor)"""
+        N_t = self._N_tumor
+        global_lls = np.zeros((N_t, self.K_tumor), dtype=np.float32)
 
         data_type = self.data_types[0]
         sx_data: SX_Data = self.data_sources[data_type]
+        tumor_idx = self._tumor_idx
 
         lambda_g = params[f"{data_type}-lambda"]  # (G,)
-        rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
+        rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]  # (G, K_tumor)
 
         bb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
         nb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
+
+        theta_tumor = params[f"{data_type}-theta"][tumor_idx]
 
         if fit_mode in {"allele_only", "hybrid"}:
             MA, _ = sx_data.apply_mask_shallow(
                 mask_id="IMBALANCED", additional_mask=lambda_g > 0
             )
             allele_ll_mat = cond_betabin_logpmf_theta(
-                MA["Y"],
-                MA["D"],
+                MA["Y"][:, tumor_idx],
+                MA["D"][:, tumor_idx],
                 params[f"{data_type}-tau"][lambda_g[sx_data.MASK["IMBALANCED"]] > 0],
-                MA["BAF"],
+                MA["BAF"][:, 1:],
                 rdrs_gk[bb_mask],
-                params[f"{data_type}-theta"],
+                theta_tumor,
             )
-            allele_lls = allele_ll_mat.sum(axis=0)  # (N,K)
-            global_lls += allele_lls
+            global_lls += allele_ll_mat.sum(axis=0)
 
         if fit_mode in {"total_only", "hybrid"}:
             inv_phis = params[f"{data_type}-inv_phi"][
                 lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
             ]
             total_ll_mat = cond_negbin_logpmf_theta(
-                sx_data.X[nb_mask],
-                sx_data.T,
+                sx_data.X[nb_mask][:, tumor_idx],
+                sx_data.T[tumor_idx],
                 lambda_g[nb_mask],
                 inv_phis,
                 rdrs_gk[nb_mask],
-                params[f"{data_type}-theta"],
+                theta_tumor,
             )
-            total_lls = total_ll_mat.sum(axis=0)  # (N,K)
-            global_lls += total_lls
+            global_lls += total_ll_mat.sum(axis=0)
 
-        global_lls += np.log(params["pi"])[None, :]  # (N,K)
-        log_marg = logsumexp(global_lls, axis=1)  # (N,1)
+        pi_tumor = params["pi"][1:]
+        pi_tumor = pi_tumor / pi_tumor.sum()
+        global_lls += np.log(pi_tumor)[None, :]
+        log_marg = logsumexp(global_lls, axis=1)
         ll = np.sum(log_marg)
         return ll, log_marg, global_lls
 
@@ -163,106 +202,58 @@ class Spot_Model(Base_Model):
         params: dict,
         fix_params: dict,
         share_params: dict,
-        invphi_bounds=(1 / 100, 1 / 10),
+        invphi_bounds=(1 / 100, 1 / 2),
         logtau_bounds=(np.log(50), np.log(200)),
-        purity_bounds=(1e-4, 1.0 - 1e-4),
         t=0,
         eps=1e-10,
     ):
-        if not fix_params["pi"]:
-            # update mixing density for clone assignments
-            params["pi"] = np.sum(gamma, axis=0) / self.N
+        """M-step using tumor spots only. gamma shape: (N_tumor, K_tumor)."""
+        N_t = self._N_tumor
+        tumor_idx = self._tumor_idx
 
-        gamma_gnk = gamma[None, :, :]  # (1, N, K)
+        if not fix_params["pi"]:
+            pi_tumor = np.sum(gamma, axis=0) / N_t
+            params["pi"] = np.r_[params["pi"][0], pi_tumor * (1 - params["pi"][0])]
+
+        gamma_gnk = gamma[None, :, :]  # (1, N_tumor, K_tumor)
         data_type = self.data_types[0]
         sx_data: SX_Data = self.data_sources[data_type]
 
-        # parameters
         lambda_g = params[f"{data_type}-lambda"]
-        rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
-        p_gk = sx_data.BAF
+        rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
+        p_gk = sx_data.BAF[:, 1:]
 
         nb_mask = (sx_data.MASK["ANEUPLOID"]) & (lambda_g > 0)
         bb_mask = (sx_data.MASK["IMBALANCED"]) & (lambda_g > 0)
 
-        T_n = sx_data.T  # (N,)
+        T_tumor = sx_data.T[tumor_idx]
+        theta_tumor = params[f"{data_type}-theta"][tumor_idx]
 
-        # NB inputs and dispersions — only needed for total_only / hybrid
-        X_gn = None
-        inv_phi_g = None
-        if fit_mode in {"total_only", "hybrid"}:
-            inv_phi_g = params[f"{data_type}-inv_phi"][lambda_g[sx_data.MASK["ANEUPLOID"]] > 0]
-            X_gn = sx_data.X[nb_mask, :]  # (G_nb, N)
-
-        # BB inputs and dispersions — only needed for allele_only / hybrid
-        Y_gn = None
-        D_gn = None
-        tau_g = None
-        if fit_mode in {"allele_only", "hybrid"}:
-            tau_g = params[f"{data_type}-tau"][lambda_g[sx_data.MASK["IMBALANCED"]] > 0]
-            Y_gn = sx_data.Y[bb_mask, :]  # (G_bb, N)
-            D_gn = sx_data.D[bb_mask, :]  # (G_bb, N)
-
-        ##################################################
-        # update tumor proportion via MLE
-        if not fix_params[f"{data_type}-theta"]:
-            theta_arr = np.zeros_like(params[f"{data_type}-theta"], dtype=np.float32)
-            for n in range(self.N):
-
-                def neg_Q_theta(theta):
-                    theta = np.array([theta], dtype=float)
-                    Q = 0.0
-                    if fit_mode in {"total_only", "hybrid"}:
-                        ll_nb = cond_negbin_logpmf_theta(
-                            X=X_gn[:, n : n + 1],
-                            T=np.array([T_n[n]], dtype=float),
-                            lam_g=lambda_g[nb_mask],
-                            inv_phi=inv_phi_g,
-                            rdrs_gk=rdrs_gk[nb_mask],
-                            theta=theta,
-                        )  # (G_nb, 1, K)
-                        Q += np.sum(ll_nb[:, 0, :] * gamma[n][None, :])
-                    if fit_mode in {"allele_only", "hybrid"}:
-                        ll_bb = cond_betabin_logpmf_theta(
-                            Y=Y_gn[:, n : n + 1],
-                            D=D_gn[:, n : n + 1],
-                            tau=tau_g,
-                            p=p_gk[bb_mask],
-                            rdrs_gk=rdrs_gk[bb_mask],
-                            theta=theta,
-                        )
-                        Q += np.sum(ll_bb[:, 0, :] * gamma[n][None, :])
-                    return -Q
-
-                res = minimize_scalar(
-                    neg_Q_theta,
-                    bounds=purity_bounds,
-                    method="bounded",
-                )
-                theta_arr[n] = np.clip(res.x, 1e-4, 1.0 - 1e-4)
-            params[f"{data_type}-theta"] = theta_arr
-
-        ##################################################
-        # update NB over-dispersion inv_phi
         if (
             fit_mode in {"total_only", "hybrid"}
             and not fix_params[f"{data_type}-inv_phi"]
         ):
+            inv_phi_g = params[f"{data_type}-inv_phi"][
+                lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
+            ]
+            X_gn = sx_data.X[nb_mask][:, tumor_idx]  # (G_nb, N_tumor)
+
             X_gnk = X_gn[:, :, None]
-            T_gnk = T_n[None, :, None]
+            T_gnk = T_tumor[None, :, None]
             lam_gnk = lambda_g[nb_mask][:, None, None]
             rdrs_gnk = rdrs_gk[nb_mask][:, None, :]
-            theta_gnk = params[f"{data_type}-theta"][None, :, None]
+            theta_gnk = theta_tumor[None, :, None]
 
             mu_gnk = T_gnk * lam_gnk * (theta_gnk * rdrs_gnk + (1.0 - theta_gnk))
-            # mu_gnk = np.clip(mu_gnk, eps, None)
 
             if share_params.get(f"{data_type}-inv_phi", False):
                 params[f"{data_type}-inv_phi"][:] = mle_invphi(
                     X_gnk, mu_gnk, gamma_gnk, invphi_bounds
                 )
             else:
-                nb_valid_in_aneuploid = np.where(lambda_g[sx_data.MASK["ANEUPLOID"]] > 0)[0]
+                nb_valid_in_aneuploid = np.where(
+                    lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
+                )[0]
                 for local_idx, aneuploid_idx in enumerate(nb_valid_in_aneuploid):
                     params[f"{data_type}-inv_phi"][aneuploid_idx] = mle_invphi(
                         X_gnk[local_idx : local_idx + 1],
@@ -271,13 +262,14 @@ class Spot_Model(Base_Model):
                         invphi_bounds,
                     )
 
-        ##################################################
-        # update BB over-dispersion tau
         if fit_mode in {"allele_only", "hybrid"} and not fix_params[f"{data_type}-tau"]:
+            Y_gn = sx_data.Y[bb_mask][:, tumor_idx]
+            D_gn = sx_data.D[bb_mask][:, tumor_idx]
+
             Y_gnk = Y_gn[:, :, None]
             D_gnk = D_gn[:, :, None]
             rdrs_gnk = rdrs_gk[bb_mask][:, None, :]
-            theta_gnk = params[f"{data_type}-theta"][None, :, None]
+            theta_gnk = theta_tumor[None, :, None]
             p_gnk = p_gk[bb_mask][:, None, :]
 
             denom = rdrs_gnk * theta_gnk + (1.0 - theta_gnk)
@@ -289,7 +281,9 @@ class Spot_Model(Base_Model):
                 tau_hat = mle_tau(Y_gnk, D_gnk, p_hat, gamma_gnk, logtau_bounds)
                 params[f"{data_type}-tau"][:] = tau_hat
             else:
-                bb_valid_in_imbalanced = np.where(lambda_g[sx_data.MASK["IMBALANCED"]] > 0)[0]
+                bb_valid_in_imbalanced = np.where(
+                    lambda_g[sx_data.MASK["IMBALANCED"]] > 0
+                )[0]
                 for local_idx, imbalanced_idx in enumerate(bb_valid_in_imbalanced):
                     params[f"{data_type}-tau"][imbalanced_idx] = mle_tau(
                         Y_gnk[local_idx : local_idx + 1],
@@ -307,13 +301,27 @@ class Spot_Model(Base_Model):
         init_params={},
         share_params={},
         max_iter=100,
+        purity_threshold=0.5,
         tol=1e-4,
         eps=1e-10,
     ):
         assert fit_mode in allowed_fit_mode
         logging.info(f"Start spot model inference, fit_mode={fit_mode}")
 
-        params, fix_params = self._init_params(fit_mode, fix_params, init_params, share_params)
+        params, fix_params = self._init_params(
+            fit_mode, fix_params, init_params, share_params
+        )
+
+        # partition spots: only tumor spots participate in EM
+        data_type = self.data_types[0]
+        theta = params[f"{data_type}-theta"]
+        self._tumor_idx = np.where(theta >= purity_threshold)[0]
+        self._N_tumor = len(self._tumor_idx)
+        logging.info(
+            f"EM on {self._N_tumor}/{self.N} tumor spots (purity >= {purity_threshold})"
+        )
+        assert self._N_tumor > 0, "no tumor spots above purity threshold"
+
         if self.verbose:
             self.print_params(params, fit_mode)
 
@@ -321,8 +329,7 @@ class Spot_Model(Base_Model):
         param_trace = []
         prev_ll = -np.inf
         for t in range(1, max_iter):
-            if self.verbose:
-                param_trace.append(copy.deepcopy(params))
+            param_trace.append(copy.deepcopy(params))
             gamma = self._e_step(fit_mode, params, t)
             self._m_step(
                 fit_mode,
@@ -349,7 +356,59 @@ class Spot_Model(Base_Model):
             prev_ll = ll
 
         if self.verbose:
-            out_loss_file = os.path.join(self.work_dir, f"{self.prefix}.log_likelihoods.png")
+            out_loss_file = os.path.join(
+                self.work_dir, f"{self.prefix}.log_likelihoods.png"
+            )
             plot_loss(ll_trace, out_loss_file, val_type="log-likelihood")
-            # TODO store parameter traces?
+        self.param_trace = param_trace
+        self.save_param_trace(param_trace)
         return params
+
+    def predict(
+        self,
+        fit_mode: str,
+        params: dict,
+        label: str,
+        posterior_thres: float = 0.5,
+        margin_thres: float = 0.1,
+        tumorprop_threshold: float = 0.5,
+    ):
+        logging.info("Decode labels with MAP estimation")
+        # posteriors only for tumor spots (N_tumor, K_tumor)
+        tumor_posteriors = self._e_step(fit_mode, params)
+        tumor_clones = self.clones[1:]
+
+        anns = self.barcodes.copy(deep=True)
+        theta_key = f"{self.data_types[0]}-theta"
+        anns["tumor_purity"] = params[theta_key]
+
+        # init all posteriors to 0, fill tumor spots
+        for c in tumor_clones:
+            anns[c] = 0.0
+        anns.iloc[self._tumor_idx, anns.columns.get_indexer(tumor_clones)] = (
+            tumor_posteriors
+        )
+
+        probs = anns[tumor_clones].to_numpy()
+        probs_sorted = np.sort(probs, axis=1)
+        anns["max_posterior"] = probs_sorted[:, -1]
+        if probs_sorted.shape[1] > 1:
+            anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
+        else:
+            anns["margin_delta"] = 1.0
+
+        anns[label] = anns[tumor_clones].idxmax(axis=1)
+
+        # normal spots: theta below threshold
+        mask_normal = anns["tumor_purity"] < tumorprop_threshold
+        anns.loc[mask_normal, label] = "normal"
+        anns.loc[mask_normal, "max_posterior"] = 0.0
+        anns.loc[mask_normal, "margin_delta"] = 0.0
+        logging.info(
+            f"set {mask_normal.sum()} spots to normal (purity < {tumorprop_threshold})"
+        )
+
+        clone_props = {
+            clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones
+        }
+        return anns, clone_props

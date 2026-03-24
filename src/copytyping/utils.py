@@ -32,6 +32,7 @@ BLACK_LIST_CELLTYPE = {
 
 NA_CELLTYPE = {"Unknown", "NA"}
 
+
 def get_ord2chr(ch="chr"):
     return [f"{ch}{i}" for i in range(1, 23)] + [f"{ch}X", f"{ch}Y"]
 
@@ -642,3 +643,22 @@ def setup_logging(args) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+
+def add_file_logging(out_dir: str, command: str = "copytyping") -> None:
+    """Attach a FileHandler to the root logger so logs are also written to *out_dir/<command>.log*."""
+    os.makedirs(out_dir, exist_ok=True)
+    level = (
+        logging.root.level if logging.root.level != logging.WARNING else logging.INFO
+    )
+    fh = logging.FileHandler(os.path.join(out_dir, f"{command}.log"), mode="w")
+    fh.setLevel(level)
+    fh.setFormatter(
+        logging.Formatter(
+            "%(asctime)s.%(msecs)03d %(levelname)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    logging.root.addHandler(fh)
+    if logging.root.level > level:
+        logging.root.setLevel(level)

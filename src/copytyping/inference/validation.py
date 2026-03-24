@@ -88,8 +88,11 @@ def refine_labels_by_reference(
         anns[ref_label].isin(TUMOR_LABELS) & (anns[cell_label] == "normal"), out_label
     ] = "NA"
     anns.loc[
-        (~anns[ref_label].isin(TUMOR_LABELS)) & (anns[cell_label] != "normal"), out_label
+        (~anns[ref_label].isin(TUMOR_LABELS)) & (anns[cell_label] != "normal"),
+        out_label,
     ] = "NA"
     num_na_after = (anns[out_label] == "NA").sum()
-    logging.info(f"#NA before/after refinement={num_na_before}->{num_na_after} / {len(anns)}")
+    logging.info(
+        f"#NA before/after refinement={num_na_before}->{num_na_after} / {len(anns)}"
+    )
     return anns
