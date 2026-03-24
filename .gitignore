@@ -5,7 +5,7 @@ CLAUDE.md
 **/__pycache__/
 test/
 run.sh
-example/atac_test_out/
+tests/atac_test/
 simulations/sim_*/
 tmp/
 .DS_Store
