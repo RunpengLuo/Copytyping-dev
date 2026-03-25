@@ -149,8 +149,6 @@ class Cell_Model(Base_Model):
         params: dict,
         fix_params: dict,
         share_params: dict,
-        invphi_bounds=(1 / 100, 1 / 2),
-        logtau_bounds=(np.log(50), np.log(200)),
         t=0,
         eps=1e-10,
     ):
@@ -177,7 +175,7 @@ class Cell_Model(Base_Model):
 
                 if share_params.get(f"{data_type}-inv_phi", False):
                     params[f"{data_type}-inv_phi"][:] = mle_invphi(
-                        X_gnk, mu_gnk, gamma_gnk, invphi_bounds
+                        X_gnk, mu_gnk, gamma_gnk, self._invphi_bounds
                     )
                 else:
                     nb_valid_in_aneuploid = np.where(
@@ -188,7 +186,7 @@ class Cell_Model(Base_Model):
                             X_gnk[local_idx : local_idx + 1],
                             mu_gnk[local_idx : local_idx + 1],
                             gamma_gnk,
-                            invphi_bounds,
+                            self._invphi_bounds,
                         )
 
             # update BB over-dispersion tau
@@ -203,7 +201,7 @@ class Cell_Model(Base_Model):
                 D_gnk = MA["D"][:, :, None]  # (G, N, 1)
                 if share_params.get(f"{data_type}-tau", False):
                     params[f"{data_type}-tau"][:] = mle_tau(
-                        Y_gnk, D_gnk, p_gnk, gamma_gnk, logtau_bounds
+                        Y_gnk, D_gnk, p_gnk, gamma_gnk, self._logtau_bounds
                     )
                 else:
                     for local_idx in range(Y_gnk.shape[0]):
@@ -212,7 +210,7 @@ class Cell_Model(Base_Model):
                             D_gnk[local_idx : local_idx + 1],
                             p_gnk[local_idx : local_idx + 1],
                             gamma_gnk,
-                            logtau_bounds,
+                            self._logtau_bounds,
                         )
         return
 
@@ -228,6 +226,9 @@ class Cell_Model(Base_Model):
     ):
         assert fit_mode in allowed_fit_mode
         logging.info(f"Start cell model inference, fit_mode={fit_mode}")
+
+        self._invphi_bounds = (1 / init_params["max_phi"], 1 / init_params["min_phi"])
+        self._logtau_bounds = (np.log(init_params["min_tau"]), np.log(init_params["max_tau"]))
 
         params, fix_params = self._init_params(
             fit_mode, fix_params, init_params, share_params

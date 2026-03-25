@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 import numpy as np
 import pandas as pd
@@ -332,6 +333,95 @@ def load_genetic_map(genetic_map_file: str, mode="eagle2", sep=" "):
     genetic_map = sort_df_chr(genetic_map, ch="#CHR", pos="POS")
     genetic_map["POS0"] = genetic_map["POS"] - 1
     return genetic_map
+
+
+##################################################
+# bbc → segment aggregation
+##################################################
+
+
+def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc):
+    """Map bbc-level bins to segments and aggregate count matrices.
+
+    Args:
+        bbc_df: DataFrame with bbc-level cnv_segments (#CHR, START, END, bbc_id).
+        seg_ucn_file: Path to HATCHet seg.ucn.tsv with segment copy numbers.
+        X_bbc: (G_bbc, N) sparse or dense count matrix (read depth).
+        Y_bbc: (G_bbc, N) sparse or dense count matrix (B-allele).
+        D_bbc: (G_bbc, N) sparse or dense count matrix (total allele).
+
+    Returns:
+        seg_df: Segment-level DataFrame with CNP, PROPS, seg_id columns.
+        X_seg, Y_seg, D_seg: (G_seg, N) aggregated count matrices (sparse).
+    """
+    seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
+    seg_df["seg_id"] = np.arange(len(seg_df))
+    n_seg = len(seg_df)
+    n_bbc = len(bbc_df)
+    logging.info(f"aggregate_bbc_to_seg: {n_bbc} bbc bins → {n_seg} segments")
+
+    # map each bbc bin to a segment by coordinate containment
+    # bbc bins are subsets of segments, so use midpoint for assignment
+    bbc_mid = ((bbc_df["START"].to_numpy() + bbc_df["END"].to_numpy()) / 2).astype(
+        np.int64
+    )
+    bbc_chr = bbc_df["#CHR"].to_numpy()
+    seg_ids = np.full(n_bbc, -1, dtype=np.int64)
+
+    for chrom in seg_df["#CHR"].unique():
+        bbc_mask = bbc_chr == chrom
+        if not bbc_mask.any():
+            continue
+        seg_chrom = seg_df[seg_df["#CHR"] == chrom].sort_values("START")
+        starts = seg_chrom["START"].to_numpy()
+        ends = seg_chrom["END"].to_numpy()
+        ids = seg_chrom["seg_id"].to_numpy()
+        mids = bbc_mid[bbc_mask]
+
+        idx = np.searchsorted(starts, mids, side="right") - 1
+        safe_idx = idx.clip(min=0)
+        valid = (idx >= 0) & (mids < ends[safe_idx])
+        bbc_indices = np.where(bbc_mask)[0]
+        seg_ids[bbc_indices[valid]] = ids[idx[valid]]
+
+    n_unmapped = (seg_ids < 0).sum()
+    if n_unmapped > 0:
+        logging.warning(f"{n_unmapped}/{n_bbc} bbc bins not mapped to any segment")
+
+    mapped = seg_ids >= 0
+    logging.info(f"mapped {mapped.sum()}/{n_bbc} bbc bins to {n_seg} segments")
+
+    # aggregate counts using one-hot matrix multiplication
+    mapped_idx = np.where(mapped)[0]
+    mapped_seg_ids = seg_ids[mapped]
+
+    agg_matrix = csr_matrix(
+        (np.ones(len(mapped_idx), dtype=np.int8), (mapped_seg_ids, mapped_idx)),
+        shape=(n_seg, n_bbc),
+    )
+
+    if sparse.issparse(X_bbc):
+        X_seg = agg_matrix @ X_bbc
+        Y_seg = agg_matrix @ Y_bbc
+        D_seg = agg_matrix @ D_bbc
+    else:
+        X_seg = sparse.csr_matrix(agg_matrix @ X_bbc)
+        Y_seg = sparse.csr_matrix(agg_matrix @ Y_bbc)
+        D_seg = sparse.csr_matrix(agg_matrix @ D_bbc)
+
+    # aggregate #SNPS and #gene from bbc if available
+    for col in ("#SNPS", "#gene"):
+        if col in bbc_df.columns:
+            vals = bbc_df[col].to_numpy()
+            per_seg = (
+                pd.Series(vals[mapped_idx], dtype=int).groupby(mapped_seg_ids).sum()
+            )
+            seg_df[col] = per_seg.reindex(range(n_seg)).fillna(0).astype(int).values
+
+    logging.info(
+        f"segment-level matrices: X={X_seg.shape}, Y={Y_seg.shape}, D={D_seg.shape}"
+    )
+    return seg_df, X_seg, Y_seg, D_seg
 
 
 ##################################################

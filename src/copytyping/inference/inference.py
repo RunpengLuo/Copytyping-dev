@@ -80,6 +80,7 @@ def run(args=None):
             args[f"{data_type}_Y_count"],
             args[f"{data_type}_D_count"],
             data_type,
+            seg_ucn_file=args["seg_ucn"],
         )
 
         if cell_type_df is not None:
@@ -126,15 +127,27 @@ def run(args=None):
     margin_thres = args["margin_thres"]
 
     bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
-    init_params = {"pi": bulk_props, "tau0": args["tau"], "phi0": args["phi"]}
-    fix_params = {"pi": True}
+    init_params = {
+        "pi": bulk_props,
+        "tau0": args["min_tau"],
+        "phi0": args["min_phi"],
+        "min_tau": args["min_tau"],
+        "max_tau": args["max_tau"],
+        "min_phi": args["min_phi"],
+        "max_phi": args["max_phi"],
+        "theta_segment_selection": args.get("theta_segment_selection", "clonal_loh"),
+        "pi_alpha": args.get("pi_alpha", 0.5),
+    }
+    fix_params = {"pi": False}
     share_params = {}
     for data_type in data_types:
         fix_params[f"{data_type}-inv_phi"] = args["fix_NB_dispersion"]
         share_params[f"{data_type}-inv_phi"] = args["share_NB_dispersion"]
         fix_params[f"{data_type}-tau"] = args["fix_BB_dispersion"]
         share_params[f"{data_type}-tau"] = args["share_BB_dispersion"]
-        fix_params[f"{data_type}-theta"] = assay_type in SPOT_ASSAYS
+        fix_params[f"{data_type}-theta"] = (
+            assay_type in SPOT_ASSAYS and args["fix_tumor_purity"]
+        )
 
     if assay_type in CELL_ASSAYS:
         model = Cell_Model

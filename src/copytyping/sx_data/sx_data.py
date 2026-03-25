@@ -13,11 +13,12 @@ class SX_Data:
     def __init__(
         self,
         bc_file: str,
-        cnp_file: str,
+        bbc_file: str,
         x_count_file: str,
         y_count_file: str,
         d_count_file: str,
         data_type: str,
+        seg_ucn_file: str,
         laplace=0.01,
         verbose=1,
     ) -> None:
@@ -27,28 +28,36 @@ class SX_Data:
         )
         # Parse REP_ID from barcode suffix (format: {barcode}_{rep_id})
         self.barcodes["REP_ID"] = self.barcodes["BARCODE"].str.rsplit("_", n=1).str[-1]
-        self.cnv_blocks = pd.read_table(cnp_file, sep="\t")
+        self.N = len(self.barcodes)
+
+        # load bbc-level count matrices and aggregate to segment level
+        X_bbc = sparse.load_npz(x_count_file)
+        Y_bbc = sparse.load_npz(y_count_file)
+        D_bbc = sparse.load_npz(d_count_file)
+
+        bbc_df = pd.read_table(bbc_file, sep="\t")
+        assert X_bbc.shape[0] == len(bbc_df), (
+            f"X rows ({X_bbc.shape[0]}) != bbc bins ({len(bbc_df)})"
+        )
+        self.cnv_blocks, X_seg, Y_seg, D_seg = aggregate_bbc_to_seg(
+            bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc
+        )
+        self.X = X_seg.toarray().astype(np.int32)
+        self.Y = Y_seg.toarray().astype(np.int32)
+        self.D = D_seg.toarray().astype(np.int32)
+
         self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
             self.cnv_blocks, laplace=laplace
         )
-        self.N = len(self.barcodes)
         self.G = len(self.cnv_blocks)
         self.K = len(self.clones)
         self.MASK = get_cnp_mask(self.A, self.B, self.C)
         self.nrows_imbalanced = np.sum(self.MASK["IMBALANCED"])
         self.nrows_aneuploid = np.sum(self.MASK["ANEUPLOID"])
 
-        # (G, N)
-        self.X: np.ndarray = (
-            sparse.load_npz(x_count_file).toarray().astype(dtype=np.int32)
+        assert self.X.shape == (self.G, self.N), (
+            f"X shape {self.X.shape} != ({self.G}, {self.N})"
         )
-        self.Y: np.ndarray = (
-            sparse.load_npz(y_count_file).toarray().astype(dtype=np.int32)
-        )
-        self.D: np.ndarray = (
-            sparse.load_npz(d_count_file).toarray().astype(dtype=np.int32)
-        )
-        assert self.X.shape == (self.G, self.N)
         assert self.Y.shape == (self.G, self.N)
         assert self.D.shape == (self.G, self.N)
 

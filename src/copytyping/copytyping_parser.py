@@ -59,6 +59,14 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--seg_ucn",
+        required=True,
+        type=str,
+        help="HATCHet seg.ucn.tsv file with segment-level copy numbers. "
+        "--gex_dir contains bbc-level data which will be aggregated to segment level.",
+    )
+
+    parser.add_argument(
         "--genome_size",
         required=True,
         type=str,
@@ -97,18 +105,39 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="Laplace smoothing term when computing clone BAF",
     )
     parser.add_argument(
-        "--tau",
+        "--min_tau",
         required=False,
         default=50.0,
         type=float,
-        help="initial BB dispersion, over-dispersion=1/tau",
+        help="minimum BB dispersion (also used as init value)",
     )
     parser.add_argument(
-        "--phi",
+        "--max_tau",
         required=False,
-        default=30.0,
+        default=500.0,
         type=float,
-        help="initial NB dispersion, over-dispersion=1/phi",
+        help="maximum BB dispersion bound for MLE",
+    )
+    parser.add_argument(
+        "--min_phi",
+        required=False,
+        default=0.001,
+        type=float,
+        help="minimum NB dispersion phi (inv_phi upper bound = 1/min_phi)",
+    )
+    parser.add_argument(
+        "--max_phi",
+        required=False,
+        default=100.0,
+        type=float,
+        help="maximum NB dispersion phi (inv_phi lower bound = 1/max_phi)",
+    )
+    parser.add_argument(
+        "--pi_alpha",
+        required=False,
+        default=0.5,
+        type=float,
+        help="symmetric Dirichlet prior alpha for pi. <1: sparse (default 0.5), 1: MLE, >1: smoothing",
     )
 
     parser.add_argument(
@@ -138,6 +167,25 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         action="store_true",
         default=False,
         help="share Beta-binomial dispersion across CN states in M-step",
+    )
+    parser.add_argument(
+        "--fix_tumor_purity",
+        required=False,
+        action="store_true",
+        default=False,
+        help="fix tumor purity after init. Default: update theta in M-step.",
+    )
+    parser.add_argument(
+        "--no-fix_tumor_purity",
+        dest="fix_tumor_purity",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--theta_segment_selection",
+        required=False,
+        default="clonal_loh",
+        choices=["clonal_imbalanced", "clonal_loh"],
+        help="segment selection for theta init: clonal_loh (default) or clonal_imbalanced",
     )
     # post selection
     parser.add_argument(
@@ -258,5 +306,9 @@ def check_arguments_inference(args: dict):
         args["atac_X_count"] = x_count
         args["atac_Y_count"] = y_count
         args["atac_D_count"] = d_count
+    seg_ucn = args.get("seg_ucn", None)
+    if seg_ucn is not None:
+        assert os.path.exists(seg_ucn), f"missing --seg_ucn file: {seg_ucn}"
+    args["seg_ucn"] = seg_ucn
     args["data_types"] = data_types
     return args
