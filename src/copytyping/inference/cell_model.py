@@ -228,7 +228,10 @@ class Cell_Model(Base_Model):
         logging.info(f"Start cell model inference, fit_mode={fit_mode}")
 
         self._invphi_bounds = (1 / init_params["max_phi"], 1 / init_params["min_phi"])
-        self._logtau_bounds = (np.log(init_params["min_tau"]), np.log(init_params["max_tau"]))
+        self._logtau_bounds = (
+            np.log(init_params["min_tau"]),
+            np.log(init_params["max_tau"]),
+        )
 
         params, fix_params = self._init_params(
             fit_mode, fix_params, init_params, share_params

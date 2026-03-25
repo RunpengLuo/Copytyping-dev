@@ -190,11 +190,18 @@ def run(args=None):
                 anns, ref_label, label, f"{label}-refined"
             )
         tumor_post = "tumor_purity" if assay_type in SPATIAL_ASSAYS else "tumor"
-        metric, metric_str = evaluate_malignant_accuracy(
+        metric, metric_str, eval_rows = evaluate_malignant_accuracy(
             anns, cell_label=label, cell_type=ref_label, tumor_post=tumor_post
         )
-        metric["SAMPLE"] = sample
-        pd.DataFrame([metric]).to_csv(
+        for row in eval_rows:
+            row["SAMPLE"] = sample
+            row["assay_type"] = assay_type
+        eval_df = pd.DataFrame(eval_rows)
+        # reorder columns: SAMPLE, assay_type, REP_ID first
+        front_cols = ["SAMPLE", "assay_type", "REP_ID"]
+        other_cols = [c for c in eval_df.columns if c not in front_cols]
+        eval_df = eval_df[front_cols + other_cols]
+        eval_df.to_csv(
             os.path.join(out_dir, f"{out_prefix}.{assay_type}.evaluation.tsv"),
             sep="\t",
             header=True,

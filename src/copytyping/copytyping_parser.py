@@ -135,9 +135,9 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--pi_alpha",
         required=False,
-        default=0.5,
+        default=1.0,
         type=float,
-        help="symmetric Dirichlet prior alpha for pi. <1: sparse (default 0.5), 1: MLE, >1: smoothing",
+        help="symmetric Dirichlet prior alpha for pi. 1: MLE (default), <1: sparse, >1: smoothing",
     )
 
     parser.add_argument(

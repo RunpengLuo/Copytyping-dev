@@ -355,6 +355,10 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc):
         X_seg, Y_seg, D_seg: (G_seg, N) aggregated count matrices (sparse).
     """
     seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
+    # deduplicate: seg.ucn has one row per (segment, sample); keep first sample only
+    if "SAMPLE" in seg_df.columns:
+        first_sample = seg_df["SAMPLE"].iloc[0]
+        seg_df = seg_df[seg_df["SAMPLE"] == first_sample].reset_index(drop=True)
     seg_df["seg_id"] = np.arange(len(seg_df))
     n_seg = len(seg_df)
     n_bbc = len(bbc_df)
