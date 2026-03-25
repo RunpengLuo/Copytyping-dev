@@ -127,16 +127,20 @@ def run(args=None):
     margin_thres = args["margin_thres"]
 
     bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
+    if assay_type in SPOT_ASSAYS:
+        pi_init = bulk_props[1:]
+        pi_init = pi_init / pi_init.sum()
+    else:
+        pi_init = bulk_props
     init_params = {
-        "pi": bulk_props,
+        "pi": pi_init,
         "tau0": args["min_tau"],
         "phi0": args["min_phi"],
         "min_tau": args["min_tau"],
         "max_tau": args["max_tau"],
         "min_phi": args["min_phi"],
         "max_phi": args["max_phi"],
-        "theta_segment_selection": args.get("theta_segment_selection", "clonal_loh"),
-        "pi_alpha": args.get("pi_alpha", 0.5),
+        "pi_alpha": args.get("pi_alpha", 1.0),
     }
     fix_params = {"pi": False}
     share_params = {}

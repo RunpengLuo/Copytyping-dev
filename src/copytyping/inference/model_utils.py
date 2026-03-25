@@ -79,70 +79,11 @@ def empirical_rdr_gn(
     return rdr_matrix
 
 
-def estimate_tumor_proportion(
-    sx_data: SX_Data,
-    base_props: np.ndarray,
-    segment_selection: str = "clonal_imbalanced",
-):
-    """Estimate per-spot tumor purity using selected segments.
-
-    For each spot, fits theta via scalar MLE using the binomial model:
-
-        p_hat = (theta * mu_{g,k} * p_{g,k} + 0.5*(1-theta))
-                / (theta * mu_{g,k} + (1-theta))
-        Y_{g,n} ~ Binom(D_{g,n}, p_hat)
-
-    Spots with no valid coverage at the selected bins are left at theta=0.5.
-
-    Args:
-        sx_data: SX_Data instance providing A, B, C, BAF, Y, D arrays.
-        base_props: Array of shape (G,) with baseline proportions from normal
-            spots, used to compute clone-specific RDR (mu_{g,k}).
-        segment_selection: Which segments to use for theta estimation.
-            - "clonal_imbalanced": A≠B, same (A,B) across all tumor clones (default)
-            - "clonal_loh": LOH segments from MASK["CLONAL_LOH"]
-
-    Returns:
-        Array of shape (N,) with per-spot tumor purity estimates in [1e-4, 1-1e-4].
-    """
-    A_tumor = sx_data.A[:, 1:]  # (G, K_tumor)
-    B_tumor = sx_data.B[:, 1:]
-
-    if segment_selection == "clonal_loh":
-        clonal_imb = sx_data.MASK["CLONAL_LOH"]
-    else:
-        # Imbalanced in the first tumor clone
-        is_imbalanced = A_tumor[:, 0] != B_tumor[:, 0]
-        # Clonal: all tumor clones carry the same (A, B) as clone 1.
-        is_clonal = np.ones(sx_data.G, dtype=bool)
-        for k in range(1, A_tumor.shape[1]):
-            is_clonal &= (A_tumor[:, k] == A_tumor[:, 0]) & (
-                B_tumor[:, k] == B_tumor[:, 0]
-            )
-        clonal_imb = is_imbalanced & is_clonal
-
-    n_clonal_imb = np.sum(clonal_imb)
-    logging.info(f"init theta ({segment_selection}): {n_clonal_imb} bins")
-
-    if n_clonal_imb == 0:
-        logging.warning("no clonal imbalanced bins, setting theta=0.5")
-        return np.full(sx_data.N, 0.5, dtype=np.float32)
-
-    # BAF and RDR from clone 1. Valid because:
-    # - clonal_imbalanced: all tumor clones share same (A,B) by construction
-    # - clonal_loh: all tumor clones have B=0 (or A=0), so BAF is identical
-    rdrs_gk = clone_rdr_gk(base_props, sx_data.C)
-    p_k = sx_data.BAF[clonal_imb, 1]  # (G_imb,)
-    mu_k = rdrs_gk[clonal_imb, 1]  # (G_imb,)
-
-    # Y is B-allele count matching B copy number from CNP — no orientation needed
-    Y_bins = sx_data.Y[clonal_imb]  # (G_imb, N)
-    D_bins = sx_data.D[clonal_imb]  # (G_imb, N)
-
+def _fit_theta_spots(Y_bins, D_bins, p_k, mu_k, N, theta_arr, spot_mask):
+    """Fit theta for a subset of spots using binomial MLE on given bins."""
     eps = 1e-10
-    theta_arr = np.full(sx_data.N, 0.5, dtype=np.float32)
-
-    for n in range(sx_data.N):
+    n_fitted = 0
+    for n in np.where(spot_mask)[0]:
         d_n = D_bins[:, n]
         y_n = Y_bins[:, n]
         valid = (d_n > 0) & (mu_k > 0) & np.isfinite(mu_k)
@@ -161,5 +102,75 @@ def estimate_tumor_proportion(
 
         res = minimize_scalar(neg_ll, bounds=(1e-4, 1 - 1e-4), method="bounded")
         theta_arr[n] = np.clip(res.x, 1e-4, 1 - 1e-4)
+        n_fitted += 1
+    return n_fitted
+
+
+def estimate_tumor_proportion(sx_data: SX_Data, base_props: np.ndarray):
+    """Estimate per-spot tumor purity with fallback strategy.
+
+    For each spot, tries (in order):
+    1. Clonal LOH segments (strongest BAF signal)
+    2. Clonal imbalanced segments (A!=B, same across all tumor clones)
+    3. Fallback to theta=0.5
+
+    Args:
+        sx_data: SX_Data instance providing A, B, C, BAF, Y, D arrays.
+        base_props: Array of shape (G,) with baseline proportions from normal
+            spots, used to compute clone-specific RDR (mu_{g,k}).
+
+    Returns:
+        Array of shape (N,) with per-spot tumor purity estimates in [1e-4, 1-1e-4].
+    """
+    A_tumor = sx_data.A[:, 1:]
+    B_tumor = sx_data.B[:, 1:]
+    rdrs_gk = clone_rdr_gk(base_props, sx_data.C)
+
+    # clonal LOH mask
+    loh_mask = sx_data.MASK["CLONAL_LOH"]
+    # clonal imbalanced mask (A!=B, same across all tumor clones)
+    is_imbalanced = A_tumor[:, 0] != B_tumor[:, 0]
+    is_clonal = np.ones(sx_data.G, dtype=bool)
+    for k in range(1, A_tumor.shape[1]):
+        is_clonal &= (A_tumor[:, k] == A_tumor[:, 0]) & (B_tumor[:, k] == B_tumor[:, 0])
+    clonal_imb_mask = is_imbalanced & is_clonal
+
+    n_loh = loh_mask.sum()
+    n_imb = clonal_imb_mask.sum()
+    logging.info(f"init theta: {n_loh} clonal LOH bins, {n_imb} clonal imbalanced bins")
+
+    theta_arr = np.full(sx_data.N, 0.5, dtype=np.float32)
+    remaining = np.ones(sx_data.N, dtype=bool)
+
+    # tier 1: clonal LOH
+    if n_loh > 0:
+        p_loh = sx_data.BAF[loh_mask, 1]
+        mu_loh = rdrs_gk[loh_mask, 1]
+        Y_loh = sx_data.Y[loh_mask]
+        D_loh = sx_data.D[loh_mask]
+        # a spot has LOH coverage if any D > 0 in LOH bins
+        has_loh = np.any(D_loh > 0, axis=0)
+        n_fit = _fit_theta_spots(
+            Y_loh, D_loh, p_loh, mu_loh, sx_data.N, theta_arr, remaining & has_loh
+        )
+        remaining[has_loh] = False
+        logging.info(f"  LOH: fitted {n_fit} spots, {remaining.sum()} remaining")
+
+    # tier 2: clonal imbalanced (for spots without LOH coverage)
+    if remaining.any() and n_imb > 0:
+        p_imb = sx_data.BAF[clonal_imb_mask, 1]
+        mu_imb = rdrs_gk[clonal_imb_mask, 1]
+        Y_imb = sx_data.Y[clonal_imb_mask]
+        D_imb = sx_data.D[clonal_imb_mask]
+        has_imb = np.any(D_imb > 0, axis=0)
+        n_fit = _fit_theta_spots(
+            Y_imb, D_imb, p_imb, mu_imb, sx_data.N, theta_arr, remaining & has_imb
+        )
+        remaining[has_imb] = False
+        logging.info(f"  imbalanced: fitted {n_fit} spots, {remaining.sum()} remaining")
+
+    # tier 3: fallback (already 0.5)
+    if remaining.any():
+        logging.info(f"  fallback: {remaining.sum()} spots left at theta=0.5")
 
     return theta_arr

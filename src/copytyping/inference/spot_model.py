@@ -102,11 +102,9 @@ class Spot_Model(Base_Model):
 
         # initialize tumor purity
         if params.get(f"{data_type}-theta", None) is None:
-            theta_seg_sel = init_params.get("theta_segment_selection", "clonal_loh")
             params[f"{data_type}-theta"] = estimate_tumor_proportion(
                 sx_data,
                 params[f"{data_type}-lambda"],
-                segment_selection=theta_seg_sel,
             )
 
         # estimate BB dispersion from normal spots (known genotype p=0.5)
@@ -219,9 +217,7 @@ class Spot_Model(Base_Model):
             )
             global_lls += total_ll_mat.sum(axis=0)
 
-        pi_tumor = params["pi"][1:]
-        pi_tumor = pi_tumor / pi_tumor.sum()
-        global_lls += np.log(pi_tumor)[None, :]
+        global_lls += np.log(params["pi"])[None, :]
         log_marg = logsumexp(global_lls, axis=1)
         ll = np.sum(log_marg)
         return ll, log_marg, global_lls
@@ -243,13 +239,13 @@ class Spot_Model(Base_Model):
         if not fix_params["pi"]:
             alpha = self._pi_alpha
             N_k = np.sum(gamma, axis=0)  # (K_tumor,)
-            pi_tumor = (N_k + alpha - 1) / (N_t + self.K_tumor * (alpha - 1))
-            pi_tumor = np.clip(pi_tumor, 0, None)
-            if pi_tumor.sum() > 0:
-                pi_tumor = pi_tumor / pi_tumor.sum()
+            pi = (N_k + alpha - 1) / (N_t + self.K_tumor * (alpha - 1))
+            pi = np.clip(pi, 0, None)
+            if pi.sum() > 0:
+                pi = pi / pi.sum()
             else:
-                pi_tumor = np.ones(self.K_tumor) / self.K_tumor
-            params["pi"] = np.r_[params["pi"][0], pi_tumor * (1 - params["pi"][0])]
+                pi = np.ones(self.K_tumor) / self.K_tumor
+            params["pi"] = pi
 
         gamma_gnk = gamma[None, :, :]  # (1, N_tumor, K_tumor)
         data_type = self.data_types[0]

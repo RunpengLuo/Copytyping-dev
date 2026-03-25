@@ -180,13 +180,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         dest="fix_tumor_purity",
         action="store_false",
     )
-    parser.add_argument(
-        "--theta_segment_selection",
-        required=False,
-        default="clonal_loh",
-        choices=["clonal_imbalanced", "clonal_loh"],
-        help="segment selection for theta init: clonal_loh (default) or clonal_imbalanced",
-    )
     # post selection
     parser.add_argument(
         "--posterior_thres",
