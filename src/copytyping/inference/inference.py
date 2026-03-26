@@ -22,6 +22,7 @@ from copytyping.inference.validation import *
 from copytyping.plot.plot_common import *
 from copytyping.plot.plot_cell import *
 from copytyping.plot.plot_visium import plot_visium_panel, plot_visium_debug
+from copytyping.plot.plot_clone_diagnostic import plot_clone_diagnostic
 from copytyping.plot.plot_umap import *
 
 """
@@ -149,9 +150,8 @@ def run(args=None):
         share_params[f"{data_type}-inv_phi"] = args["share_NB_dispersion"]
         fix_params[f"{data_type}-tau"] = args["fix_BB_dispersion"]
         share_params[f"{data_type}-tau"] = args["share_BB_dispersion"]
-        fix_params[f"{data_type}-theta"] = (
-            assay_type in SPOT_ASSAYS and args["fix_tumor_purity"]
-        )
+        if assay_type in SPOT_ASSAYS:
+            fix_params[f"{data_type}-theta"] = True
 
     if assay_type in CELL_ASSAYS:
         model = Cell_Model
@@ -185,6 +185,19 @@ def run(args=None):
         tumorprop_threshold=args["tumorprop_threshold"],
     )
     logging.info(f"clone fractions: {clone_props}")
+
+    # clone diagnostic: per-segment BAF vs RDR scatter
+    plot_clone_diagnostic(
+        sample,
+        data_sources[data_types[0]],
+        anns,
+        model_params,
+        data_types[0],
+        os.path.join(plot_dir, f"{out_prefix}.{assay_type}.clone_diagnostic.pdf"),
+        ref_label=ref_label if ref_label in anns.columns else None,
+        dpi=args["dpi"],
+    )
+
     metric = {}
     metric_str = ""
     if ref_label in barcodes.columns:
@@ -322,6 +335,7 @@ def run(args=None):
                 barcodes=barcodes,
                 data_type=data_types[0],
                 out_dir=visium_dir,
+                clones=data_sources[data_types[0]].clones,
                 ref_label=ref_label if ref_label in barcodes.columns else None,
                 dpi=dpi,
             )

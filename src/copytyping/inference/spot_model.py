@@ -55,7 +55,7 @@ class Spot_Model(Base_Model):
         is_normal_cell = None
         if ref_label in self.barcodes.columns:
             logging.info(
-                f"use reference label={ref_label} to label normal cells for baseline inits"
+                f"use reference label={ref_label} to label normal spots for baseline inits"
             )
             cell_types = self.barcodes[ref_label].unique()
             logging.info(f"Observed cell_types: {cell_types}")
@@ -64,7 +64,7 @@ class Spot_Model(Base_Model):
                 ~self.barcodes[ref_label].isin(BLACK_LIST_CELLTYPE)
             ).to_numpy()
         else:
-            logging.info("infer normal cells using allele-only cell model")
+            logging.info("infer normal cells using allele-only BB model")
             pure_model = Cell_Model(
                 self.barcodes,
                 self.assay_type,
@@ -165,10 +165,6 @@ class Spot_Model(Base_Model):
         if init_fix_params is not None:
             for key in init_fix_params.keys():
                 fix_params[key] = init_fix_params[key]
-
-        # always fix dispersions (estimated from normal spots above)
-        fix_params[f"{data_type}-tau"] = True
-        fix_params[f"{data_type}-inv_phi"] = True
 
         return params, fix_params
 
@@ -409,21 +405,10 @@ class Spot_Model(Base_Model):
         )
         self._pi_alpha = init_params.get("pi_alpha", 0.5)
 
-        # partition spots for E-step
-        data_type = self.data_types[0]
-        theta = params[f"{data_type}-theta"]
-        if fix_params.get(f"{data_type}-theta", False):
-            # theta fixed: only run EM on tumor spots (original behavior)
-            self._tumor_idx = np.where(theta >= purity_threshold)[0]
-        else:
-            # theta updated: run EM on all spots, let theta determine normal vs tumor
-            self._tumor_idx = np.arange(self.N)
-        self._N_tumor = len(self._tumor_idx)
-        logging.info(
-            f"EM on {self._N_tumor}/{self.N} spots"
-            f"{' (purity >= ' + str(purity_threshold) + ')' if fix_params.get(f'{data_type}-theta', False) else ' (all, theta will update)'}"
-        )
-        assert self._N_tumor > 0, "no spots for EM"
+        # all spots participate in EM; theta is fixed and determines purity weighting
+        self._tumor_idx = np.arange(self.N)
+        self._N_tumor = self.N
+        logging.info(f"EM on {self.N} spots (all, theta fixed)")
 
         if self.verbose:
             self.print_params(params, fit_mode)
@@ -477,20 +462,18 @@ class Spot_Model(Base_Model):
         tumorprop_threshold: float = 0.5,
     ):
         logging.info("Decode labels with MAP estimation")
-        # posteriors only for tumor spots (N_tumor, K_tumor)
-        tumor_posteriors = self._e_step(fit_mode, params)
+        # posteriors for all spots (N, K_tumor)
+        posteriors = self._e_step(fit_mode, params)
         tumor_clones = self.clones[1:]
 
         anns = self.barcodes.copy(deep=True)
         theta_key = f"{self.data_types[0]}-theta"
         anns["tumor_purity"] = params[theta_key]
 
-        # init all posteriors to 0, fill tumor spots
+        # init all posteriors to 0, fill spots in EM
         for c in tumor_clones:
             anns[c] = 0.0
-        anns.iloc[self._tumor_idx, anns.columns.get_indexer(tumor_clones)] = (
-            tumor_posteriors
-        )
+        anns.iloc[self._tumor_idx, anns.columns.get_indexer(tumor_clones)] = posteriors
 
         probs = anns[tumor_clones].to_numpy()
         probs_sorted = np.sort(probs, axis=1)
@@ -500,18 +483,11 @@ class Spot_Model(Base_Model):
         else:
             anns["margin_delta"] = 1.0
 
+        # hard classify all spots to tumor clones by MAP (no purity threshold)
         anns[label] = anns[tumor_clones].idxmax(axis=1)
 
-        # normal spots: theta below threshold
-        mask_normal = anns["tumor_purity"] < tumorprop_threshold
-        anns.loc[mask_normal, label] = "normal"
-        anns.loc[mask_normal, "max_posterior"] = 0.0
-        anns.loc[mask_normal, "margin_delta"] = 0.0
-        logging.info(
-            f"set {mask_normal.sum()} spots to normal (purity < {tumorprop_threshold})"
-        )
-
         clone_props = {
-            clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones
+            clone: np.mean(anns[label].to_numpy() == clone) for clone in tumor_clones
         }
+        logging.info(f"clone fractions (all spots): {clone_props}")
         return anns, clone_props

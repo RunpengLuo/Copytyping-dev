@@ -121,7 +121,7 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--min_phi",
         required=False,
-        default=0.001,
+        default=0.01,
         type=float,
         help="minimum NB dispersion phi (inv_phi upper bound = 1/min_phi)",
     )
@@ -167,18 +167,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         action="store_true",
         default=False,
         help="share Beta-binomial dispersion across CN states in M-step",
-    )
-    parser.add_argument(
-        "--fix_tumor_purity",
-        required=False,
-        action="store_true",
-        default=False,
-        help="fix tumor purity after init. Default: update theta in M-step.",
-    )
-    parser.add_argument(
-        "--no-fix_tumor_purity",
-        dest="fix_tumor_purity",
-        action="store_false",
     )
     # post selection
     parser.add_argument(

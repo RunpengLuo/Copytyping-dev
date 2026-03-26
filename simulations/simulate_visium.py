@@ -319,15 +319,98 @@ def write_copytyping_input(
     coords,
     clone_labels,
     tumor_proportions,
+    sample_name="simulated",
+    bbc_bins_per_seg=10,
 ):
-    """Write all files needed by `copytyping inference --assay_type VISIUM`."""
+    """Write all files needed by `copytyping inference --assay_type VISIUM`.
+
+    Outputs:
+      - inputs/cnv_segments.tsv: bbc-level bin coordinates (no CNP)
+      - inputs/X_count.npz, Y_count.npz, D_count.npz: bbc-level count matrices
+      - inputs/barcodes.tsv.gz, VISIUM.h5ad, cell_types.tsv.gz
+      - seg.ucn.tsv: segment-level copy numbers (HATCHet format)
+      - ground_truth.tsv
+    """
     os.makedirs(out_dir, exist_ok=True)
     input_dir = os.path.join(out_dir, "inputs")
     os.makedirs(input_dir, exist_ok=True)
-    N = X.shape[1]
+    G, N = X.shape
     barcodes = [f"spot_{i:04d}-1_U1" for i in range(N)]
 
-    # copytyping input files → inputs/
+    # split each segment into bbc bins and expand count matrices
+    bbc_rows = []
+    X_bbc_blocks = []
+    Y_bbc_blocks = []
+    D_bbc_blocks = []
+    bbc_id = 0
+    for g in range(G):
+        row = cnv_df.iloc[g]
+        seg_start = int(row["START"])
+        seg_end = int(row["END"])
+        seg_len = seg_end - seg_start
+        n_bins = max(1, min(bbc_bins_per_seg, seg_len // 1000))
+        bin_size = seg_len // n_bins
+
+        # distribute counts across bins proportionally (uniform split)
+        for b in range(n_bins):
+            b_start = seg_start + b * bin_size
+            b_end = seg_start + (b + 1) * bin_size if b < n_bins - 1 else seg_end
+            bbc_rows.append(
+                {
+                    "#CHR": row["#CHR"],
+                    "START": b_start,
+                    "END": b_end,
+                    "bbc_id": bbc_id,
+                    "#SNPS": max(1, int(row.get("#SNPS", 100)) // n_bins),
+                    "#gene": max(1, int(row.get("#gene", 10)) // n_bins),
+                }
+            )
+            # split counts: for simplicity, distribute evenly with remainder to last bin
+            if b < n_bins - 1:
+                X_bbc_blocks.append(X[g : g + 1] // n_bins)
+                Y_bbc_blocks.append(Y[g : g + 1] // n_bins)
+                D_bbc_blocks.append(D[g : g + 1] // n_bins)
+            else:
+                X_bbc_blocks.append(
+                    X[g : g + 1] - (X[g : g + 1] // n_bins) * (n_bins - 1)
+                )
+                Y_bbc_blocks.append(
+                    Y[g : g + 1] - (Y[g : g + 1] // n_bins) * (n_bins - 1)
+                )
+                D_bbc_blocks.append(
+                    D[g : g + 1] - (D[g : g + 1] // n_bins) * (n_bins - 1)
+                )
+            bbc_id += 1
+
+    bbc_df = pd.DataFrame(bbc_rows)
+    X_bbc = np.vstack(X_bbc_blocks)
+    Y_bbc = np.vstack(Y_bbc_blocks)
+    D_bbc = np.vstack(D_bbc_blocks)
+    logging.info(f"Split {G} segments into {len(bbc_df)} bbc bins")
+
+    # write bbc-level cnv_segments.tsv (no CNP columns)
+    bbc_df.to_csv(os.path.join(input_dir, "cnv_segments.tsv"), sep="\t", index=False)
+
+    # write bbc-level count matrices
+    sparse.save_npz(os.path.join(input_dir, "X_count.npz"), sparse.csr_matrix(X_bbc))
+    sparse.save_npz(os.path.join(input_dir, "Y_count.npz"), sparse.csr_matrix(Y_bbc))
+    sparse.save_npz(os.path.join(input_dir, "D_count.npz"), sparse.csr_matrix(D_bbc))
+
+    # write seg.ucn.tsv (HATCHet format)
+    seg_ucn = cnv_df[["#CHR", "START", "END"]].copy()
+    seg_ucn["SAMPLE"] = f"{sample_name}_T1"
+    n_clones_total = len(cnv_df["CNP"].iloc[0].split(";"))
+    clone_names = ["normal"] + [f"clone{i}" for i in range(1, n_clones_total)]
+    for i, cname in enumerate(clone_names):
+        seg_ucn[f"cn_{cname}"] = cnv_df["CNP"].apply(lambda x, idx=i: x.split(";")[idx])
+        seg_ucn[f"u_{cname}"] = (
+            cnv_df[f"u_{cname}"]
+            if f"u_{cname}" in cnv_df.columns
+            else 1.0 / n_clones_total
+        )
+    seg_ucn.to_csv(os.path.join(out_dir, "seg.ucn.tsv"), sep="\t", index=False)
+
+    # barcodes
     pd.DataFrame(barcodes).to_csv(
         os.path.join(input_dir, "barcodes.tsv.gz"),
         sep="\t",
@@ -335,14 +418,10 @@ def write_copytyping_input(
         index=False,
         compression="gzip",
     )
-    cnv_df.to_csv(os.path.join(input_dir, "cnv_segments.tsv"), sep="\t", index=False)
-    sparse.save_npz(os.path.join(input_dir, "X_count.npz"), sparse.csr_matrix(X))
-    sparse.save_npz(os.path.join(input_dir, "Y_count.npz"), sparse.csr_matrix(Y))
-    sparse.save_npz(os.path.join(input_dir, "D_count.npz"), sparse.csr_matrix(D))
 
-    # minimal h5ad with spatial metadata for squidpy compatibility
+    # minimal h5ad with spatial metadata
     adata = AnnData(
-        X=sparse.csr_matrix(X.T),
+        X=sparse.csr_matrix(X_bbc.T),
         obs=pd.DataFrame(index=barcodes),
     )
     adata.obsm["spatial"] = coords.astype(np.int64)
@@ -368,7 +447,7 @@ def write_copytyping_input(
     }
     adata.write(os.path.join(input_dir, "VISIUM.h5ad"))
 
-    # cell_type reference → inputs/
+    # cell_type reference
     pd.DataFrame(
         {
             "BARCODE": barcodes,
@@ -381,7 +460,7 @@ def write_copytyping_input(
         compression="gzip",
     )
 
-    # ground truth → top-level
+    # ground truth
     pd.DataFrame(
         {
             "BARCODE": barcodes,
@@ -611,6 +690,7 @@ def main():
         coords,
         clone_labels,
         tumor_proportions,
+        sample_name=args.sample,
     )
     logging.info("Done.")
 
