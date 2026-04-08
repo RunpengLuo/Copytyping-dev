@@ -1,118 +1,83 @@
-import os
-import sys
 import logging
 
 import numpy as np
 import pandas as pd
-
-# import scanpy as sc
-# from scanpy import AnnData
-# import squidpy as sq
-# import snapatac2 as snap
-
-from scipy.io import mmread
-from scipy.sparse import csr_matrix
 from scipy import sparse
+from scipy.sparse import csr_matrix
 
-from copytyping.utils import *
-
+from copytyping.utils import read_seg_ucn_file
 
 ##################################################
 # preprocess IOs
 ##################################################
 
 
-##################################################
-def load_sample_file(sample_file: str):
-    """
-    one sample file, multiple trials.
-    SAMPLE TRIAL_ID MODALITY DATA_TYPE paths
-    """
-    sample_df = pd.read_table(sample_file, sep="\t")
-
-    return
-
-
-def read_barcodes_celltype_one_replicate(
-    barcode_file: str,
-    modality: str,
-    reference_file=None,
-    replicate_id="",
-    ref_label="cell_type",
+def load_modality_data(
+    bc_file: str,
+    bbc_file: str,
+    x_count_file: str,
+    a_allele_file: str,
+    b_allele_file: str,
+    bbc_phases_file: str,
+    data_type: str,
+    seg_ucn_file: str,
+    solfile=None,
 ):
-    barcodes = read_barcodes(barcode_file)
-    print(f"#barcodes={len(barcodes)}")
+    """Load bbc count matrices, apply phase correction, and aggregate.
 
-    barcodes_df = pd.DataFrame(data={"BARCODE": barcodes})
-    if replicate_id != "":
-        barcodes_df["REP_ID"] = replicate_id
-        barcodes_df["BARCODE_FULL"] = (
-            barcodes_df["BARCODE"].astype(str).str.rstrip() + f"_{replicate_id}"
-        )
-
-    if not reference_file is None:
-        if modality == "VISIUM":
-            barcodes_df = load_visium_path_annotation(
-                reference_file, label=ref_label, anns=barcodes_df
-            )
-        else:
-            celltypes = read_celltypes(reference_file)
-            barcodes_df = pd.merge(
-                left=barcodes_df, right=celltypes[["BARCODE", ref_label]], how="left"
-            )
-            barcodes_df[ref_label] = (
-                barcodes_df[ref_label].fillna(value="Unknown").astype(str)
-            )
-    return barcodes_df
-
-
-def load_seg_ucn(seg_ucn: str, min_cnv_length=1e6):
-    """load CNV profile. Filter any unconfident ones."""
-    print(f"load cnv profile, min_cnv_length={min_cnv_length}")
-    segs, clones, clone_props = read_seg_ucn_file(seg_ucn)
-    segs["SEG_BLOCKSIZE"] = segs["END"] - segs["START"]
-    cnv_mask = segs["SEG_BLOCKSIZE"] < min_cnv_length
-    # 2. CNP must contain at least one 1|0 or 2|0 anywhere in the string
-    # has_het = (
-    #     segs["CNP"].str.contains("1|0", regex=False) |
-    #     segs["CNP"].str.contains("2|0", regex=False) |
-    #     segs["CNP"].str.contains("3|0", regex=False) |
-    #     segs["CNP"].str.contains("2|1", regex=False)
-    # )
-    # cnv_mask |= ~has_het
-
-    # hard_list = [
-    #     "1|1;1|0;1|0",
-    #     "1|1;2|0;2|0",
-    #     "1|1;1|1;2|1",
-    #     "1|1;2|0;1|1"
-    # ]
-    # cnv_mask |= (~segs["CNP"].isin(hard_list))
-
-    no_het = segs["CNP"].str.contains("1|2", regex=False)
-    cnv_mask |= no_het
-
-    if np.sum(cnv_mask) > 0:
-        print("Following CNP entries are dropped: ")
-        print(segs.loc[cnv_mask, ["#CHR", "START", "END", "SEG_BLOCKSIZE", "CNP"]])
-        segs = segs.loc[~cnv_mask, :].reset_index(drop=True)
-
-    n_clones = len(clones)
-    cnv_Aallele = np.zeros((len(segs), n_clones), dtype=np.int32)
-    cnv_Ballele = np.zeros((len(segs), n_clones), dtype=np.int32)
-    for i, clone in enumerate(clones):
-        cnv_Aallele[:, i] = segs.apply(
-            func=lambda r: int(r[f"cn_{clone}"].split("|")[0]), axis=1
-        ).to_numpy()
-        cnv_Ballele[:, i] = segs.apply(
-            func=lambda r: int(r[f"cn_{clone}"].split("|")[1]), axis=1
-        ).to_numpy()
-    cnv_mixBAF = (cnv_Ballele @ clone_props) / (
-        (cnv_Aallele + cnv_Ballele) @ clone_props
+    Returns:
+        barcodes_df: DataFrame with BARCODE, REP_ID columns.
+        seg_df: Segment-level DataFrame with CNP, PROPS columns.
+        X_seg, Y_seg, D_seg: Dense int32 count matrices (G_seg, N).
+    """
+    barcodes_df = pd.read_table(
+        bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
     )
-    segs["BAF"] = cnv_mixBAF
-    segs["imbalanced"] = mark_imbalanced(segs)
-    return segs, cnv_Aallele, cnv_Ballele, cnv_mixBAF, clone_props
+    barcodes_df["REP_ID"] = barcodes_df["BARCODE"].str.rsplit("_", n=1).str[-1]
+
+    X_bbc = sparse.load_npz(x_count_file)
+    A_bbc = sparse.load_npz(a_allele_file)
+    B_bbc = sparse.load_npz(b_allele_file)
+
+    bbc_df = pd.read_table(bbc_file, sep="\t")
+    assert X_bbc.shape[0] == len(bbc_df), (
+        f"X rows ({X_bbc.shape[0]}) != bbc bins ({len(bbc_df)})"
+    )
+
+    # Load BBC phases and merge PHASE column into bbc_df
+    phases_df = pd.read_table(bbc_phases_file, sep="\t")
+    bbc_df = pd.merge(
+        bbc_df,
+        phases_df[["#CHR", "START", "END", "PHASE"]],
+        on=["#CHR", "START", "END"],
+        how="left",
+    )
+    assert bbc_df["PHASE"].notna().all(), (
+        "some BBC blocks have no matching phase in --bbc_phases"
+    )
+
+    # Apply phase correction: PHASE=0 → B-allele is B; PHASE=1 → B-allele is A (swap)
+    phases = bbc_df["PHASE"].to_numpy()[:, None]
+    Y_bbc = A_bbc.multiply(phases) + B_bbc.multiply(1 - phases)
+    Y_bbc.data = np.rint(Y_bbc.data).astype(np.int32)
+    D_bbc = A_bbc + B_bbc
+
+    logging.info(
+        f"phase correction applied: {int(bbc_df['PHASE'].sum())}/{len(bbc_df)} "
+        f"BBC blocks flipped"
+    )
+
+    seg_df, X_sp, Y_sp, D_sp = aggregate_bbc_to_seg(
+        bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=solfile
+    )
+    X_seg = X_sp.toarray().astype(np.int32)
+    Y_seg = Y_sp.toarray().astype(np.int32)
+    D_seg = D_sp.toarray().astype(np.int32)
+
+    logging.info(
+        f"segment-level matrices: X={X_seg.shape}, Y={Y_seg.shape}, D={D_seg.shape}"
+    )
+    return barcodes_df, seg_df, X_seg, Y_seg, D_seg
 
 
 def mark_imbalanced(segs: pd.DataFrame):
@@ -126,221 +91,65 @@ def mark_imbalanced(segs: pd.DataFrame):
     return segs.apply(is_imbalanced, axis=1).to_numpy()
 
 
-def mark_cna(segs: pd.DataFrame):
-    def is_cna(seg):
-        cnp = seg["CNP"].split(";")[1:]
-        cna = [int(cn.split("|")[0]) for cn in cnp]
-        cnb = [int(cn.split("|")[1]) for cn in cnp]
-        return any((a != 1) or (b != 1) for (a, b) in zip(cna, cnb))
-
-    return segs.apply(is_cna, axis=1).to_numpy()
-
-
-def mark_aneuploid(segs: pd.DataFrame):
-    def is_aneuploid(seg):
-        cnp = seg["CNP"].split(";")[1:]
-        cna = [int(cn.split("|")[0]) for cn in cnp]
-        cnb = [int(cn.split("|")[1]) for cn in cnp]
-        return any((a + b) != 2 for (a, b) in zip(cna, cnb))
-
-    return segs.apply(is_aneuploid, axis=1).to_numpy()
-
-
-# Load DNA bulk data
-def load_snps_HATCHet_old(
-    phased_snps: pd.DataFrame,
-    hatchet_files: list,
-):
-    [tumor_1bed_file] = hatchet_files
-    snp_info = read_baf_file(tumor_1bed_file)
-    snp_info = pd.merge(
-        left=snp_info, right=phased_snps, on=["#CHR", "POS"], how="left"
-    )
-    snp_info.dropna(subset=["GT"], inplace=True)
-    # assume one tumor sample for now
-    ref_counts = snp_info["REF"].to_numpy().astype(np.int32)
-    alt_counts = snp_info["ALT"].to_numpy().astype(np.int32)
-    allale_counts = ref_counts + alt_counts
-    return snp_info, allale_counts, ref_counts, alt_counts
-
-
-def load_snps_HATCHet_new(
-    phased_snps: pd.DataFrame,
-    hatchet_files: list,
-):
-    [allele_dir] = hatchet_files
-    snp_ifile = os.path.join(allele_dir, "snp_info.tsv.gz")
-    ref_mfile = os.path.join(allele_dir, "snp_matrix.ref.npz")
-    alt_mfile = os.path.join(allele_dir, "snp_matrix.alt.npz")
-    snp_info = pd.read_table(snp_ifile, sep="\t")
-    snp_info = pd.merge(
-        left=snp_info, right=phased_snps, on=["#CHR", "POS"], how="left"
-    )
-    assert np.all(~pd.isna(snp_info["GT"])), (
-        "invalid input, only phased SNPs should present here"
-    )
-    ref_mat = np.load(ref_mfile)["mat"].astype(np.int32)
-    alt_mat = np.load(alt_mfile)["mat"].astype(np.int32)
-    ref_counts = ref_mat[:, 1]
-    alt_counts = alt_mat[:, 1]
-    allele_counts = ref_counts + alt_counts
-    phases = snp_info["GT"].astype(np.int8).to_numpy()
-    b_counts = (phases * ref_counts + (1 - phases) * alt_counts).astype(
-        allele_counts.dtype
-    )
-    baf_vals = b_counts / allele_counts
-    return snp_info, allele_counts, ref_counts, alt_counts, b_counts, baf_vals
-
-
-def load_snps_pseudobulk(
-    barcodes_per_replicate: dict,
-    allele_infos: dict,
-    modality: str,
-    ref_label="path_label",
-):
-    assert modality == "VISIUM", "todo"
-    # all replicates share same snp info TODO clean later
-    snp_info = allele_infos[list(allele_infos.keys())[0]][0].copy(deep=True)
-    allele_counts = np.zeros(len(snp_info), dtype=np.int32)
-    ref_counts = np.zeros(len(snp_info), dtype=np.int32)
-    alt_counts = np.zeros(len(snp_info), dtype=np.int32)
-    for rep_id, barcodes_df in barcodes_per_replicate.items():
-        _, allele_counts_pb, ref_counts_pb, alt_counts_pb = allele_infos[rep_id]
-        if ref_label in barcodes_df:
-            tumor_mask = (barcodes_df[ref_label] == "tumor").to_numpy()
-            allele_counts += (
-                np.array(allele_counts_pb[:, tumor_mask].sum(axis=1))
-                .ravel()
-                .astype(np.int32)
-            )
-            ref_counts += (
-                np.array(ref_counts_pb[:, tumor_mask].sum(axis=1))
-                .ravel()
-                .astype(np.int32)
-            )
-            alt_counts += (
-                np.array(alt_counts_pb[:, tumor_mask].sum(axis=1))
-                .ravel()
-                .astype(np.int32)
-            )
-        else:
-            allele_counts += (
-                np.array(allele_counts_pb.sum(axis=1)).ravel().astype(np.int32)
-            )
-            ref_counts += np.array(ref_counts_pb.sum(axis=1)).ravel().astype(np.int32)
-            alt_counts += np.array(alt_counts_pb.sum(axis=1)).ravel().astype(np.int32)
-    return snp_info, allele_counts, ref_counts, alt_counts
-
-
-##################################################
-# Load Allele count data
-def load_cellsnp_files(
-    cellsnp_dir: str,
-    barcodes: list,
-):
-    print(f"load cell-snp files from {cellsnp_dir}")
-    barcode_file = os.path.join(cellsnp_dir, "cellSNP.samples.tsv")
-    vcf_file = os.path.join(cellsnp_dir, "cellSNP.base.vcf.gz")
-    dp_file = os.path.join(cellsnp_dir, "cellSNP.tag.DP.mtx")
-    ad_file = os.path.join(cellsnp_dir, "cellSNP.tag.AD.mtx")
-
-    raw_barcodes = read_barcodes(barcode_file)  # assume no header
-    barcode_indices = np.array([raw_barcodes.index(x) for x in barcodes])
-    dp_mat: csr_matrix = mmread(dp_file).tocsr()
-    alt_mat: csr_matrix = mmread(ad_file).tocsr()
-    ref_mat = dp_mat - alt_mat
-
-    dp_mat = dp_mat[:, barcode_indices]
-    alt_mat = alt_mat[:, barcode_indices]
-    ref_mat = ref_mat[:, barcode_indices]
-
-    cell_snps = read_VCF_cellsnp_err_header(vcf_file)
-    cell_snps["RAW_SNP_IDX"] = np.arange(len(cell_snps))  # use to index matrix
-    return cell_snps, dp_mat, ref_mat, alt_mat
-
-
-def load_calicost_prep_data(calicost_prep_dir: str, barcodes: list):
-    """
-    Here the barcodes list does not have slice suffix, and we only
-    load allele counts from the listed barcodes.
-    """
-    print(f"load allele count data from CalicoST preprocessed files")
-    barcode_file = os.path.join(calicost_prep_dir, "barcodes.txt")
-    a_mtx_file = os.path.join(calicost_prep_dir, "cell_snp_Aallele.npz")
-    b_mtx_file = os.path.join(calicost_prep_dir, "cell_snp_Ballele.npz")
-    usnp_id_file = os.path.join(calicost_prep_dir, "unique_snp_ids.npy")
-
-    raw_barcodes = read_barcodes(barcode_file)
-    barcode_indices = np.array([raw_barcodes.index(x) for x in barcodes])
-
-    # transpose to match (SNP, barcodes)
-    alt_mat = sparse.load_npz(a_mtx_file).T
-    ref_mat = sparse.load_npz(b_mtx_file).T
-    dp_mat = alt_mat + ref_mat
-
-    dp_mat = dp_mat[:, barcode_indices]
-    alt_mat = alt_mat[:, barcode_indices]
-    ref_mat = ref_mat[:, barcode_indices]
-
-    unique_snp_ids = np.load(usnp_id_file, allow_pickle=True)
-    cell_snps = pd.DataFrame(
-        [x.split("_") for x in unique_snp_ids], columns=["#CHR", "POS", "REF", "ALT"]
-    )
-    if not cell_snps["#CHR"].str.startswith("chr").any():
-        cell_snps["#CHR"] = "chr" + cell_snps["#CHR"].astype(str)
-
-    assert (len(cell_snps), len(barcodes)) == ref_mat.shape, (
-        "even the matrix shape does not match!"
-    )
-    # check for duplicates, wired bug in CalicoST, fix later
-    dup_mask = cell_snps.duplicated(subset=["#CHR", "POS"], keep="first")
-    if np.any(dup_mask):
-        print("found bug in CalicoST!!!!!!!!!!!!!!!!!!!!!")
-        dup_idx = cell_snps.index[dup_mask]
-        print("Duplicated rows (removed):")
-        print(cell_snps.loc[dup_idx, ["#CHR", "POS"]])
-        cell_snps = cell_snps.loc[~dup_mask].reset_index(drop=True)
-        dp_mat = dp_mat[~dup_mask.to_numpy(), :]
-        alt_mat = alt_mat[~dup_mask.to_numpy(), :]
-        ref_mat = ref_mat[~dup_mask.to_numpy(), :]
-        print(f"Removed {dup_mask.sum()} duplicated rows")
-
-    cell_snps["POS"] = cell_snps["POS"].astype(int)
-    cell_snps["RAW_SNP_IDX"] = np.arange(len(cell_snps))  # use to index matrix
-    print(f"#SNPs={len(cell_snps)}")
-
-    # placeholders
-    cell_snps["GT"] = 1
-    cell_snps["PS"] = 1
-    cell_snps["DP"] = np.array(dp_mat.sum(axis=1), dtype=np.int32).ravel()
-    return [cell_snps, dp_mat, ref_mat, alt_mat]
-
-
-def load_genetic_map(genetic_map_file: str, mode="eagle2", sep=" "):
-    assert mode == "eagle2"
-    genetic_map = pd.read_table(genetic_map_file, sep=sep, index_col=None).rename(
-        columns={
-            "chr": "#CHR",
-            "position": "POS",
-            "COMBINED_rate(cM/Mb)": "recomb_rate",
-            "Genetic_Map(cM)": "pos_cm",
-        }
-    )
-    genetic_map["#CHR"] = genetic_map["#CHR"].astype(str)
-    genetic_map.loc[genetic_map["#CHR"] == "23", "#CHR"] = "X"
-    if not genetic_map["#CHR"].str.startswith("chr").any():
-        genetic_map["#CHR"] = "chr" + genetic_map["#CHR"].astype(str)
-    genetic_map = sort_df_chr(genetic_map, ch="#CHR", pos="POS")
-    genetic_map["POS0"] = genetic_map["POS"] - 1
-    return genetic_map
-
-
 ##################################################
 # bbc → segment aggregation
 ##################################################
 
 
-def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc):
+def _apply_solfile(seg_df, solfile):
+    """Override cn_* and u_* columns in seg_df using a HATCHet solution file.
+
+    Matches rows by CLUSTER ID and rebuilds CNP/PROPS columns.
+    """
+    sol_df = pd.read_table(solfile, sep="\t")
+    if "SAMPLE" in sol_df.columns:
+        sol_df = sol_df[sol_df["SAMPLE"] == sol_df["SAMPLE"].iloc[0]]
+
+    cn_cols = [c for c in sol_df.columns if c.startswith("cn_")]
+    u_cols = [c for c in sol_df.columns if c.startswith("u_")]
+    clones = [c.replace("cn_", "") for c in cn_cols]
+
+    logging.info(
+        f"applying solfile: {solfile}, "
+        f"{len(cn_cols)} clones ({clones}), {len(sol_df)} clusters"
+    )
+
+    # build cluster → (cn, u) mapping
+    sol_map = sol_df.set_index("CLUSTER")[cn_cols + u_cols].to_dict("index")
+
+    # drop old cn_/u_ columns that don't match the solution's clone count
+    old_cn = [c for c in seg_df.columns if c.startswith("cn_")]
+    old_u = [c for c in seg_df.columns if c.startswith("u_")]
+    seg_df = seg_df.drop(columns=old_cn + old_u)
+
+    # add new columns from solution
+    for col in cn_cols + u_cols:
+        seg_df[col] = seg_df["CLUSTER"].map(
+            lambda cid, c=col: sol_map.get(cid, {}).get(c)
+        )
+
+    # check for unmapped clusters
+    unmapped = seg_df[cn_cols[0]].isna()
+    if unmapped.any():
+        logging.warning(
+            f"{unmapped.sum()} segments have CLUSTER IDs not in solfile, dropping them"
+        )
+        seg_df = seg_df[~unmapped].reset_index(drop=True)
+
+    # rebuild CNP and PROPS
+    seg_df["CNP"] = seg_df.apply(
+        lambda r: ";".join(str(r[f"cn_{c}"]) for c in clones), axis=1
+    )
+    clone_props = [float(seg_df[f"u_{c}"].iloc[0]) for c in clones]
+    seg_df["PROPS"] = ";".join(str(p) for p in clone_props)
+
+    logging.info(
+        f"solfile applied: {len(seg_df)} segments, CNP example: {seg_df['CNP'].iloc[0]}"
+    )
+    return seg_df, clones, clone_props
+
+
+def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None):
     """Map bbc-level bins to segments and aggregate count matrices.
 
     Args:
@@ -349,6 +158,7 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc):
         X_bbc: (G_bbc, N) sparse or dense count matrix (read depth).
         Y_bbc: (G_bbc, N) sparse or dense count matrix (B-allele).
         D_bbc: (G_bbc, N) sparse or dense count matrix (total allele).
+        solfile: Optional path to HATCHet solution.tsv to override CN profiles.
 
     Returns:
         seg_df: Segment-level DataFrame with CNP, PROPS, seg_id columns.
@@ -359,6 +169,11 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc):
     if "SAMPLE" in seg_df.columns:
         first_sample = seg_df["SAMPLE"].iloc[0]
         seg_df = seg_df[seg_df["SAMPLE"] == first_sample].reset_index(drop=True)
+
+    # override CN profiles from solution file if provided
+    if solfile is not None:
+        seg_df, clones, clone_props = _apply_solfile(seg_df, solfile)
+
     seg_df["seg_id"] = np.arange(len(seg_df))
     n_seg = len(seg_df)
     n_bbc = len(bbc_df)
@@ -433,35 +248,6 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc):
 ##################################################
 
 
-def load_allele_input(mod_dir: str):
-    bin_Aallele_file = os.path.join(mod_dir, "Aallele.npz")
-    bin_Ballele_file = os.path.join(mod_dir, "Ballele.npz")
-    bin_Tallele_file = os.path.join(mod_dir, "Tallele.npz")
-
-    a_allele_mat: np.ndarray = (
-        sparse.load_npz(bin_Aallele_file).toarray().astype(dtype=np.int32)
-    )
-    b_allele_mat: np.ndarray = (
-        sparse.load_npz(bin_Ballele_file).toarray().astype(dtype=np.int32)
-    )
-    t_allele_mat: np.ndarray = (
-        sparse.load_npz(bin_Tallele_file).toarray().astype(dtype=np.int32)
-    )
-    return a_allele_mat, b_allele_mat, t_allele_mat
-
-
-def load_count_input(mod_dir: str):
-    bin_count_file = os.path.join(mod_dir, f"count.npz")
-    bin_count_mat: np.ndarray = (
-        sparse.load_npz(bin_count_file).toarray().astype(dtype=np.int32)
-    )
-    return bin_count_mat
-
-
-def load_spatial_coordinates(coord_file: str):
-    pass
-
-
 def parse_cnv_profile(haplo_blocks: pd.DataFrame, laplace=0.01):
     num_clones = len(str(haplo_blocks["CNP"].iloc[0]).split(";"))
     clones = ["normal"] + [f"clone{i}" for i in range(1, num_clones)]
@@ -485,23 +271,6 @@ def parse_cnv_profile(haplo_blocks: pd.DataFrame, laplace=0.01):
 
     # assign the CNP group id
     return clones, A, B, C, BAF
-
-
-def parse_total_cnp(cnv_blocks: pd.DataFrame):
-    num_clones = len(str(cnv_blocks["CNP"].iloc[0]).split(";"))
-    clones = ["normal"] + [f"clone{i}" for i in range(1, num_clones)]
-    A = np.zeros((len(cnv_blocks), num_clones), dtype=np.int32)
-    B = np.zeros((len(cnv_blocks), num_clones), dtype=np.int32)
-    for i in range(num_clones):
-        A[:, i] = cnv_blocks.apply(
-            func=lambda r: int(r["CNP"].split(";")[i].split("|")[0]), axis=1
-        ).to_numpy()
-        B[:, i] = cnv_blocks.apply(
-            func=lambda r: int(r["CNP"].split(";")[i].split("|")[1]), axis=1
-        ).to_numpy()
-    C = A + B
-    # assign the CNP group id
-    return clones, A, B, C
 
 
 ##################################################
@@ -533,7 +302,7 @@ def load_visium_path_annotation(
     path_anns[raw_label] = path_anns[raw_label].astype("str")
     path_anns[label] = path_anns[raw_label]
 
-    if not anns is None:
+    if anns is not None:
         anns = pd.merge(anns, path_anns, on="BARCODE", how="left").set_index(
             "BARCODE", drop=False
         )

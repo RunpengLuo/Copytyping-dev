@@ -1,8 +1,7 @@
-import os
-import sys
 import argparse
+import os
 
-from copytyping.utils import *
+from copytyping.utils import ALL_ASSAYS, ATAC_ASSAYS, GEX_ASSAYS
 
 
 def add_arguments_inference(parser: argparse.ArgumentParser):
@@ -67,6 +66,23 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--bbc_phases",
+        required=True,
+        type=str,
+        help="TSV file with BBC block phase assignments "
+        "(must contain #CHR, START, END, PHASE columns).",
+    )
+
+    parser.add_argument(
+        "--solfile",
+        required=False,
+        type=str,
+        default=None,
+        help="Optional HATCHet solution.tsv to override "
+        "CN profiles (matched by CLUSTER ID).",
+    )
+
+    parser.add_argument(
         "--genome_size",
         required=True,
         type=str,
@@ -88,7 +104,16 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         type=str,
         default="hybrid",
         choices=["hybrid", "allele_only", "total_only"],
-        help="Likelihood mode: hybrid (BAF+RDR), allele_only (BAF only), total_only (RDR only)",
+        help="Likelihood mode: hybrid (BAF+RDR), "
+        "allele_only (BAF only), total_only (RDR only)",
+    )
+    parser.add_argument(
+        "--aggr_mode",
+        required=False,
+        default="clust",
+        choices=["seg", "clust"],
+        help="Aggregation mode: 'clust' merges segments with identical CNP (default), "
+        "'seg' uses raw segments.",
     )
     parser.add_argument(
         "--niters",
@@ -135,38 +160,27 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--pi_alpha",
         required=False,
-        default=1.0,
+        default=0.1,
         type=float,
-        help="symmetric Dirichlet prior alpha for pi. 1: MLE (default), <1: sparse, >1: smoothing",
+        help="symmetric Dirichlet prior alpha for pi. "
+        "1: MLE (default), <1: sparse, >1: smoothing",
     )
 
     parser.add_argument(
-        "--fix_NB_dispersion",
+        "--update_NB_dispersion",
         required=False,
         action="store_true",
         default=False,
-        help="fix Negative-binomial dispersion after init",
+        help="if set, update Negative-binomial dispersion "
+        "in M-step (default: fixed after init)",
     )
     parser.add_argument(
-        "--share_NB_dispersion",
+        "--update_BB_dispersion",
         required=False,
         action="store_true",
         default=False,
-        help="if set, all CN states share same NB dispersion parameter.",
-    )
-    parser.add_argument(
-        "--fix_BB_dispersion",
-        required=False,
-        action="store_true",
-        default=False,
-        help="if set, all CN states share same BB dispersion parameter.",
-    )
-    parser.add_argument(
-        "--share_BB_dispersion",
-        required=False,
-        action="store_true",
-        default=False,
-        help="share Beta-binomial dispersion across CN states in M-step",
+        help="if set, update Beta-binomial dispersion "
+        "in M-step (default: fixed after init)",
     )
     # post selection
     parser.add_argument(
@@ -195,7 +209,8 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=False,
         action="store_true",
         default=False,
-        help=f"mark unassigned if predicted label disagree with cell type (if available).",
+        help="mark unassigned if predicted label disagree "
+        "with cell type (if available).",
     )
 
     ##################################################
@@ -230,7 +245,7 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=False,
         action="store_true",
         default=False,
-        help=f"plot UMAP using BAF&RDR features",
+        help="plot UMAP using BAF&RDR features",
     )
     parser.add_argument(
         "-v",
@@ -256,18 +271,18 @@ def check_arguments_inference(args: dict):
         data_types.append("gex")
         cnv_segments = os.path.join(gex_dir, "cnv_segments.tsv")
         barcodes = os.path.join(gex_dir, "barcodes.tsv.gz")
-        x_count = os.path.join(gex_dir, "X_count.npz")
-        y_count = os.path.join(gex_dir, "Y_count.npz")
-        d_count = os.path.join(gex_dir, "D_count.npz")
+        x_count = os.path.join(gex_dir, "bb.Xcount.npz")
+        a_allele = os.path.join(gex_dir, "bb.Aallele.npz")
+        b_allele = os.path.join(gex_dir, "bb.Ballele.npz")
         mod = "scRNA" if assay_type == "multiome" else assay_type
         h5ad = os.path.join(gex_dir, f"{mod}.h5ad")
-        for file in [cnv_segments, barcodes, x_count, y_count, d_count, h5ad]:
+        for file in [cnv_segments, barcodes, x_count, a_allele, b_allele, h5ad]:
             assert os.path.exists(file), f"missing file: {file}"
         args["gex_barcodes"] = barcodes
         args["gex_cnv_segments"] = cnv_segments
         args["gex_X_count"] = x_count
-        args["gex_Y_count"] = y_count
-        args["gex_D_count"] = d_count
+        args["gex_A_allele"] = a_allele
+        args["gex_B_allele"] = b_allele
         args["gex_h5ad"] = h5ad
 
     if assay_type in ATAC_ASSAYS:
@@ -277,19 +292,26 @@ def check_arguments_inference(args: dict):
         data_types.append("atac")
         cnv_segments = os.path.join(atac_dir, "cnv_segments.tsv")
         barcodes = os.path.join(atac_dir, "barcodes.tsv.gz")
-        x_count = os.path.join(atac_dir, "X_count.npz")
-        y_count = os.path.join(atac_dir, "Y_count.npz")
-        d_count = os.path.join(atac_dir, "D_count.npz")
-        for file in [cnv_segments, barcodes, x_count, y_count, d_count]:
+        x_count = os.path.join(atac_dir, "bb.Xcount.npz")
+        a_allele = os.path.join(atac_dir, "bb.Aallele.npz")
+        b_allele = os.path.join(atac_dir, "bb.Ballele.npz")
+        for file in [cnv_segments, barcodes, x_count, a_allele, b_allele]:
             assert os.path.exists(file), f"missing file: {file}"
         args["atac_barcodes"] = barcodes
         args["atac_cnv_segments"] = cnv_segments
         args["atac_X_count"] = x_count
-        args["atac_Y_count"] = y_count
-        args["atac_D_count"] = d_count
+        args["atac_A_allele"] = a_allele
+        args["atac_B_allele"] = b_allele
     seg_ucn = args.get("seg_ucn", None)
     if seg_ucn is not None:
         assert os.path.exists(seg_ucn), f"missing --seg_ucn file: {seg_ucn}"
     args["seg_ucn"] = seg_ucn
+    bbc_phases = args.get("bbc_phases", None)
+    if bbc_phases is not None:
+        assert os.path.exists(bbc_phases), f"missing --bbc_phases file: {bbc_phases}"
+    args["bbc_phases"] = bbc_phases
+    solfile = args.get("solfile", None)
+    if solfile is not None:
+        assert os.path.exists(solfile), f"missing --solfile: {solfile}"
     args["data_types"] = data_types
     return args

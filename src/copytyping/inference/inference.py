@@ -1,29 +1,42 @@
-import os
-import sys
-import time
-import logging
 import argparse
+import logging
+import os
+
 import numpy as np
 import pandas as pd
-
 import scanpy as sc
-from scanpy import AnnData
 
-from copytyping.utils import *
 from copytyping.copytyping_parser import (
     add_arguments_inference,
     check_arguments_inference,
 )
-from copytyping.inference.cell_model import *
-from copytyping.inference.spot_model import *
-
-# from copytyping.inference.clustering import *
-from copytyping.inference.validation import *
-from copytyping.plot.plot_common import *
-from copytyping.plot.plot_cell import *
-from copytyping.plot.plot_visium import plot_visium_panel, plot_visium_debug
+from copytyping.inference.cell_model import Cell_Model
+from copytyping.inference.spot_model import Spot_Model
+from copytyping.inference.validation import (
+    compute_cluster_discrimination,
+    evaluate_clone_accuracy,
+    evaluate_malignant_accuracy,
+    refine_labels_by_reference,
+)
+from copytyping.io_utils import load_modality_data
+from copytyping.plot.plot_cell import plot_cnv_heatmap
 from copytyping.plot.plot_clone_diagnostic import plot_clone_diagnostic
-from copytyping.plot.plot_umap import *
+from copytyping.plot.plot_common import (
+    plot_cross_heatmap,
+    plot_posteriors,
+    plot_rdr_baf_1d_aggregated,
+)
+from copytyping.plot.plot_visium import plot_visium_debug, plot_visium_panel
+from copytyping.sx_data.sx_data import SX_Data
+from copytyping.utils import (
+    CELL_ASSAYS,
+    NA_CELLTYPE,
+    SPATIAL_ASSAYS,
+    SPOT_ASSAYS,
+    add_file_logging,
+    read_whitelist_segments,
+    setup_logging,
+)
 
 """
 Given X/Y/D count matrices and copy-number profile.
@@ -34,7 +47,7 @@ as preprocessed by unified-genotyping pipelien
 
 
 def run(args=None):
-    logging.info(f"run copytyping inference")
+    logging.info("run copytyping inference")
     if isinstance(args, argparse.Namespace):
         args = vars(args)
 
@@ -71,37 +84,49 @@ def run(args=None):
         assert "BARCODE" in cell_type_df.columns
         assert ref_label in cell_type_df.columns
 
-    data_sources = {}
+    aggr_mode = args.get("aggr_mode", "clust")
+    data_sources = {}  # used by EM (seg or clust level)
+    seg_data_sources = {}  # always seg level, used for plotting
     adatas = {}
     for data_type in data_types:
-        sx_data = SX_Data(
+        barcodes_df, seg_df, X_seg, Y_seg, D_seg = load_modality_data(
             args[f"{data_type}_barcodes"],
             args[f"{data_type}_cnv_segments"],
             args[f"{data_type}_X_count"],
-            args[f"{data_type}_Y_count"],
-            args[f"{data_type}_D_count"],
+            args[f"{data_type}_A_allele"],
+            args[f"{data_type}_B_allele"],
+            args["bbc_phases"],
             data_type,
-            seg_ucn_file=args["seg_ucn"],
+            args["seg_ucn"],
+            solfile=args.get("solfile"),
         )
 
         if cell_type_df is not None:
-            sx_data.barcodes = pd.merge(
-                left=sx_data.barcodes,
+            barcodes_df = pd.merge(
+                left=barcodes_df,
                 right=cell_type_df[["BARCODE", ref_label]],
                 on="BARCODE",
                 how="left",
                 validate="1:1",
                 sort=False,
             )
-            sx_data.barcodes[ref_label] = (
-                sx_data.barcodes[ref_label].fillna("Unknown").astype(str)
+            barcodes_df[ref_label] = (
+                barcodes_df[ref_label].fillna("Unknown").astype(str)
             )
-            if sx_data.barcodes[ref_label].isin(NA_CELLTYPE).all():
+            if barcodes_df[ref_label].isin(NA_CELLTYPE).all():
                 logging.warning(
                     f"all {data_type} barcodes have uninformative {ref_label} labels "
                     f"(all in NA_CELLTYPE={NA_CELLTYPE})"
                 )
-                sx_data.barcodes = sx_data.barcodes.drop(columns=[ref_label])
+                barcodes_df = barcodes_df.drop(columns=[ref_label])
+
+        seg_sx = SX_Data(barcodes_df, seg_df, X_seg, Y_seg, D_seg)
+        seg_data_sources[data_type] = seg_sx
+
+        if aggr_mode == "clust":
+            data_sources[data_type] = seg_sx.to_cluster_level()
+        else:
+            data_sources[data_type] = seg_sx
 
         if args.get(f"{data_type}_h5ad") is not None:
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
@@ -116,9 +141,9 @@ def run(args=None):
                 adata.obs[ref_label] = (
                     adata.obs_names.to_series().map(ct_map).fillna("Unknown").values
                 )
-        data_sources[data_type] = sx_data
+
     barcodes: pd.DataFrame = data_sources[data_types[0]].barcodes.copy()
-    cnv_blocks = data_sources[data_types[0]].cnv_blocks
+    cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
 
     method = args["method"]
     fit_mode = args.get("fit_mode", "hybrid")
@@ -144,14 +169,9 @@ def run(args=None):
         "pi_alpha": args.get("pi_alpha", 1.0),
     }
     fix_params = {"pi": False}
-    share_params = {}
     for data_type in data_types:
-        fix_params[f"{data_type}-inv_phi"] = args["fix_NB_dispersion"]
-        share_params[f"{data_type}-inv_phi"] = args["share_NB_dispersion"]
-        fix_params[f"{data_type}-tau"] = args["fix_BB_dispersion"]
-        share_params[f"{data_type}-tau"] = args["share_BB_dispersion"]
-        if assay_type in SPOT_ASSAYS:
-            fix_params[f"{data_type}-theta"] = True
+        fix_params[f"{data_type}-inv_phi"] = not args["update_NB_dispersion"]
+        fix_params[f"{data_type}-tau"] = not args["update_BB_dispersion"]
 
     if assay_type in CELL_ASSAYS:
         model = Cell_Model
@@ -173,7 +193,6 @@ def run(args=None):
         fit_mode,
         fix_params=fix_params,
         init_params=init_params,
-        share_params=share_params,
         max_iter=num_iters,
     )
     anns, clone_props = instance.predict(
@@ -186,10 +205,53 @@ def run(args=None):
     )
     logging.info(f"clone fractions: {clone_props}")
 
+    # Per-cluster discrimination (before remapping params to segment-level)
+    if ref_label in barcodes.columns:
+        clust_data = data_sources[data_types[0]]
+        clust_disc = compute_cluster_discrimination(
+            clust_data,
+            model_params,
+            anns,
+            pred_label=label,
+            gt_label=ref_label,
+            data_type=data_types[0],
+            is_spot=(assay_type in SPOT_ASSAYS),
+            seg_data=seg_data_sources[data_types[0]],
+        )
+        if len(clust_disc) > 0:
+            clust_disc.to_csv(
+                os.path.join(
+                    out_dir, f"{out_prefix}.{assay_type}.cluster_discrimination.tsv"
+                ),
+                sep="\t",
+                index=False,
+            )
+            logging.info(f"saved cluster discrimination to {out_dir}")
+
+    # Remap cluster-level params to segment-level for plotting
+    if aggr_mode == "clust":
+        for data_type in data_types:
+            clust_obj = data_sources[data_type]
+            if hasattr(clust_obj, "cluster_ids"):
+                cids = clust_obj.cluster_ids
+                lam_key = f"{data_type}-lambda"
+                if lam_key in model_params:
+                    model_params[lam_key] = model_params[lam_key][cids]
+                for disp_key in [f"{data_type}-tau", f"{data_type}-inv_phi"]:
+                    if disp_key in model_params and len(model_params[disp_key]) > 0:
+                        seg_sx = seg_data_sources[data_type]
+                        val = model_params[disp_key][0]
+                        n_seg = (
+                            seg_sx.nrows_imbalanced
+                            if "tau" in disp_key
+                            else seg_sx.nrows_aneuploid
+                        )
+                        model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
+
     # clone diagnostic: per-segment BAF vs RDR scatter
     plot_clone_diagnostic(
         sample,
-        data_sources[data_types[0]],
+        seg_data_sources[data_types[0]],
         anns,
         model_params,
         data_types[0],
@@ -233,6 +295,29 @@ def run(args=None):
             acol=label,
             bcol=ref_label,
         )
+
+        # Clone-level evaluation (ARI) if ref_label contains clone labels
+        clone_metric = evaluate_clone_accuracy(
+            anns,
+            pred_label=label,
+            gt_label=ref_label,
+        )
+        if clone_metric:
+            for k, v in clone_metric.items():
+                if k != "crosstab":
+                    eval_rows[0][k] = v
+                    metric[k] = v
+            eval_df = pd.DataFrame(eval_rows)
+            front_cols = ["SAMPLE", "assay_type", "REP_ID"]
+            other_cols = [c for c in eval_df.columns if c not in front_cols]
+            eval_df = eval_df[front_cols + other_cols]
+            eval_df.to_csv(
+                os.path.join(out_dir, f"{out_prefix}.{assay_type}.evaluation.tsv"),
+                sep="\t",
+                header=True,
+                index=False,
+            )
+
     anns.to_csv(
         os.path.join(out_dir, f"{out_prefix}.{assay_type}.annotations.tsv"),
         sep="\t",
@@ -253,7 +338,7 @@ def run(args=None):
     dpi = args["dpi"]
     transparent = args["transparent"]
     for data_type in data_types:
-        sx_data: SX_Data = data_sources[data_type]
+        sx_data: SX_Data = seg_data_sources[data_type]
         for val in ["BAF", "pi_gk", "log2RDR"]:
             if val != "BAF" and f"{data_type}-lambda" not in model_params:
                 continue
@@ -335,7 +420,7 @@ def run(args=None):
                 barcodes=barcodes,
                 data_type=data_types[0],
                 out_dir=visium_dir,
-                clones=data_sources[data_types[0]].clones,
+                clones=seg_data_sources[data_types[0]].clones,
                 ref_label=ref_label if ref_label in barcodes.columns else None,
                 dpi=dpi,
             )
