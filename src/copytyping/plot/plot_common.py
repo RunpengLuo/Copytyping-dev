@@ -303,7 +303,7 @@ def plot_rdr_baf_1d_aggregated(
                 alpha=0.8,
                 color=color,
             )
-            # expected RDR line at 1.0 for normal
+            # expected RDR line at 1.0 (normal baseline)
             ax_rdr.hlines(
                 y=1.0,
                 xmin=0,
@@ -312,6 +312,30 @@ def plot_rdr_baf_1d_aggregated(
                 linestyle=":",
                 linewidth=1,
             )
+            # expected RDR per segment for this clone: C[g,k] / C[g,0]
+            if cell_label != "NA":
+                try:
+                    clone_idx = sx_data.clones.index(cell_label)
+                    C_normal = np.maximum(sx_data.C[:, 0], 1)
+                    if mask_cnp:
+                        C_normal = C_normal[sx_data.MASK[mask_id]]
+                        clone_C = sx_data.C[sx_data.MASK[mask_id], clone_idx]
+                    else:
+                        clone_C = sx_data.C[:, clone_idx]
+                    exp_rdr = clone_C / C_normal
+                    exp_rdr_lines = [
+                        [(s, r), (t, r)]
+                        for s, t, r in zip(abs_starts, abs_ends, exp_rdr)
+                    ]
+                    ax_rdr.add_collection(
+                        LineCollection(
+                            exp_rdr_lines,
+                            linewidth=2,
+                            colors=[(0, 0, 0, 1)] * len(exp_rdr),
+                        )
+                    )
+                except ValueError:
+                    pass
             ax_rdr.set_ylim([-0.1, min(max(val_rdr.max() * 1.1, 2.0), 6.0)])
         else:
             ax_rdr.text(

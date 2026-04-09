@@ -25,7 +25,6 @@ from copytyping.io_utils import (
     union_align_barcodes,
 )
 from copytyping.plot.plot_cell import plot_cnv_heatmap
-from copytyping.plot.plot_clone_diagnostic import plot_clone_diagnostic
 from copytyping.plot.plot_common import (
     plot_cross_heatmap,
     plot_posteriors,
@@ -344,21 +343,6 @@ def run(args=None):
         params_rep = subset_model_params(model_params, rep_mask, data_types)
         rep_tag = f".{rep_id}" if len(rep_ids) > 1 else ""
 
-        # clone diagnostic
-        plot_clone_diagnostic(
-            sample,
-            subset_sx_data(seg_data_sources[data_types[0]], rep_mask),
-            anns_rep,
-            params_rep,
-            data_types[0],
-            os.path.join(
-                plot_dir,
-                f"{out_prefix}.{platform}{rep_tag}.clone_diagnostic.pdf",
-            ),
-            ref_label=ref_label if ref_label in anns_rep.columns else None,
-            dpi=dpi,
-        )
-
         # posteriors
         plot_posteriors(
             anns_rep,
@@ -385,15 +369,16 @@ def run(args=None):
         # per-data_type plots
         for data_type in data_types:
             sx_rep = subset_sx_data(seg_data_sources[data_type], rep_mask)
-            for val in ["BAF", "pi_gk", "log2RDR"]:
-                if val != "BAF" and f"{data_type}-lambda" not in params_rep:
+            for val in ["BAF", "log2RDR"]:
+                if val == "log2RDR" and f"{data_type}-lambda" not in params_rep:
                     continue
                 for my_label in [label, ref_label]:
                     if my_label not in anns_rep:
                         continue
-                    agg_levels = [(1, heatmap_agg1_dir)]
-                    if platform not in SPATIAL_PLATFORMS:
-                        agg_levels.append((agg_size, heatmap_aggx_dir))
+                    agg_levels = [
+                        (1, heatmap_agg1_dir),
+                        (agg_size, heatmap_aggx_dir),
+                    ]
                     for agg, agg_dir in agg_levels:
                         plot_cnv_heatmap(
                             sample,

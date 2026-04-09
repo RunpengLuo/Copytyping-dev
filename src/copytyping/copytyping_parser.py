@@ -289,12 +289,14 @@ def check_arguments_inference(args: dict):
         args["gex_A_allele"] = a_allele
         args["gex_B_allele"] = b_allele
 
-        # h5ad: use explicit --gex_h5ad, else try scRNA.h5ad (optional)
+        # h5ad: use explicit --gex_h5ad, else pick first .h5ad in gex_dir
         gex_h5ad = args.get("gex_h5ad")
         if gex_h5ad is None:
-            candidate = os.path.join(gex_dir, "scRNA.h5ad")
-            if os.path.exists(candidate):
-                gex_h5ad = candidate
+            h5ad_files = sorted(
+                f for f in os.listdir(gex_dir) if f.endswith(".h5ad")
+            )
+            if h5ad_files:
+                gex_h5ad = os.path.join(gex_dir, h5ad_files[0])
         if gex_h5ad is not None:
             assert os.path.exists(gex_h5ad), f"missing file: {gex_h5ad}"
         args["gex_h5ad"] = gex_h5ad
