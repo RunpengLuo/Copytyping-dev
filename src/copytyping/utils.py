@@ -157,6 +157,12 @@ def setup_logging(args) -> None:
     )
 
 
+def log_arguments(args) -> None:
+    d = vars(args) if hasattr(args, "__dict__") else args
+    lines = "\n".join(f"  {k}: {v}" for k, v in sorted(d.items()) if k != "func")
+    logging.info(f"parsed arguments:\n{lines}")
+
+
 def add_file_logging(out_dir: str, command: str = "copytyping") -> None:
     """Attach a FileHandler to the root logger so logs are also written to *out_dir/<command>.log*."""
     os.makedirs(out_dir, exist_ok=True)

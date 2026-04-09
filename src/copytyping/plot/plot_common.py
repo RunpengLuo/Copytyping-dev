@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.utils import get_chr_sizes
-from copytyping.io_utils import *
 from copytyping.sx_data.sx_data import SX_Data
 
 
@@ -160,12 +159,12 @@ def build_ch_boundary(
     xlab_chrs = chrs
     xtick_chrs = []
     for i in range(len(chrs)):
-        l = chr_offsets[chrs[i]]
+        left = chr_offsets[chrs[i]]
         if i < len(chrs) - 2:
-            r = chr_offsets[chrs[i + 1]]
+            right = chr_offsets[chrs[i + 1]]
         else:
-            r = chr_end
-        xtick_chrs.append((l + r) / 2)
+            right = chr_end
+        xtick_chrs.append((left + right) / 2)
 
     # infer chromosome-gaps from SEG file
     # all samples should share same gaps

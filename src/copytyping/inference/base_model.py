@@ -177,6 +177,14 @@ class Base_Model:
             np.log(init_params["min_tau"]),
             np.log(init_params["max_tau"]),
         )
+        self._tau_prior = (
+            init_params.get("tau_prior_a", 6.0),
+            init_params.get("tau_prior_b", 0.06),
+        )
+        self._invphi_prior = (
+            init_params.get("invphi_prior_a", 4.0),
+            init_params.get("invphi_prior_b", 0.4),
+        )
 
         params, fix_params = self._init_params(fit_mode, fix_params, init_params)
 

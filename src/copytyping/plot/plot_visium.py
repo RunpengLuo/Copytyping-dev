@@ -1,23 +1,14 @@
-import os
-import sys
-import shutil
 import logging
+import os
+import warnings
 
 import numpy as np
 import pandas as pd
-
-import scanpy as sc
-
-from copytyping.utils import *
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
-
-from copytyping.sx_data.sx_data import SX_Data
-from copytyping.io_utils import load_visium_path_annotation
-from copytyping.inference.validation import evaluate_malignant_accuracy
 
 
 def set_clone_colors(adata, col, gray="#b0b0b0"):
@@ -67,7 +58,9 @@ def blend_clone_color_by_purity(
         c = clone_rgb.get(lab, gray)
         rgba[i, :3] = purity[i] * c + (1 - purity[i]) * gray
 
-    adata.obs[out_col] = [mcolors.to_hex(rgba[i, :3]) for i in range(n)]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*categorical.*")
+        adata.obs[out_col] = [mcolors.to_hex(rgba[i, :3]) for i in range(n)]
     return rgba
 
 
@@ -270,7 +263,6 @@ def plot_visium_debug(
     """
     import squidpy as sq
     from sklearn.metrics import roc_auc_score
-    from scipy.special import softmax
     from copytyping.utils import is_tumor_label, NA_CELLTYPE
 
     plt.rcParams["pdf.fonttype"] = 42
@@ -288,7 +280,9 @@ def plot_visium_debug(
     iter_aucs = []
     if ref_label and ref_label in barcodes.columns:
         known = ~barcodes[ref_label].isin(NA_CELLTYPE)
-        y_true = barcodes.loc[known, ref_label].apply(is_tumor_label).to_numpy(dtype=int)
+        y_true = (
+            barcodes.loc[known, ref_label].apply(is_tumor_label).to_numpy(dtype=int)
+        )
         known_idx = known.to_numpy()
         for params_t in param_trace:
             theta_t = params_t[theta_key]

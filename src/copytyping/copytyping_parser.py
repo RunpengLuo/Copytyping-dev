@@ -168,6 +168,35 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="maximum NB dispersion phi (inv_phi lower bound = 1/max_phi)",
     )
     parser.add_argument(
+        "--tau_prior_a",
+        required=False,
+        default=6.0,
+        type=float,
+        help="Gamma prior shape for BB tau (default 6.0, mean=a/b=100)",
+    )
+    parser.add_argument(
+        "--tau_prior_b",
+        required=False,
+        default=0.06,
+        type=float,
+        help="Gamma prior rate for BB tau (default 0.06, mean=a/b=100)",
+    )
+    parser.add_argument(
+        "--invphi_prior_a",
+        required=False,
+        default=4.0,
+        type=float,
+        help="Gamma prior shape for NB inv_phi (default 4.0, mean=a/b=10)",
+    )
+    parser.add_argument(
+        "--invphi_prior_b",
+        required=False,
+        default=0.4,
+        type=float,
+        help="Gamma prior rate for NB inv_phi (default 0.4, mean=a/b=10)",
+    )
+
+    parser.add_argument(
         "--pi_alpha",
         required=False,
         default=0.1,
@@ -292,9 +321,7 @@ def check_arguments_inference(args: dict):
         # h5ad: use explicit --gex_h5ad, else pick first .h5ad in gex_dir
         gex_h5ad = args.get("gex_h5ad")
         if gex_h5ad is None:
-            h5ad_files = sorted(
-                f for f in os.listdir(gex_dir) if f.endswith(".h5ad")
-            )
+            h5ad_files = sorted(f for f in os.listdir(gex_dir) if f.endswith(".h5ad"))
             if h5ad_files:
                 gex_h5ad = os.path.join(gex_dir, h5ad_files[0])
         if gex_h5ad is not None:

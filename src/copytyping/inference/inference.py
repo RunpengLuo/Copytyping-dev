@@ -180,6 +180,10 @@ def run(args=None):
         "min_phi": args["min_phi"],
         "max_phi": args["max_phi"],
         "pi_alpha": args.get("pi_alpha", 1.0),
+        "tau_prior_a": args.get("tau_prior_a", 6.0),
+        "tau_prior_b": args.get("tau_prior_b", 0.06),
+        "invphi_prior_a": args.get("invphi_prior_a", 4.0),
+        "invphi_prior_b": args.get("invphi_prior_b", 0.4),
     }
     fix_params = {"pi": False}
     for data_type in data_types:

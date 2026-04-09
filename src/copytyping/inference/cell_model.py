@@ -1,7 +1,6 @@
 import logging
 
 import numpy as np
-
 from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
@@ -42,79 +41,43 @@ class Cell_Model(Base_Model):
         )
 
     def _init_params(self, fit_mode, init_fix_params, init_params):
-        params = self._init_base_params(fit_mode, init_params)
+        is_normal = self._identify_normal_cells(
+            init_fix_params,
+            init_params,
+        )
 
-        if fit_mode in {"total_only", "hybrid"} and any(
-            params.get(f"{dt}-lambda", None) is None for dt in self.data_types
-        ):
-            is_normal = self._identify_normal_cells(
-                init_fix_params,
-                init_params,
-            )
-            self._init_lambda(params, is_normal)
+        params = {
+            "pi": init_params.get("pi", np.ones(self.K) / self.K),
+        }
 
-        # Init dispersions from neutral cluster (same as spot model)
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
-            neutral_cids = [
-                c
-                for c in range(sx_data.G)
-                if all(
-                    sx_data.A[c, k] == 1 and sx_data.B[c, k] == 1
-                    for k in range(sx_data.K)
+
+            if fit_mode in {"total_only", "hybrid"}:
+                from copytyping.inference.model_utils import (
+                    compute_baseline_proportions,
                 )
-            ]
-            if len(neutral_cids) > 0:
-                if fit_mode in {"allele_only", "hybrid"}:
-                    if len(neutral_cids) == 1:
-                        Y_neut = sx_data.Y[neutral_cids[0] : neutral_cids[0] + 1]
-                        D_neut = sx_data.D[neutral_cids[0] : neutral_cids[0] + 1]
-                    else:
-                        Y_neut = sx_data.Y[neutral_cids].sum(axis=0, keepdims=True)
-                        D_neut = sx_data.D[neutral_cids].sum(axis=0, keepdims=True)
-                    Y_fit = Y_neut[:, :, None].astype(np.float64)
-                    D_fit = D_neut[:, :, None].astype(np.float64)
-                    global_tau = mle_tau(
-                        Y_fit,
-                        D_fit,
-                        np.full_like(Y_fit, 0.5),
-                        np.ones_like(Y_fit),
-                        self._logtau_bounds,
-                    )
-                    params[f"{data_type}-tau"][:] = global_tau
-                    logging.info(f"global tau={global_tau:.2f}")
 
-                if (
-                    fit_mode in {"total_only", "hybrid"}
-                    and f"{data_type}-lambda" in params
-                ):
-                    lambda_g = params[f"{data_type}-lambda"]
-                    lam_neut = (
-                        lambda_g[neutral_cids].sum()
-                        if len(neutral_cids) > 1
-                        else lambda_g[neutral_cids[0]]
-                    )
-                    if len(neutral_cids) == 1:
-                        X_neut = sx_data.X[neutral_cids[0] : neutral_cids[0] + 1]
-                    else:
-                        X_neut = sx_data.X[neutral_cids].sum(axis=0, keepdims=True)
-                    X_fit = X_neut[:, :, None].astype(np.float64)
-                    mu_fit = (sx_data.T[None, :, None] * lam_neut).astype(np.float64)
-                    global_invphi = mle_invphi(
-                        X_fit,
-                        mu_fit,
-                        np.ones_like(X_fit),
-                        self._invphi_bounds,
-                    )
-                    params[f"{data_type}-inv_phi"][:] = global_invphi
-                    logging.info(
-                        f"global inv_phi={global_invphi:.4f} (phi={1 / global_invphi:.2f})"
-                    )
+                lambda_g = compute_baseline_proportions(sx_data.X, sx_data.T, is_normal)
+                params[f"{data_type}-lambda"] = lambda_g
+                params[f"{data_type}-inv_phi"] = np.full(
+                    sx_data.nrows_aneuploid,
+                    1 / init_params["phi0"],
+                    dtype=np.float32,
+                )
 
-        fix_params = {key: False for key in params.keys()}
+            if fit_mode in {"allele_only", "hybrid"}:
+                params[f"{data_type}-tau"] = np.full(
+                    sx_data.nrows_imbalanced,
+                    init_params["tau0"],
+                    dtype=np.float32,
+                )
+
+        fix_params = {key: False for key in params}
         if init_fix_params is not None:
             for key in init_fix_params:
-                fix_params[key] = init_fix_params[key]
+                if key in fix_params:
+                    fix_params[key] = init_fix_params[key]
 
         return params, fix_params
 
@@ -172,8 +135,24 @@ class Cell_Model(Base_Model):
                 props_gk = clone_pi_gk(lambda_g, sx_data.C)[nb_mask]
                 mu_gnk = props_gk[:, None, :] * sx_data.T[None, :, None]
                 X_gnk = sx_data.X[nb_mask][:, :, None]
-                params[f"{data_type}-inv_phi"][:] = mle_invphi(
-                    X_gnk, mu_gnk, gamma_gnk, self._invphi_bounds
+                invphi_map = mle_invphi(
+                    X_gnk,
+                    mu_gnk,
+                    gamma_gnk,
+                    self._invphi_bounds,
+                    prior=self._invphi_prior,
+                )
+                params[f"{data_type}-inv_phi"][:] = invphi_map
+                invphi_mle = mle_invphi(
+                    X_gnk,
+                    mu_gnk,
+                    gamma_gnk,
+                    self._invphi_bounds,
+                )
+                logging.debug(
+                    f"{data_type} inv_phi: MLE={invphi_mle:.4f} "
+                    f"MAP={invphi_map:.4f} "
+                    f"(phi: MLE={1 / invphi_mle:.2f} MAP={1 / invphi_map:.2f})"
                 )
 
             # BB dispersion (shared across all bins)
@@ -185,6 +164,23 @@ class Cell_Model(Base_Model):
                 p_gnk = MA["BAF"][:, None, :]
                 Y_gnk = MA["Y"][:, :, None]
                 D_gnk = MA["D"][:, :, None]
-                params[f"{data_type}-tau"][:] = mle_tau(
-                    Y_gnk, D_gnk, p_gnk, gamma_gnk, self._logtau_bounds
+                tau_map = mle_tau(
+                    Y_gnk,
+                    D_gnk,
+                    p_gnk,
+                    gamma_gnk,
+                    self._logtau_bounds,
+                    prior=self._tau_prior,
+                )
+                params[f"{data_type}-tau"][:] = tau_map
+                tau_mle = mle_tau(
+                    Y_gnk,
+                    D_gnk,
+                    p_gnk,
+                    gamma_gnk,
+                    self._logtau_bounds,
+                )
+                logging.debug(
+                    f"{data_type} tau: MLE={tau_mle:.2f} MAP={tau_map:.2f} "
+                    f"ratio={tau_map / tau_mle:.2f}"
                 )

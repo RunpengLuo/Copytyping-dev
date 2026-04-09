@@ -1,6 +1,5 @@
 import numpy as np
-from scipy.special import softmax, expit, betaln, digamma, gammaln, logsumexp
-from scipy.stats import binom, beta, norm
+from scipy.special import betaln, gammaln
 from scipy.optimize import minimize_scalar
 
 
@@ -26,7 +25,7 @@ def cond_betabin_logpmf(
         np.ndarray: (G,N,K)
     """
     (G, N) = Y.shape
-    K = p.shape[1]
+    _ = p.shape[1]  # K
 
     # (G, N, K)
     Y_gnk = Y[:, :, None]
@@ -113,7 +112,7 @@ def cond_betabin_logpmf_theta(
         np.ndarray: (G,N,K) loglik matrix
     """
     (G, N) = Y.shape
-    K = p.shape[1]
+    _ = p.shape[1]  # K
 
     # (G, N, K)
     Y_gnk = Y[:, :, None]
@@ -188,7 +187,12 @@ def cond_negbin_logpmf_theta(
 
 ##################################################
 # fit functions
-def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds, eps=1e-12):
+def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds, prior=None, eps=1e-12):
+    """MAP estimate of NB inv_phi with optional Gamma(a, b) prior.
+
+    Args:
+        prior: tuple (a, b) for Gamma prior, or None for pure MLE.
+    """
     mu_gnk = np.clip(mu_gnk, eps, None)
 
     def neg_Q_invphi(invphi):
@@ -201,7 +205,11 @@ def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds, eps=1e-12):
             + invphi * np.log(invphi / (invphi + mu_gnk))
             + X_gnk * np.log(mu_gnk / (invphi + mu_gnk))
         )
-        return -np.sum(weights * log_pmf)
+        obj = -np.sum(weights * log_pmf)
+        if prior is not None:
+            a, b = prior
+            obj += -(a - 1) * np.log(invphi) + b * invphi
+        return obj
 
     res = minimize_scalar(
         neg_Q_invphi,
@@ -213,7 +221,12 @@ def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds, eps=1e-12):
     return invphi_hat
 
 
-def mle_tau(Y_gnk, D_gnk, p_gnk, weights, logtau_bounds):
+def mle_tau(Y_gnk, D_gnk, p_gnk, weights, logtau_bounds, prior=None):
+    """MAP estimate of BB tau with optional Gamma(a, b) prior.
+
+    Args:
+        prior: tuple (a, b) for Gamma prior, or None for pure MLE.
+    """
     X_gnk = D_gnk - Y_gnk
     const = gammaln(D_gnk + 1.0) - gammaln(Y_gnk + 1.0) - gammaln(X_gnk + 1.0)
 
@@ -222,7 +235,11 @@ def mle_tau(Y_gnk, D_gnk, p_gnk, weights, logtau_bounds):
         alpha = tau * p_gnk
         beta = tau * (1.0 - p_gnk)
         log_pmf = const + betaln(Y_gnk + alpha, X_gnk + beta) - betaln(alpha, beta)
-        return -np.sum(weights * log_pmf)
+        obj = -np.sum(weights * log_pmf)
+        if prior is not None:
+            a, b = prior
+            obj += -(a - 1) * logtau + b * tau
+        return obj
 
     res = minimize_scalar(
         neg_Q_logtau,

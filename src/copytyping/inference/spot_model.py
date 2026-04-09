@@ -8,8 +8,6 @@ from copytyping.inference.base_model import Base_Model
 from copytyping.inference.likelihood_funcs import (
     cond_betabin_logpmf_theta,
     cond_negbin_logpmf_theta,
-    mle_invphi,
-    mle_tau,
 )
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
@@ -58,89 +56,27 @@ class Spot_Model(Base_Model):
             ref_label="path_label",
         )
 
-        logtau_bounds = (
-            np.log(init_params["min_tau"]),
-            np.log(init_params["max_tau"]),
-        )
-        invphi_bounds = (
-            1 / init_params["max_phi"],
-            1 / init_params["min_phi"],
-        )
-
         params = {
             "pi": init_params.get("pi", np.ones(self.K_tumor) / self.K_tumor),
         }
 
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
-
-            # 1. Baseline proportions
             lambda_g = compute_baseline_proportions(sx_data.X, sx_data.T, is_normal)
             params[f"{data_type}-lambda"] = lambda_g
             params[f"{data_type}-theta"] = estimate_tumor_proportion(sx_data, lambda_g)
 
-            # 2. Find neutral cluster(s) — all clones (1,1)
-            neutral_cids = [
-                c
-                for c in range(sx_data.G)
-                if all(
-                    sx_data.A[c, k] == 1 and sx_data.B[c, k] == 1
-                    for k in range(sx_data.K)
-                )
-            ]
-            assert len(neutral_cids) > 0, f"no neutral (1|1) cluster for {data_type}"
-
-            if len(neutral_cids) == 1:
-                c0 = neutral_cids[0]
-                Y_neut = sx_data.Y[c0 : c0 + 1]
-                D_neut = sx_data.D[c0 : c0 + 1]
-                X_neut = sx_data.X[c0 : c0 + 1]
-                lam_neut = lambda_g[c0]
-            else:
-                Y_neut = sx_data.Y[neutral_cids].sum(axis=0, keepdims=True)
-                D_neut = sx_data.D[neutral_cids].sum(axis=0, keepdims=True)
-                X_neut = sx_data.X[neutral_cids].sum(axis=0, keepdims=True)
-                lam_neut = lambda_g[neutral_cids].sum()
-            logging.info(
-                f"{data_type}: neutral={neutral_cids}, "
-                f"lambda={lam_neut:.6f}, "
-                f"median_D={np.median(D_neut):.0f}, "
-                f"median_X={np.median(X_neut):.0f}"
-            )
-
-            # 3. Global BB tau from neutral cluster
             if fit_mode in {"allele_only", "hybrid"}:
-                Y_fit = Y_neut[:, :, None].astype(np.float64)
-                D_fit = D_neut[:, :, None].astype(np.float64)
-                global_tau = mle_tau(
-                    Y_fit,
-                    D_fit,
-                    np.full_like(Y_fit, 0.5),
-                    np.ones_like(Y_fit),
-                    logtau_bounds,
-                )
                 params[f"{data_type}-tau"] = np.full(
                     sx_data.nrows_imbalanced,
-                    global_tau,
+                    init_params["tau0"],
                     dtype=np.float32,
                 )
-                logging.info(f"{data_type}: global tau={global_tau:.2f}")
-
-            # 4. Global NB inv_phi from neutral cluster
             if fit_mode in {"total_only", "hybrid"}:
-                X_fit = X_neut[:, :, None].astype(np.float64)
-                mu_fit = (sx_data.T[None, :, None] * lam_neut).astype(np.float64)
-                global_invphi = mle_invphi(
-                    X_fit, mu_fit, np.ones_like(X_fit), invphi_bounds
-                )
                 params[f"{data_type}-inv_phi"] = np.full(
                     sx_data.nrows_aneuploid,
-                    global_invphi,
+                    1 / init_params["phi0"],
                     dtype=np.float32,
-                )
-                logging.info(
-                    f"{data_type}: global inv_phi={global_invphi:.4f} "
-                    f"(phi={1 / global_invphi:.2f})"
                 )
 
         # Build fix_params
@@ -352,6 +288,5 @@ class Spot_Model(Base_Model):
         anns[label] = anns[tumor_clones].idxmax(axis=1)
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in tumor_clones}
-        logging.info(f"clone fractions (all spots): {clone_props}")
 
         return anns, clone_props

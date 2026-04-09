@@ -1,14 +1,10 @@
 # src/copytyping/__main__.py
-import os
-import sys
-import logging
-import yaml
 import argparse
 
 from copytyping.inference.inference import run as copytyping_inference
 
-from copytyping.copytyping_parser import *
-from copytyping.utils import setup_logging
+from copytyping.copytyping_parser import add_arguments_inference
+from copytyping.utils import log_arguments, setup_logging
 
 
 def main(argv=None):
@@ -21,7 +17,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
     setup_logging(args)
-    logging.info(f"parsed arguments: {args}")
+    log_arguments(args)
     args.func(args)
 
 

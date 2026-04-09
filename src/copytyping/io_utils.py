@@ -199,7 +199,7 @@ def union_align_barcodes(data_dict, data_types):
         obj.N = N_union
         obj.barcodes = union_barcodes_df
 
-    logging.info(
+    logging.debug(
         f"union_align_barcodes: N_union={N_union}, "
         + ", ".join(f"{dt}={int(modality_masks[dt].sum())}" for dt in data_types)
     )
@@ -268,10 +268,6 @@ def _apply_solfile(seg_df, solfile):
     )
     clone_props = [float(seg_df[f"u_{c}"].iloc[0]) for c in clones]
     seg_df["PROPS"] = ";".join(str(p) for p in clone_props)
-
-    logging.info(
-        f"solfile applied: {len(seg_df)} segments, CNP example: {seg_df['CNP'].iloc[0]}"
-    )
     return seg_df, clones, clone_props
 
 
