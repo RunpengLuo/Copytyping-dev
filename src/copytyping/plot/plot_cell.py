@@ -1,26 +1,23 @@
-import os
-import sys
 import logging
 
 import pandas as pd
 import numpy as np
-import scanpy as sc
-from scanpy import AnnData
 
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
-import seaborn as sns
 from scipy.cluster.hierarchy import linkage, leaves_list
-from matplotlib.collections import LineCollection
-from scipy import sparse
 import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
-from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.patches import Rectangle, Polygon
+from matplotlib.patches import Rectangle
 
-from copytyping.utils import get_chr_sizes
 from copytyping.sx_data.sx_data import SX_Data
-from copytyping.plot.plot_cnp import *
+from copytyping.plot.plot_cnp import (
+    BLACK,
+    plot_ascn_legend,
+    plot_ascn_profile,
+    plot_cnv_legend,
+    plot_cnv_profile,
+)
 
 from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
 
@@ -133,7 +130,7 @@ def plot_heatmap(
     x_edges = np.asarray(x_edges, dtype=float)
     y_edges = np.linspace(0.0, height, N + 1)
     C = np.ma.masked_invalid(C_ext)
-    pc = ax.pcolormesh(
+    ax.pcolormesh(
         x_edges, y_edges, C, cmap=cmap, norm=norm, shading="flat", rasterized=True
     )
     for ch_ofs in ch_coords:
@@ -395,12 +392,21 @@ def plot_cnv_heatmap(
         ]
 
     # order props by unique labels, since data also get ordered in prepare step
+    # then aggregate to match agg_size grouping
     if proportions is not None:
         ord_props = []
         for lab in uniq_labels:
             idx = np.where(cell_labels == lab)[0]
-            ord_props.append(proportions[idx])
-        proportions = np.concatenate(ord_props)
+            lab_props = proportions[idx]
+            if agg_size > 1:
+                agg = [
+                    np.mean(lab_props[g : g + agg_size])
+                    for g in range(0, len(lab_props), agg_size)
+                ]
+                ord_props.extend(agg)
+            else:
+                ord_props.extend(lab_props)
+        proportions = np.array(ord_props)
 
     cluster_by_val = False
     data_info = sx_data.cnv_blocks
@@ -467,7 +473,6 @@ def plot_cnv_heatmap(
 
     if proportions is not None:
         logging.info("plot tumor proportions")
-        assert agg_size == 1, "no aggregation allowed"
         N = data_matrix.shape[0]
         assert len(proportions) == N
         change_pts = np.flatnonzero(cell_labels[1:] != cell_labels[:-1]) + 1
