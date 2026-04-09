@@ -18,7 +18,12 @@ from copytyping.inference.validation import (
     evaluate_malignant_accuracy,
     refine_labels_by_reference,
 )
-from copytyping.io_utils import load_modality_data
+from copytyping.io_utils import (
+    load_modality_data,
+    subset_model_params,
+    subset_sx_data,
+    union_align_barcodes,
+)
 from copytyping.plot.plot_cell import plot_cnv_heatmap
 from copytyping.plot.plot_clone_diagnostic import plot_clone_diagnostic
 from copytyping.plot.plot_common import (
@@ -29,21 +34,12 @@ from copytyping.plot.plot_common import (
 from copytyping.plot.plot_visium import plot_visium_debug, plot_visium_panel
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
-    CELL_ASSAYS,
     NA_CELLTYPE,
-    SPATIAL_ASSAYS,
-    SPOT_ASSAYS,
+    SPATIAL_PLATFORMS,
     add_file_logging,
     read_whitelist_segments,
     setup_logging,
 )
-
-"""
-Given X/Y/D count matrices and copy-number profile.
-compute per-cell/spot clone-level posterior probabilies, and MAP solution.
-If multiome data, assume barcode files and CNP files have same content for gex/atac
-as preprocessed by unified-genotyping pipelien
-"""
 
 
 def run(args=None):
@@ -53,7 +49,7 @@ def run(args=None):
 
     args = check_arguments_inference(args)
     sample = args["sample"]
-    assay_type = args["assay_type"]
+    platform = args["platform"]
     data_types = args["data_types"]
     ref_label = args["ref_label"]
     out_dir = args["out_dir"]
@@ -70,13 +66,13 @@ def run(args=None):
     validation_dir = plot_dir
     for d in [heatmap_agg1_dir, heatmap_aggx_dir, plot_dir]:
         os.makedirs(d, exist_ok=True)
-    if assay_type in SPATIAL_ASSAYS:
+    if platform in SPATIAL_PLATFORMS:
         visium_dir = plot_dir
     work_dir = os.path.join(out_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
     verbosity = args["verbosity"]
 
-    logging.info(f"sample={sample}, assay_type={assay_type}, data_types={data_types}")
+    logging.info(f"sample={sample}, platform={platform}, data_types={data_types}")
 
     cell_type_df = None
     if args.get("cell_type") is not None:
@@ -115,7 +111,8 @@ def run(args=None):
             )
             if barcodes_df[ref_label].isin(NA_CELLTYPE).all():
                 logging.warning(
-                    f"all {data_type} barcodes have uninformative {ref_label} labels "
+                    f"all {data_type} barcodes have "
+                    f"uninformative {ref_label} labels "
                     f"(all in NA_CELLTYPE={NA_CELLTYPE})"
                 )
                 barcodes_df = barcodes_df.drop(columns=[ref_label])
@@ -135,14 +132,31 @@ def run(args=None):
                 adata = adatas[data_type]
                 if ref_label in adata.obs.columns:
                     logging.warning(
-                        f"overwriting existing '{ref_label}' column in "
-                        f"{data_type} h5ad obs with values from cell_type_df"
+                        f"overwriting existing '{ref_label}' column "
+                        f"in {data_type} h5ad obs with cell_type_df"
                     )
                 adata.obs[ref_label] = (
                     adata.obs_names.to_series().map(ct_map).fillna("Unknown").values
                 )
 
-    barcodes: pd.DataFrame = data_sources[data_types[0]].barcodes.copy()
+    # Union barcodes across modalities and realign matrices
+    barcodes, modality_masks = union_align_barcodes(seg_data_sources, data_types)
+    if aggr_mode == "clust":
+        _, clust_masks = union_align_barcodes(data_sources, data_types)
+    else:
+        clust_masks = modality_masks
+
+    # Merge cell_type info into union barcodes
+    if cell_type_df is not None and ref_label in cell_type_df.columns:
+        barcodes = pd.merge(
+            left=barcodes,
+            right=cell_type_df[["BARCODE", ref_label]],
+            on="BARCODE",
+            how="left",
+            sort=False,
+        )
+        barcodes[ref_label] = barcodes[ref_label].fillna("Unknown").astype(str)
+
     cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
 
     method = args["method"]
@@ -153,7 +167,7 @@ def run(args=None):
     margin_thres = args["margin_thres"]
 
     bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
-    if assay_type in SPOT_ASSAYS:
+    if platform in SPATIAL_PLATFORMS:
         pi_init = bulk_props[1:]
         pi_init = pi_init / pi_init.sum()
     else:
@@ -173,21 +187,22 @@ def run(args=None):
         fix_params[f"{data_type}-inv_phi"] = not args["update_NB_dispersion"]
         fix_params[f"{data_type}-tau"] = not args["update_BB_dispersion"]
 
-    if assay_type in CELL_ASSAYS:
+    if platform == "single_cell":
         model = Cell_Model
-    elif assay_type in SPOT_ASSAYS:
+    elif platform == "spatial":
         model = Spot_Model
     else:
-        raise ValueError(f"unknown assay_type={assay_type}")
+        raise ValueError(f"unknown platform={platform}")
 
     instance = model(
         barcodes,
-        assay_type,
+        platform,
         data_types,
         data_sources,
         work_dir,
         out_prefix,
         verbosity,
+        modality_masks=clust_masks,
     )
     model_params = instance.fit(
         fit_mode,
@@ -205,7 +220,7 @@ def run(args=None):
     )
     logging.info(f"clone fractions: {clone_props}")
 
-    # Per-cluster discrimination (before remapping params to segment-level)
+    # Per-cluster discrimination (before remapping params to seg-level)
     if ref_label in barcodes.columns:
         clust_data = data_sources[data_types[0]]
         clust_disc = compute_cluster_discrimination(
@@ -215,13 +230,14 @@ def run(args=None):
             pred_label=label,
             gt_label=ref_label,
             data_type=data_types[0],
-            is_spot=(assay_type in SPOT_ASSAYS),
+            is_spot=(platform in SPATIAL_PLATFORMS),
             seg_data=seg_data_sources[data_types[0]],
         )
         if len(clust_disc) > 0:
             clust_disc.to_csv(
                 os.path.join(
-                    out_dir, f"{out_prefix}.{assay_type}.cluster_discrimination.tsv"
+                    out_dir,
+                    f"{out_prefix}.{platform}.cluster_discrimination.tsv",
                 ),
                 sep="\t",
                 index=False,
@@ -237,7 +253,10 @@ def run(args=None):
                 lam_key = f"{data_type}-lambda"
                 if lam_key in model_params:
                     model_params[lam_key] = model_params[lam_key][cids]
-                for disp_key in [f"{data_type}-tau", f"{data_type}-inv_phi"]:
+                for disp_key in [
+                    f"{data_type}-tau",
+                    f"{data_type}-inv_phi",
+                ]:
                     if disp_key in model_params and len(model_params[disp_key]) > 0:
                         seg_sx = seg_data_sources[data_type]
                         val = model_params[disp_key][0]
@@ -248,18 +267,7 @@ def run(args=None):
                         )
                         model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
 
-    # clone diagnostic: per-segment BAF vs RDR scatter
-    plot_clone_diagnostic(
-        sample,
-        seg_data_sources[data_types[0]],
-        anns,
-        model_params,
-        data_types[0],
-        os.path.join(plot_dir, f"{out_prefix}.{assay_type}.clone_diagnostic.pdf"),
-        ref_label=ref_label if ref_label in anns.columns else None,
-        dpi=args["dpi"],
-    )
-
+    # ---- Evaluation (per-rep) ----
     metric = {}
     metric_str = ""
     if ref_label in barcodes.columns:
@@ -268,35 +276,28 @@ def run(args=None):
             anns = refine_labels_by_reference(
                 anns, ref_label, label, f"{label}-refined"
             )
-        tumor_post = "tumor_purity" if assay_type in SPATIAL_ASSAYS else "tumor"
+        tumor_post = "tumor_purity" if platform in SPATIAL_PLATFORMS else "tumor"
         metric, metric_str, eval_rows = evaluate_malignant_accuracy(
-            anns, cell_label=label, cell_type=ref_label, tumor_post=tumor_post
+            anns,
+            cell_label=label,
+            cell_type=ref_label,
+            tumor_post=tumor_post,
         )
         for row in eval_rows:
             row["SAMPLE"] = sample
-            row["assay_type"] = assay_type
+            row["platform"] = platform
         eval_df = pd.DataFrame(eval_rows)
-        # reorder columns: SAMPLE, assay_type, REP_ID first
-        front_cols = ["SAMPLE", "assay_type", "REP_ID"]
+        front_cols = ["SAMPLE", "platform", "REP_ID"]
         other_cols = [c for c in eval_df.columns if c not in front_cols]
         eval_df = eval_df[front_cols + other_cols]
         eval_df.to_csv(
-            os.path.join(out_dir, f"{out_prefix}.{assay_type}.evaluation.tsv"),
+            os.path.join(out_dir, f"{out_prefix}.{platform}.evaluation.tsv"),
             sep="\t",
             header=True,
             index=False,
         )
-        plot_cross_heatmap(
-            anns,
-            sample,
-            os.path.join(
-                validation_dir, f"{out_prefix}.{assay_type}.cross_heatmap.png"
-            ),
-            acol=label,
-            bcol=ref_label,
-        )
 
-        # Clone-level evaluation (ARI) if ref_label contains clone labels
+        # Clone-level evaluation (ARI)
         clone_metric = evaluate_clone_accuracy(
             anns,
             pred_label=label,
@@ -308,91 +309,141 @@ def run(args=None):
                     eval_rows[0][k] = v
                     metric[k] = v
             eval_df = pd.DataFrame(eval_rows)
-            front_cols = ["SAMPLE", "assay_type", "REP_ID"]
+            front_cols = ["SAMPLE", "platform", "REP_ID"]
             other_cols = [c for c in eval_df.columns if c not in front_cols]
             eval_df = eval_df[front_cols + other_cols]
             eval_df.to_csv(
-                os.path.join(out_dir, f"{out_prefix}.{assay_type}.evaluation.tsv"),
+                os.path.join(
+                    out_dir,
+                    f"{out_prefix}.{platform}.evaluation.tsv",
+                ),
                 sep="\t",
                 header=True,
                 index=False,
             )
 
     anns.to_csv(
-        os.path.join(out_dir, f"{out_prefix}.{assay_type}.annotations.tsv"),
+        os.path.join(out_dir, f"{out_prefix}.{platform}.annotations.tsv"),
         sep="\t",
         header=True,
         index=False,
     )
 
-    plot_posteriors(
-        anns,
-        os.path.join(validation_dir, f"{out_prefix}.{assay_type}.posteriors.png"),
-        lab_type=ref_label if ref_label in anns else label,
-    )
-
+    # ---- Per-rep plotting ----
     wl_segments = read_whitelist_segments(args["region_bed"])
     genome_size = args["genome_size"]
     agg_size = args["heatmap_agg"]
     img_type = args["img_type"]
     dpi = args["dpi"]
     transparent = args["transparent"]
-    for data_type in data_types:
-        sx_data: SX_Data = seg_data_sources[data_type]
-        for val in ["BAF", "pi_gk", "log2RDR"]:
-            if val != "BAF" and f"{data_type}-lambda" not in model_params:
-                continue
-            for my_label in [label, ref_label]:
-                if my_label not in anns:
-                    continue
-                agg_levels = [(1, heatmap_agg1_dir)]
-                if assay_type not in SPATIAL_ASSAYS:
-                    agg_levels.append((agg_size, heatmap_aggx_dir))
-                for agg, agg_dir in agg_levels:
-                    plot_cnv_heatmap(
-                        sample,
-                        data_type,
-                        cnv_blocks,
-                        sx_data,
-                        anns,
-                        wl_segments,
-                        proportions=model_params.get(f"{data_type}-theta", None),
-                        val=val,
-                        base_props=model_params.get(f"{data_type}-lambda", None),
-                        agg_size=agg,
-                        lab_type=my_label,
-                        filename=os.path.join(
-                            agg_dir,
-                            f"{out_prefix}.{assay_type}.{val}_heatmap.{data_type}.{my_label}.{img_type}",
-                        ),
-                        dpi=dpi,
-                        figsize=(20, 6 if agg > 1 else 15),
-                        transparent=transparent,
-                    )
+    rep_ids = anns["REP_ID"].unique()
 
-        plot_rdr_baf_1d_aggregated(
-            sx_data,
-            anns,
-            model_params.get(f"{data_type}-lambda", None),
+    for rep_id in rep_ids:
+        rep_mask = (anns["REP_ID"] == rep_id).to_numpy()
+        anns_rep = anns.loc[rep_mask].reset_index(drop=True)
+        params_rep = subset_model_params(model_params, rep_mask, data_types)
+        rep_tag = f".{rep_id}" if len(rep_ids) > 1 else ""
+
+        # clone diagnostic
+        plot_clone_diagnostic(
             sample,
-            data_type,
-            genome_size,
-            mask_cnp=False,
-            lab_type=label,
-            filename=os.path.join(
-                scatter_dir,
-                f"{out_prefix}.{assay_type}.1d_scatter.{data_type}.{label}.pdf",
+            subset_sx_data(seg_data_sources[data_types[0]], rep_mask),
+            anns_rep,
+            params_rep,
+            data_types[0],
+            os.path.join(
+                plot_dir,
+                f"{out_prefix}.{platform}{rep_tag}.clone_diagnostic.pdf",
             ),
+            ref_label=ref_label if ref_label in anns_rep.columns else None,
+            dpi=dpi,
         )
+
+        # posteriors
+        plot_posteriors(
+            anns_rep,
+            os.path.join(
+                validation_dir,
+                f"{out_prefix}.{platform}{rep_tag}.posteriors.png",
+            ),
+            lab_type=ref_label if ref_label in anns_rep else label,
+        )
+
+        # cross heatmap (only if ref_label available)
+        if ref_label in anns_rep.columns:
+            plot_cross_heatmap(
+                anns_rep,
+                sample,
+                os.path.join(
+                    validation_dir,
+                    f"{out_prefix}.{platform}{rep_tag}.cross_heatmap.png",
+                ),
+                acol=label,
+                bcol=ref_label,
+            )
+
+        # per-data_type plots
+        for data_type in data_types:
+            sx_rep = subset_sx_data(seg_data_sources[data_type], rep_mask)
+            for val in ["BAF", "pi_gk", "log2RDR"]:
+                if val != "BAF" and f"{data_type}-lambda" not in params_rep:
+                    continue
+                for my_label in [label, ref_label]:
+                    if my_label not in anns_rep:
+                        continue
+                    agg_levels = [(1, heatmap_agg1_dir)]
+                    if platform not in SPATIAL_PLATFORMS:
+                        agg_levels.append((agg_size, heatmap_aggx_dir))
+                    for agg, agg_dir in agg_levels:
+                        plot_cnv_heatmap(
+                            sample,
+                            data_type,
+                            cnv_blocks,
+                            sx_rep,
+                            anns_rep,
+                            wl_segments,
+                            proportions=params_rep.get(f"{data_type}-theta", None),
+                            val=val,
+                            base_props=params_rep.get(f"{data_type}-lambda", None),
+                            agg_size=agg,
+                            lab_type=my_label,
+                            filename=os.path.join(
+                                agg_dir,
+                                f"{out_prefix}.{platform}{rep_tag}"
+                                f".{val}_heatmap.{data_type}"
+                                f".{my_label}.{img_type}",
+                            ),
+                            dpi=dpi,
+                            figsize=(20, 6 if agg > 1 else 15),
+                            transparent=transparent,
+                        )
+
+            plot_rdr_baf_1d_aggregated(
+                sx_rep,
+                anns_rep,
+                params_rep.get(f"{data_type}-lambda", None),
+                sample,
+                data_type,
+                genome_size,
+                mask_cnp=False,
+                lab_type=label,
+                filename=os.path.join(
+                    scatter_dir,
+                    f"{out_prefix}.{platform}{rep_tag}"
+                    f".1d_scatter.{data_type}.{label}.pdf",
+                ),
+            )
 
     if args["umap"]:
         pass  # not yet implemented
 
-    if assay_type in SPATIAL_ASSAYS:
+    # ---- Visium spatial plots (already per-rep) ----
+    if platform in SPATIAL_PLATFORMS:
         gex_adata = adatas.get("gex", adatas[data_types[0]])
         anns_indexed = anns.set_index("BARCODE")
         visium_slices = []
-        for rep_id, anns_rep in anns.groupby("REP_ID"):
+        for rep_id in rep_ids:
+            anns_rep = anns[anns["REP_ID"] == rep_id]
             vis_adata = gex_adata[
                 gex_adata.obs_names.isin(anns_rep["BARCODE"].values)
             ].copy()
@@ -421,7 +472,7 @@ def run(args=None):
                 data_type=data_types[0],
                 out_dir=visium_dir,
                 clones=seg_data_sources[data_types[0]].clones,
-                ref_label=ref_label if ref_label in barcodes.columns else None,
+                ref_label=(ref_label if ref_label in barcodes.columns else None),
                 dpi=dpi,
             )
 

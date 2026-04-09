@@ -141,6 +141,7 @@ def plot_visium_panel(
                 size=size,
                 library_id=rep_id,
                 ax=axes[ri, ci],
+                alpha=0.5,
                 edgecolors="none",
             )
 
@@ -270,7 +271,7 @@ def plot_visium_debug(
     import squidpy as sq
     from sklearn.metrics import roc_auc_score
     from scipy.special import softmax
-    from copytyping.inference.validation import TUMOR_LABELS, UNKNOWN_LABELS
+    from copytyping.utils import is_tumor_label, NA_CELLTYPE
 
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
@@ -286,8 +287,8 @@ def plot_visium_debug(
     # compute per-iteration AUC if ref_label available
     iter_aucs = []
     if ref_label and ref_label in barcodes.columns:
-        known = ~barcodes[ref_label].isin(UNKNOWN_LABELS)
-        y_true = barcodes.loc[known, ref_label].isin(TUMOR_LABELS).to_numpy(dtype=int)
+        known = ~barcodes[ref_label].isin(NA_CELLTYPE)
+        y_true = barcodes.loc[known, ref_label].apply(is_tumor_label).to_numpy(dtype=int)
         known_idx = known.to_numpy()
         for params_t in param_trace:
             theta_t = params_t[theta_key]

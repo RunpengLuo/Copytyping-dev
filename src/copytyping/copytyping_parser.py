@@ -1,15 +1,16 @@
 import argparse
 import os
 
-from copytyping.utils import ALL_ASSAYS, ATAC_ASSAYS, GEX_ASSAYS
+from copytyping.utils import ALL_PLATFORMS
 
 
 def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
-        "--assay_type",
+        "--platform",
         required=True,
         type=str,
-        choices=ALL_ASSAYS,
+        choices=ALL_PLATFORMS,
+        help="Platform: single_cell (Cell_Model) or spatial (Spot_Model)",
     )
     parser.add_argument("--sample", required=True, type=str, help="sample name")
     parser.add_argument(
@@ -17,14 +18,22 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=False,
         type=str,
         default=None,
-        help="/path/to/allele/<assay_type>",
+        help="/path/to/gex modality directory",
     )
     parser.add_argument(
         "--atac_dir",
         required=False,
         type=str,
         default=None,
-        help="/path/to/allele/<assay_type>",
+        help="/path/to/atac modality directory",
+    )
+    parser.add_argument(
+        "--gex_h5ad",
+        required=False,
+        type=str,
+        default=None,
+        help="Path to gex h5ad file (auto-detected as scRNA.h5ad "
+        "in --gex_dir if not provided)",
     )
     parser.add_argument(
         "--cell_type",
@@ -62,7 +71,8 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=True,
         type=str,
         help="HATCHet seg.ucn.tsv file with segment-level copy numbers. "
-        "--gex_dir contains bbc-level data which will be aggregated to segment level.",
+        "--gex_dir contains bbc-level data which will be aggregated "
+        "to segment level.",
     )
 
     parser.add_argument(
@@ -112,8 +122,8 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=False,
         default="clust",
         choices=["seg", "clust"],
-        help="Aggregation mode: 'clust' merges segments with identical CNP (default), "
-        "'seg' uses raw segments.",
+        help="Aggregation mode: 'clust' merges segments "
+        "with identical CNP (default), 'seg' uses raw segments.",
     )
     parser.add_argument(
         "--niters",
@@ -188,21 +198,21 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=False,
         default=0.50,
         type=float,
-        help="Assign cells/spots to NA if posterior less than <posterior_thres>",
+        help="Assign cells/spots to NA if posterior < threshold",
     )
     parser.add_argument(
         "--margin_thres",
         required=False,
         default=0.10,
         type=float,
-        help="Assign cells/spots to NA if top-2 margin less than <posterior_thres>",
+        help="Assign cells/spots to NA if top-2 margin < threshold",
     )
     parser.add_argument(
         "--tumorprop_threshold",
         required=False,
         default=0.50,
         type=float,
-        help="For spatial assays, assign spots to normal if tumor purity < threshold",
+        help="For spatial, assign spots to normal if purity < threshold",
     )
     parser.add_argument(
         "--refine_label_by_reference",
@@ -259,36 +269,38 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
 
 
 def check_arguments_inference(args: dict):
-    assay_type = args["assay_type"]
     gex_dir = args["gex_dir"]
     atac_dir = args["atac_dir"]
 
     data_types = []
-    if assay_type in GEX_ASSAYS:
-        assert gex_dir is not None and os.path.isdir(gex_dir), (
-            f"missing --gex_dir={gex_dir} for assay_type={assay_type}"
-        )
+    if gex_dir is not None:
+        assert os.path.isdir(gex_dir), f"--gex_dir={gex_dir} is not a directory"
         data_types.append("gex")
         cnv_segments = os.path.join(gex_dir, "cnv_segments.tsv")
         barcodes = os.path.join(gex_dir, "barcodes.tsv.gz")
         x_count = os.path.join(gex_dir, "bb.Xcount.npz")
         a_allele = os.path.join(gex_dir, "bb.Aallele.npz")
         b_allele = os.path.join(gex_dir, "bb.Ballele.npz")
-        mod = "scRNA" if assay_type == "multiome" else assay_type
-        h5ad = os.path.join(gex_dir, f"{mod}.h5ad")
-        for file in [cnv_segments, barcodes, x_count, a_allele, b_allele, h5ad]:
+        for file in [cnv_segments, barcodes, x_count, a_allele, b_allele]:
             assert os.path.exists(file), f"missing file: {file}"
         args["gex_barcodes"] = barcodes
         args["gex_cnv_segments"] = cnv_segments
         args["gex_X_count"] = x_count
         args["gex_A_allele"] = a_allele
         args["gex_B_allele"] = b_allele
-        args["gex_h5ad"] = h5ad
 
-    if assay_type in ATAC_ASSAYS:
-        assert atac_dir is not None and os.path.isdir(atac_dir), (
-            f"missing --atac_dir={atac_dir} for assay_type={assay_type}"
-        )
+        # h5ad: use explicit --gex_h5ad, else try scRNA.h5ad (optional)
+        gex_h5ad = args.get("gex_h5ad")
+        if gex_h5ad is None:
+            candidate = os.path.join(gex_dir, "scRNA.h5ad")
+            if os.path.exists(candidate):
+                gex_h5ad = candidate
+        if gex_h5ad is not None:
+            assert os.path.exists(gex_h5ad), f"missing file: {gex_h5ad}"
+        args["gex_h5ad"] = gex_h5ad
+
+    if atac_dir is not None:
+        assert os.path.isdir(atac_dir), f"--atac_dir={atac_dir} is not a directory"
         data_types.append("atac")
         cnv_segments = os.path.join(atac_dir, "cnv_segments.tsv")
         barcodes = os.path.join(atac_dir, "barcodes.tsv.gz")
@@ -302,6 +314,16 @@ def check_arguments_inference(args: dict):
         args["atac_X_count"] = x_count
         args["atac_A_allele"] = a_allele
         args["atac_B_allele"] = b_allele
+
+    assert len(data_types) > 0, (
+        "at least one of --gex_dir or --atac_dir must be provided"
+    )
+    platform = args["platform"]
+    if platform == "spatial":
+        assert gex_dir is not None, (
+            "--gex_dir is required for spatial platform (h5ad with spatial coords)"
+        )
+
     seg_ucn = args.get("seg_ucn", None)
     if seg_ucn is not None:
         assert os.path.exists(seg_ucn), f"missing --seg_ucn file: {seg_ucn}"

@@ -12,7 +12,7 @@ from scipy.stats import beta as beta_dist, norm as norm_dist
 import seaborn as sns
 
 from copytyping.sx_data.sx_data import SX_Data
-from copytyping.inference.validation import TUMOR_LABELS, UNKNOWN_LABELS
+from copytyping.utils import is_tumor_label, is_normal_label, NA_CELLTYPE
 
 
 def plot_clone_diagnostic(
@@ -51,10 +51,8 @@ def plot_clone_diagnostic(
 
     # pathology labels
     if ref_label and ref_label in anns.columns:
-        is_tumor = anns[ref_label].isin(TUMOR_LABELS).to_numpy()
-        is_normal = (
-            ~anns[ref_label].isin(TUMOR_LABELS) & ~anns[ref_label].isin(UNKNOWN_LABELS)
-        ).to_numpy()
+        is_tumor = anns[ref_label].apply(is_tumor_label).to_numpy()
+        is_normal = anns[ref_label].apply(is_normal_label).to_numpy()
     else:
         is_tumor = np.ones(sx_data.N, dtype=bool)
         is_normal = np.zeros(sx_data.N, dtype=bool)

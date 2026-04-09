@@ -10,41 +10,33 @@ from copytyping.io_utils import *
 
 
 class SX_Data:
+    """Container for segment-level (or cluster-level) count data and CNV profiles."""
+
     def __init__(
         self,
-        bc_file: str,
-        bbc_file: str,
-        x_count_file: str,
-        y_count_file: str,
-        d_count_file: str,
-        data_type: str,
-        seg_ucn_file: str,
+        barcodes_df: pd.DataFrame,
+        seg_df: pd.DataFrame,
+        X: np.ndarray,
+        Y: np.ndarray,
+        D: np.ndarray,
         laplace=0.01,
         verbose=1,
     ) -> None:
-        self.data_type = data_type
-        self.barcodes = pd.read_table(
-            bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
-        )
-        # Parse REP_ID from barcode suffix (format: {barcode}_{rep_id})
-        self.barcodes["REP_ID"] = self.barcodes["BARCODE"].str.rsplit("_", n=1).str[-1]
+        """Construct from pre-loaded segment-level data.
+
+        Args:
+            barcodes_df: DataFrame with BARCODE, REP_ID columns.
+            seg_df: Segment DataFrame with CNP, PROPS columns.
+            X, Y, D: Dense int32 count matrices (G, N).
+            laplace: BAF clipping parameter.
+        """
+        self.barcodes = barcodes_df
         self.N = len(self.barcodes)
 
-        # load bbc-level count matrices and aggregate to segment level
-        X_bbc = sparse.load_npz(x_count_file)
-        Y_bbc = sparse.load_npz(y_count_file)
-        D_bbc = sparse.load_npz(d_count_file)
-
-        bbc_df = pd.read_table(bbc_file, sep="\t")
-        assert X_bbc.shape[0] == len(bbc_df), (
-            f"X rows ({X_bbc.shape[0]}) != bbc bins ({len(bbc_df)})"
-        )
-        self.cnv_blocks, X_seg, Y_seg, D_seg = aggregate_bbc_to_seg(
-            bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc
-        )
-        self.X = X_seg.toarray().astype(np.int32)
-        self.Y = Y_seg.toarray().astype(np.int32)
-        self.D = D_seg.toarray().astype(np.int32)
+        self.cnv_blocks = seg_df
+        self.X = X
+        self.Y = Y
+        self.D = D
 
         self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
             self.cnv_blocks, laplace=laplace
@@ -52,8 +44,8 @@ class SX_Data:
         self.G = len(self.cnv_blocks)
         self.K = len(self.clones)
         self.MASK = get_cnp_mask(self.A, self.B, self.C)
-        self.nrows_imbalanced = np.sum(self.MASK["IMBALANCED"])
-        self.nrows_aneuploid = np.sum(self.MASK["ANEUPLOID"])
+        self.nrows_imbalanced = int(np.sum(self.MASK["IMBALANCED"]))
+        self.nrows_aneuploid = int(np.sum(self.MASK["ANEUPLOID"]))
 
         assert self.X.shape == (self.G, self.N), (
             f"X shape {self.X.shape} != ({self.G}, {self.N})"
@@ -64,10 +56,9 @@ class SX_Data:
         self.T = np.sum(self.X, axis=0)
 
         if verbose:
-            logging.info(f"{data_type} data is loaded #cells={self.N}, #bins={self.G}")
+            logging.info(f"data loaded #cells={self.N}, #bins={self.G}")
             logging.info(f"#effective imbalanced CNA bins={self.nrows_imbalanced}")
             logging.info(f"#effective aneuploid CNA bins={self.nrows_aneuploid}")
-        return
 
     def apply_mask_shallow(self, mask_id="CNP", additional_mask=None):
         if additional_mask is None:
@@ -85,6 +76,108 @@ class SX_Data:
             "cnv_blocks": self.cnv_blocks[mask],
         }
         return M, mask
+
+    def to_cluster_level(self):
+        """Return a new SX_Data-like object at CNP-cluster level.
+
+        Merges segments with identical (A, B) copy-number profiles: X/Y/D
+        counts are summed. The returned object has the same interface as
+        SX_Data (attributes + apply_mask_shallow) but fewer rows (G_clust).
+
+        An additional ``cluster_ids`` attribute (shape G_seg) maps each
+        original segment index to its cluster index.
+        """
+        clust = self.aggregate_to_cnp_clusters()
+        return clust
+
+    def aggregate_to_cnp_clusters(self):
+        """Group segments by identical (A, B) copy-number pattern across all clones.
+
+        Segments that share the same per-clone (A, B) vector are merged: their
+        X/Y/D count matrices are summed across the merged rows. The resulting
+        namespace mirrors the SX_Data attribute layout so that model code
+        (``compute_log_likelihood``, ``_m_step``) can use it interchangeably.
+
+        The returned namespace does **not** carry a ``cnv_blocks`` attribute and
+        its ``apply_mask_shallow`` closure does not return a ``"cnv_blocks"`` key.
+        Callers that need genomic coordinates must retain the original SX_Data.
+
+        Returns:
+            SimpleNamespace with attributes: X, Y, D, T, A, B, C, BAF, MASK,
+            G, N, K, clones, nrows_imbalanced, nrows_aneuploid, cluster_ids,
+            and a bound ``apply_mask_shallow(mask_id, additional_mask)`` method.
+        """
+        from types import SimpleNamespace
+
+        cnp_keys = []
+        for g in range(self.G):
+            a_row = self.A[g].tolist()
+            b_row = self.B[g].tolist()
+            cnp_keys.append(tuple(a_row + b_row))
+
+        unique_keys = list(dict.fromkeys(cnp_keys))
+        key_to_cid = {key: cid for cid, key in enumerate(unique_keys)}
+        cluster_ids = np.array([key_to_cid[key] for key in cnp_keys])
+        G_c = len(unique_keys)
+
+        X_c = np.zeros((G_c, self.N), dtype=self.X.dtype)
+        Y_c = np.zeros((G_c, self.N), dtype=self.Y.dtype)
+        D_c = np.zeros((G_c, self.N), dtype=self.D.dtype)
+        for cid in range(G_c):
+            members = np.where(cluster_ids == cid)[0]
+            X_c[cid] = self.X[members].sum(axis=0)
+            Y_c[cid] = self.Y[members].sum(axis=0)
+            D_c[cid] = self.D[members].sum(axis=0)
+
+        first_members = [np.where(cluster_ids == cid)[0][0] for cid in range(G_c)]
+        A_c = self.A[first_members]
+        B_c = self.B[first_members]
+        C_c = self.C[first_members]
+        BAF_c = self.BAF[first_members]
+        MASK_c = get_cnp_mask(A_c, B_c, C_c)
+
+        clust = SimpleNamespace(
+            X=X_c,
+            Y=Y_c,
+            D=D_c,
+            T=self.T,
+            A=A_c,
+            B=B_c,
+            C=C_c,
+            BAF=BAF_c,
+            MASK=MASK_c,
+            G=G_c,
+            N=self.N,
+            K=self.K,
+            clones=self.clones,
+            nrows_imbalanced=int(MASK_c["IMBALANCED"].sum()),
+            nrows_aneuploid=int(MASK_c["ANEUPLOID"].sum()),
+            cluster_ids=cluster_ids,
+            barcodes=self.barcodes,
+        )
+
+        def _apply_mask_shallow(mask_id="CNP", additional_mask=None):
+            if additional_mask is None:
+                additional_mask = np.ones(G_c, dtype=bool)
+            mask = MASK_c[mask_id] & additional_mask
+            M = {
+                "A": A_c[mask],
+                "B": B_c[mask],
+                "C": C_c[mask],
+                "BAF": BAF_c[mask],
+                "X": X_c[mask],
+                "Y": Y_c[mask],
+                "D": D_c[mask],
+            }
+            return M, mask
+
+        clust.apply_mask_shallow = _apply_mask_shallow
+
+        logging.info(
+            f"aggregated {self.G} segments -> {G_c} CNP clusters, "
+            f"IMB={clust.nrows_imbalanced}, ANE={clust.nrows_aneuploid}"
+        )
+        return clust
 
 
 def get_cnp_mask(A, B, C, and_mask=None):
