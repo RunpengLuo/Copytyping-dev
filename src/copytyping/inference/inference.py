@@ -14,7 +14,6 @@ from copytyping.inference.cell_model import Cell_Model
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
-    compute_cluster_discrimination,
     evaluate_clone_accuracy,
     evaluate_malignant_accuracy,
     refine_labels_by_reference,
@@ -225,30 +224,6 @@ def run(args=None):
         tumorprop_threshold=args["tumorprop_threshold"],
     )
     logging.info(f"clone fractions: {clone_props}")
-
-    # Per-cluster discrimination (before remapping params to seg-level)
-    if ref_label in barcodes.columns:
-        clust_data = data_sources[data_types[0]]
-        clust_disc = compute_cluster_discrimination(
-            clust_data,
-            model_params,
-            anns,
-            pred_label=label,
-            gt_label=ref_label,
-            data_type=data_types[0],
-            is_spot=(platform in SPATIAL_PLATFORMS),
-            seg_data=seg_data_sources[data_types[0]],
-        )
-        if len(clust_disc) > 0:
-            clust_disc.to_csv(
-                os.path.join(
-                    out_dir,
-                    f"{out_prefix}.{platform}.cluster_discrimination.tsv",
-                ),
-                sep="\t",
-                index=False,
-            )
-            logging.info(f"saved cluster discrimination to {out_dir}")
 
     if aggr_mode == "clust":
         is_normal = getattr(instance, "_init_is_normal", None)
