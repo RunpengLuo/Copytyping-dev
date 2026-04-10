@@ -34,6 +34,14 @@ def _eval_subset(anns_sub, cell_label, cell_type, tumor_post):
         if tumor_post in anns_known:
             auc_soft = roc_auc_score(y_true, anns_known[tumor_post])
 
+    # multi-clone ARI: only meaningful when GT distinguishes >1 tumor label
+    ari = np.nan
+    tumor_mask = anns_known[cell_type].apply(is_tumor_label)
+    gt_tumor_labels = anns_known.loc[tumor_mask, cell_type]
+    if gt_tumor_labels.nunique() > 1:
+        pred_tumor_labels = anns_known.loc[tumor_mask, cell_label]
+        ari = adjusted_rand_score(gt_tumor_labels, pred_tumor_labels)
+
     # per-clone counts
     label_counts = anns_sub[cell_label].value_counts()
     clone_cols = sorted([c for c in label_counts.index if c.startswith("clone")])
@@ -45,6 +53,7 @@ def _eval_subset(anns_sub, cell_label, cell_type, tumor_post):
         "accuracy": accuracy,
         "ROC-AUC (hard)": auc_hard,
         "ROC-AUC (soft)": auc_soft,
+        "ARI": ari,
         "#normal": int(label_counts.get("normal", 0)),
     }
     for c in clone_cols:
@@ -68,21 +77,32 @@ def evaluate_malignant_accuracy(
     metric_all = _eval_subset(anns, cell_label, cell_type, tumor_post)
     metric_all["REP_ID"] = "ALL"
 
-    logging.info("==================================================")
-    logging.info(f"ROC AUC (hard classification): {metric_all['ROC-AUC (hard)']}")
-    if metric_all.get("ROC-AUC (soft)") is not None:
-        logging.info(f"ROC AUC (soft classification): {metric_all['ROC-AUC (soft)']}")
-
-    # per-clone cross-tab
+    # GT (rows) -> predicted (columns) crosstab with row/col totals
     known_mask = ~anns[cell_type].isin(NA_CELLTYPE)
     anns_known = anns[known_mask]
-    ct = pd.crosstab(anns_known[cell_label], anns_known[cell_type])
-    logging.info(f"Confusion matrix:\n{ct}")
-    logging.info(
-        f"#NA={metric_all['#NA']}, precision={metric_all['precision']:.4f}, "
-        f"recall={metric_all['recall']:.4f}, f1={metric_all['f1']:.4f}, "
-        f"accuracy={metric_all['accuracy']:.4f}"
+    ct = pd.crosstab(
+        anns_known[cell_type],
+        anns_known[cell_label],
+        margins=True,
+        margins_name="total",
     )
+
+    auc_soft = metric_all.get("ROC-AUC (soft)")
+    auc_soft_str = f"{auc_soft:.4f}" if auc_soft is not None else "NA"
+    ari = metric_all.get("ARI")
+    ari_str = f"{ari:.4f}" if ari is not None and not np.isnan(ari) else "NA"
+    logging.info("tumor/normal evaluation:")
+    logging.info(f"  precision = {metric_all['precision']:.4f}")
+    logging.info(f"  recall    = {metric_all['recall']:.4f}")
+    logging.info(f"  f1        = {metric_all['f1']:.4f}")
+    logging.info(f"  accuracy  = {metric_all['accuracy']:.4f}")
+    logging.info(f"  AUC_hard  = {metric_all['ROC-AUC (hard)']:.4f}")
+    logging.info(f"  AUC_soft  = {auc_soft_str}")
+    logging.info(f"  ARI       = {ari_str}")
+    logging.info(f"  #NA       = {metric_all['#NA']}/{metric_all['total']}")
+    logging.info(f"  crosstab (rows=GT {cell_type}, cols=pred {cell_label}):")
+    for line in ct.to_string().splitlines():
+        logging.info(f"    {line}")
 
     # per-REP_ID metrics
     rows = [metric_all]
@@ -118,37 +138,3 @@ def refine_labels_by_reference(
         f"#NA before/after refinement={num_na_before}->{num_na_after} / {len(anns)}"
     )
     return anns
-
-
-def evaluate_clone_accuracy(
-    anns: pd.DataFrame,
-    pred_label: str,
-    gt_label: str,
-):
-    """Evaluate clone-level clustering accuracy using ARI.
-
-    Compares predicted clone labels against ground-truth clone labels on
-    tumor spots only. Uses ARI (label-permutation invariant).
-
-    Returns:
-        dict with ARI, n_tumor, and crosstab. Empty dict if not evaluable.
-    """
-    if gt_label not in anns.columns:
-        return {}
-
-    gt_is_tumor = anns[gt_label].apply(is_tumor_label)
-    tumor = anns[gt_is_tumor].copy()
-    if len(tumor) < 2:
-        return {}
-
-    valid = tumor[~tumor[pred_label].isin({"normal", "NA"})]
-    if len(valid) < 2:
-        return {}
-
-    ari = adjusted_rand_score(valid[gt_label], valid[pred_label])
-    ct = pd.crosstab(valid[gt_label], valid[pred_label])
-
-    logging.info(f"Clone evaluation: ARI={ari:.4f}, n_tumor={len(valid)}")
-    logging.info(f"Crosstab:\n{ct}")
-
-    return {"ARI": ari, "n_tumor": len(valid), "crosstab": ct}

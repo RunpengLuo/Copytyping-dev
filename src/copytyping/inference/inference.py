@@ -14,7 +14,6 @@ from copytyping.inference.cell_model import Cell_Model
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
-    evaluate_clone_accuracy,
     evaluate_malignant_accuracy,
     refine_labels_by_reference,
 )
@@ -254,7 +253,6 @@ def run(args=None):
     metric = {}
     metric_str = ""
     if ref_label in barcodes.columns:
-        logging.info("evaluate performance against reference labels")
         if args["refine_label_by_reference"]:
             anns = refine_labels_by_reference(
                 anns, ref_label, label, f"{label}-refined"
@@ -279,31 +277,6 @@ def run(args=None):
             header=True,
             index=False,
         )
-
-        # Clone-level evaluation (ARI)
-        clone_metric = evaluate_clone_accuracy(
-            anns,
-            pred_label=label,
-            gt_label=ref_label,
-        )
-        if clone_metric:
-            for k, v in clone_metric.items():
-                if k != "crosstab":
-                    eval_rows[0][k] = v
-                    metric[k] = v
-            eval_df = pd.DataFrame(eval_rows)
-            front_cols = ["SAMPLE", "platform", "REP_ID"]
-            other_cols = [c for c in eval_df.columns if c not in front_cols]
-            eval_df = eval_df[front_cols + other_cols]
-            eval_df.to_csv(
-                os.path.join(
-                    out_dir,
-                    f"{out_prefix}.{platform}.evaluation.tsv",
-                ),
-                sep="\t",
-                header=True,
-                index=False,
-            )
 
     anns.to_csv(
         os.path.join(out_dir, f"{out_prefix}.{platform}.annotations.tsv"),

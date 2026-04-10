@@ -63,20 +63,23 @@ def load_modality_data(
     D_bbc = A_bbc + B_bbc
 
     logging.info(
-        f"phase correction applied: {int(bbc_df['PHASE'].sum())}/{len(bbc_df)} "
-        f"BBC blocks flipped"
+        f"[{data_type}] phase correction applied: "
+        f"{int(bbc_df['PHASE'].sum())}/{len(bbc_df)} BBC blocks flipped"
     )
 
     seg_df, X_sp, Y_sp, D_sp = aggregate_bbc_to_seg(
-        bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=solfile
+        bbc_df,
+        seg_ucn_file,
+        X_bbc,
+        Y_bbc,
+        D_bbc,
+        solfile=solfile,
+        data_type=data_type,
     )
     X_seg = X_sp.toarray().astype(np.int32)
     Y_seg = Y_sp.toarray().astype(np.int32)
     D_seg = D_sp.toarray().astype(np.int32)
 
-    logging.info(
-        f"segment-level matrices: X={X_seg.shape}, Y={Y_seg.shape}, D={D_seg.shape}"
-    )
     return barcodes_df, seg_df, X_seg, Y_seg, D_seg
 
 
@@ -271,7 +274,9 @@ def _apply_solfile(seg_df, solfile):
     return seg_df, clones, clone_props
 
 
-def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None):
+def aggregate_bbc_to_seg(
+    bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None, data_type=""
+):
     """Map bbc-level bins to segments and aggregate count matrices.
 
     Args:
@@ -281,11 +286,13 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None
         Y_bbc: (G_bbc, N) sparse or dense count matrix (B-allele).
         D_bbc: (G_bbc, N) sparse or dense count matrix (total allele).
         solfile: Optional path to HATCHet solution.tsv to override CN profiles.
+        data_type: Modality tag used to prefix log messages (e.g. "gex").
 
     Returns:
         seg_df: Segment-level DataFrame with CNP, PROPS, seg_id columns.
         X_seg, Y_seg, D_seg: (G_seg, N) aggregated count matrices (sparse).
     """
+    tag = f"[{data_type}] " if data_type else ""
     seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
     # deduplicate: seg.ucn has one row per (segment, sample); keep first sample only
     if "SAMPLE" in seg_df.columns:
@@ -299,7 +306,7 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None
     seg_df["seg_id"] = np.arange(len(seg_df))
     n_seg = len(seg_df)
     n_bbc = len(bbc_df)
-    logging.info(f"aggregate_bbc_to_seg: {n_bbc} bbc bins → {n_seg} segments")
+    logging.info(f"{tag}aggregate_bbc_to_seg: {n_bbc} bbc bins → {n_seg} segments")
 
     # map each bbc bin to a segment by coordinate containment
     # bbc bins are subsets of segments, so use midpoint for assignment
@@ -327,10 +334,12 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None
 
     n_unmapped = (seg_ids < 0).sum()
     if n_unmapped > 0:
-        logging.warning(f"{n_unmapped}/{n_bbc} bbc bins not mapped to any segment")
+        logging.warning(
+            f"{tag}{n_unmapped}/{n_bbc} bbc bins not mapped to any segment"
+        )
 
     mapped = seg_ids >= 0
-    logging.info(f"mapped {mapped.sum()}/{n_bbc} bbc bins to {n_seg} segments")
+    logging.info(f"{tag}mapped {mapped.sum()}/{n_bbc} bbc bins to {n_seg} segments")
 
     # aggregate counts using one-hot matrix multiplication
     mapped_idx = np.where(mapped)[0]
@@ -360,7 +369,8 @@ def aggregate_bbc_to_seg(bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None
             seg_df[col] = per_seg.reindex(range(n_seg)).fillna(0).astype(int).values
 
     logging.info(
-        f"segment-level matrices: X={X_seg.shape}, Y={Y_seg.shape}, D={D_seg.shape}"
+        f"{tag}segment-level matrices: "
+        f"X={X_seg.shape}, Y={Y_seg.shape}, D={D_seg.shape}"
     )
     return seg_df, X_seg, Y_seg, D_seg
 

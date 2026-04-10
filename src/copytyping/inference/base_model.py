@@ -234,9 +234,6 @@ class Base_Model:
 
         params, fix_params = self._init_params(fit_mode, fix_params, init_params)
 
-        if self.verbose:
-            self.print_params(params, fit_mode)
-
         ll_trace, param_trace = [], []
         prev_ll = -np.inf
         for t in range(1, max_iter):
@@ -248,7 +245,6 @@ class Base_Model:
             ll_trace.append(ll)
             if self.verbose:
                 logging.info(f"iter={t:03d} log-likelihood = {ll:.6f}")
-                self.print_params(params, fit_mode)
 
             if t > 1:
                 rel_change = np.abs(ll - prev_ll) / (np.abs(prev_ll) + eps)
@@ -310,10 +306,6 @@ class Base_Model:
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
-    def print_params(self, params: dict, fit_mode="hybrid"):
-        for param_key, param_val in params.items():
-            logging.info(f"{param_key}: {param_val}")
-
     def save_param_trace(self, param_trace: list):
         if not param_trace or not self.work_dir:
             return
@@ -326,4 +318,3 @@ class Base_Model:
             df.index.name = "iter"
             out_path = os.path.join(self.work_dir, f"{self.prefix}.trace.{key}.tsv")
             df.to_csv(out_path, sep="\t")
-        logging.info(f"saved {len(param_trace[0])} parameter traces to {self.work_dir}")

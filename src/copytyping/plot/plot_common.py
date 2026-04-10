@@ -1,5 +1,4 @@
 import os
-import logging
 
 import pandas as pd
 import numpy as np
@@ -40,7 +39,6 @@ def plot_snps_per_chrom(
     lab_corr="HB",
     s=4,
 ):
-    logging.info("plot 1D per-SNP B-allele frequency")
     chrom_sizes = get_chr_sizes(genome_file)
 
     colors = ["#1f77b4", "#ff7f0e"]  # blue / orange
@@ -58,7 +56,6 @@ def plot_snps_per_chrom(
         chr_end = chrom_sizes[chrom]
         out_file = os.path.join(out_dir, f"{out_prefix}.{chrom}.png")
         snps_ch = snps_chs.get_group(chrom)
-        logging.info(f"plot {chrom} with #SNP={len(snps_ch)}")
         fig, axes = plt.subplots(3, 1, figsize=(40, 6), sharex=True)
         fig.suptitle(f"{chrom}", fontsize=12)
 
@@ -216,7 +213,6 @@ def plot_rdr_baf_1d_aggregated(
     Observed RDR = x_{g,n} / (T_n * lambda_g)  (CalicoST S2)
     Observed BAF = y_{g,n} / D_{g,n}
     """
-    logging.info("plot 1D scatter aggregated RDR+BAF")
     chrom_sizes = get_chr_sizes(genome_file)
     cnv_blocks = sx_data.cnv_blocks
     if mask_cnp:
@@ -510,7 +506,6 @@ def plot_cross_heatmap(
     data = pd.pivot_table(
         assign_df, index=acol, columns=bcol, aggfunc="size", fill_value=0
     ).astype(int)
-    logging.info(data)
 
     # sort rows: normal first, then clones, NA last
     row_order = (
