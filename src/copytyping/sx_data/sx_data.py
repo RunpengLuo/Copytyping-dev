@@ -1,5 +1,3 @@
-import os
-import sys
 import logging
 
 import numpy as np
@@ -175,7 +173,7 @@ class SX_Data:
 
         logging.info(
             f"aggregated {self.G} segments -> {G_c} CNP clusters, "
-            f"IMB={clust.nrows_imbalanced}, ANE={clust.nrows_aneuploid}"
+            f"#imbalanced={clust.nrows_imbalanced}, #aneuploid={clust.nrows_aneuploid}"
         )
         return clust
 
@@ -201,7 +199,7 @@ def get_cnp_mask(A, B, C, and_mask=None):
         subclonal_mask = np.any(A[:, 2:] != A[:, 1][:, None], axis=1) | np.any(
             B[:, 2:] != B[:, 1][:, None], axis=1
         )
-    if not and_mask is None:
+    if and_mask is not None:
         tumor_mask &= and_mask
         clonal_loh_mask &= and_mask
         subclonal_loh_mask &= and_mask

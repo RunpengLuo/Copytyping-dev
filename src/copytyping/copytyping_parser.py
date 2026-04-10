@@ -140,60 +140,48 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="Laplace smoothing term when computing clone BAF",
     )
     parser.add_argument(
-        "--min_tau",
-        required=False,
-        default=50.0,
-        type=float,
-        help="minimum BB dispersion (also used as init value)",
-    )
-    parser.add_argument(
-        "--max_tau",
-        required=False,
-        default=500.0,
-        type=float,
-        help="maximum BB dispersion bound for MLE",
-    )
-    parser.add_argument(
-        "--min_phi",
-        required=False,
-        default=0.01,
-        type=float,
-        help="minimum NB dispersion phi (inv_phi upper bound = 1/min_phi)",
-    )
-    parser.add_argument(
-        "--max_phi",
+        "--tau_prior_a",
         required=False,
         default=100.0,
         type=float,
-        help="maximum NB dispersion phi (inv_phi lower bound = 1/max_phi)",
-    )
-    parser.add_argument(
-        "--tau_prior_a",
-        required=False,
-        default=6.0,
-        type=float,
-        help="Gamma prior shape for BB tau (default 6.0, mean=a/b=100)",
+        help="Gamma prior shape for BB tau (default 100.0, mean=a/b=200)",
     )
     parser.add_argument(
         "--tau_prior_b",
         required=False,
-        default=0.06,
+        default=0.5,
         type=float,
-        help="Gamma prior rate for BB tau (default 0.06, mean=a/b=100)",
+        help="Gamma prior rate for BB tau (default 0.5, mean=a/b=200)",
     )
     parser.add_argument(
         "--invphi_prior_a",
         required=False,
         default=4.0,
         type=float,
-        help="Gamma prior shape for NB inv_phi (default 4.0, mean=a/b=10)",
+        help="Gamma prior shape for NB inv_phi (default 4.0, mean=a/b=100)",
     )
     parser.add_argument(
         "--invphi_prior_b",
         required=False,
-        default=0.4,
+        default=0.04,
         type=float,
-        help="Gamma prior rate for NB inv_phi (default 0.4, mean=a/b=10)",
+        help="Gamma prior rate for NB inv_phi (default 0.04, mean=a/b=100)",
+    )
+    parser.add_argument(
+        "--theta_prior_a",
+        required=False,
+        default=0.5,
+        type=float,
+        help="Beta prior alpha for per-spot tumor purity theta "
+        "(default 0.5, Jeffreys prior)",
+    )
+    parser.add_argument(
+        "--theta_prior_b",
+        required=False,
+        default=0.5,
+        type=float,
+        help="Beta prior beta for per-spot tumor purity theta "
+        "(default 0.5, Jeffreys prior)",
     )
 
     parser.add_argument(

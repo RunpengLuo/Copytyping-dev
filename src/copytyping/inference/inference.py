@@ -171,19 +171,21 @@ def run(args=None):
         pi_init = pi_init / pi_init.sum()
     else:
         pi_init = bulk_props
+    tau_prior_a = args["tau_prior_a"]
+    tau_prior_b = args["tau_prior_b"]
+    invphi_prior_a = args["invphi_prior_a"]
+    invphi_prior_b = args["invphi_prior_b"]
     init_params = {
         "pi": pi_init,
-        "tau0": args["min_tau"],
-        "phi0": args["min_phi"],
-        "min_tau": args["min_tau"],
-        "max_tau": args["max_tau"],
-        "min_phi": args["min_phi"],
-        "max_phi": args["max_phi"],
-        "pi_alpha": args.get("pi_alpha", 1.0),
-        "tau_prior_a": args.get("tau_prior_a", 6.0),
-        "tau_prior_b": args.get("tau_prior_b", 0.06),
-        "invphi_prior_a": args.get("invphi_prior_a", 4.0),
-        "invphi_prior_b": args.get("invphi_prior_b", 0.4),
+        "tau0": tau_prior_a / tau_prior_b,  # prior mean
+        "phi0": 1.0 / (invphi_prior_a / invphi_prior_b),  # 1/prior mean of invphi
+        "pi_alpha": args["pi_alpha"],
+        "tau_prior_a": tau_prior_a,
+        "tau_prior_b": tau_prior_b,
+        "invphi_prior_a": invphi_prior_a,
+        "invphi_prior_b": invphi_prior_b,
+        "theta_prior_a": args["theta_prior_a"],
+        "theta_prior_b": args["theta_prior_b"],
     }
     fix_params = {"pi": False}
     for data_type in data_types:

@@ -1,18 +1,10 @@
-import os
-import sys
-
 import pandas as pd
 import numpy as np
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle, Polygon
-
-from copytyping.sx_data.sx_data import SX_Data
-from copytyping.utils import get_chr_sizes
-from collections import OrderedDict
 
 
 def plot_cnv_profile(
@@ -182,9 +174,9 @@ def plot_cnv_profile(
     ax.set_ylim(0, num_clones * h)
     ax.tick_params(axis="y", which="both", left=False, right=False)
 
-    if not ylabel is None:
+    if ylabel is not None:
         ax.set_ylabel(ylabel, rotation=0, ha="right", va="center")
-    if not title is None:
+    if title is not None:
         ax.set_title(title)
     return ax
 

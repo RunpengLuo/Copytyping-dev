@@ -7,6 +7,7 @@ import pandas as pd
 
 from scipy.special import logsumexp
 
+from copytyping.inference.likelihood_funcs import mle_invphi, mle_tau
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.plot.plot_common import plot_loss
 from copytyping.sx_data.sx_data import SX_Data
@@ -127,6 +128,55 @@ class Base_Model:
                 is_normal,
             )
 
+    def _init_tau_from_normals(self, data_type, params, is_normal):
+        """Init BB tau via MLE on normal cells at imbalanced segments."""
+        sx_data = self.data_sources[data_type]
+        tau_key = f"{data_type}-tau"
+        if tau_key not in params or np.sum(is_normal) == 0:
+            return
+        imb = sx_data.MASK["IMBALANCED"]
+        Y_norm = sx_data.Y[imb][:, is_normal][:, :, None].astype(np.float64)
+        D_norm = sx_data.D[imb][:, is_normal][:, :, None].astype(np.float64)
+        tau_init = mle_tau(
+            Y_norm,
+            D_norm,
+            np.full_like(Y_norm, 0.5),
+            np.ones_like(Y_norm),
+        )
+        params[tau_key][:] = tau_init
+        logging.info(
+            f"{data_type}: tau init from {np.sum(is_normal)} normal "
+            f"cells/spots x {np.sum(imb)} imbalanced segments "
+            f"= {tau_init:.2f}"
+        )
+
+    def _init_invphi_from_normals(self, data_type, params, is_normal):
+        """Init NB inv_phi via MLE on normal cells at aneuploid segments."""
+        sx_data = self.data_sources[data_type]
+        invphi_key = f"{data_type}-inv_phi"
+        lambda_key = f"{data_type}-lambda"
+        if invphi_key not in params or lambda_key not in params:
+            return
+        if np.sum(is_normal) == 0:
+            return
+        aneu = sx_data.MASK["ANEUPLOID"]
+        lambda_g = params[lambda_key]
+        X_norm = sx_data.X[aneu][:, is_normal][:, :, None].astype(np.float64)
+        mu_norm = (
+            sx_data.T[is_normal][None, :, None] * lambda_g[aneu, None, None]
+        ).astype(np.float64)
+        invphi_init = mle_invphi(
+            X_norm,
+            mu_norm,
+            np.ones_like(X_norm),
+        )
+        params[invphi_key][:] = invphi_init
+        logging.info(
+            f"{data_type}: inv_phi init from {np.sum(is_normal)} normal "
+            f"cells/spots x {np.sum(aneu)} aneuploid segments "
+            f"= {invphi_init:.4f} (phi={1 / invphi_init:.2f})"
+        )
+
     # ------------------------------------------------------------------
     # E-step
     # ------------------------------------------------------------------
@@ -171,19 +221,15 @@ class Base_Model:
 
         assert fit_mode in allowed_fit_mode
 
-        self._pi_alpha = init_params.get("pi_alpha", 1.0)
-        self._invphi_bounds = (1 / init_params["max_phi"], 1 / init_params["min_phi"])
-        self._logtau_bounds = (
-            np.log(init_params["min_tau"]),
-            np.log(init_params["max_tau"]),
-        )
-        self._tau_prior = (
-            init_params.get("tau_prior_a", 6.0),
-            init_params.get("tau_prior_b", 0.06),
-        )
+        self._pi_alpha = init_params["pi_alpha"]
+        self._tau_prior = (init_params["tau_prior_a"], init_params["tau_prior_b"])
         self._invphi_prior = (
-            init_params.get("invphi_prior_a", 4.0),
-            init_params.get("invphi_prior_b", 0.4),
+            init_params["invphi_prior_a"],
+            init_params["invphi_prior_b"],
+        )
+        self._theta_prior = (
+            init_params["theta_prior_a"],
+            init_params["theta_prior_b"],
         )
 
         params, fix_params = self._init_params(fit_mode, fix_params, init_params)

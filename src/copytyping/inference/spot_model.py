@@ -8,6 +8,8 @@ from copytyping.inference.base_model import Base_Model
 from copytyping.inference.likelihood_funcs import (
     cond_betabin_logpmf_theta,
     cond_negbin_logpmf_theta,
+    mle_invphi,
+    mle_tau,
 )
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
@@ -144,7 +146,7 @@ class Spot_Model(Base_Model):
                 contrib[~tumor_mask_n, :] = 0.0
                 global_lls += contrib
 
-        global_lls += np.log(params["pi"])[None, :]
+        global_lls += np.log(np.clip(params["pi"], 1e-300, None))[None, :]
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
@@ -153,6 +155,77 @@ class Spot_Model(Base_Model):
         tumor_idx = self._tumor_idx
 
         self._update_pi(gamma, params, fix_params, N_t, self.K_tumor)
+
+        # Dispersion updates (tau, inv_phi)
+        gamma_gnk = gamma[None, :, :]  # (1, N_tumor, K_tumor)
+        for data_type in self.data_types:
+            sx_data = self.data_sources[data_type]
+            lambda_g = params[f"{data_type}-lambda"]
+            theta = params[f"{data_type}-theta"]
+            theta_t = theta[tumor_idx]  # (N_tumor,)
+            rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
+
+            # BB tau update
+            if fit_mode in {"allele_only", "hybrid"} and not fix_params.get(
+                f"{data_type}-tau", True
+            ):
+                bb_mask = sx_data.MASK["IMBALANCED"] & (lambda_g > 0)
+                baf_gk = sx_data.BAF[:, 1:]
+                # theta-adjusted BAF: p = (theta*rdr*BAF + 0.5*(1-theta)) / (theta*rdr + (1-theta))
+                rdr_bb = rdrs_gk[bb_mask]  # (G_bb, K_tumor)
+                baf_bb = baf_gk[bb_mask]  # (G_bb, K_tumor)
+                p_gnk = (
+                    theta_t[None, :, None] * rdr_bb[:, None, :] * baf_bb[:, None, :]
+                    + 0.5 * (1 - theta_t[None, :, None])
+                ) / (
+                    theta_t[None, :, None] * rdr_bb[:, None, :]
+                    + (1 - theta_t[None, :, None])
+                )
+                Y_gnk = sx_data.Y[bb_mask][:, tumor_idx, None].astype(np.float64)
+                D_gnk = sx_data.D[bb_mask][:, tumor_idx, None].astype(np.float64)
+                tau_map = mle_tau(
+                    Y_gnk,
+                    D_gnk,
+                    p_gnk,
+                    gamma_gnk,
+                    prior=self._tau_prior,
+                )
+                params[f"{data_type}-tau"][:] = tau_map
+                tau_mle = mle_tau(Y_gnk, D_gnk, p_gnk, gamma_gnk)
+                logging.debug(
+                    f"{data_type} tau: MLE={tau_mle:.2f} MAP={tau_map:.2f} "
+                    f"ratio={tau_map / tau_mle:.2f}"
+                )
+
+            # NB inv_phi update
+            if fit_mode in {"total_only", "hybrid"} and not fix_params.get(
+                f"{data_type}-inv_phi", True
+            ):
+                nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
+                rdr_nb = rdrs_gk[nb_mask]  # (G_nb, K_tumor)
+                # theta-adjusted mu: mu = T * lambda * (theta * rdr + (1-theta))
+                mu_gnk = (
+                    sx_data.T[tumor_idx][None, :, None]
+                    * lambda_g[nb_mask, None, None]
+                    * (
+                        theta_t[None, :, None] * rdr_nb[:, None, :]
+                        + (1 - theta_t[None, :, None])
+                    )
+                )
+                X_gnk = sx_data.X[nb_mask][:, tumor_idx, None].astype(np.float64)
+                invphi_map = mle_invphi(
+                    X_gnk,
+                    mu_gnk,
+                    gamma_gnk,
+                    prior=self._invphi_prior,
+                )
+                params[f"{data_type}-inv_phi"][:] = invphi_map
+                invphi_mle = mle_invphi(X_gnk, mu_gnk, gamma_gnk)
+                logging.debug(
+                    f"{data_type} inv_phi: MLE={invphi_mle:.4f} "
+                    f"MAP={invphi_map:.4f} "
+                    f"(phi: MLE={1 / invphi_mle:.2f} MAP={1 / invphi_map:.2f})"
+                )
 
         # Per-spot theta update: sum Q across all data_types
         theta_keys = [
@@ -234,6 +307,12 @@ class Spot_Model(Base_Model):
                             )
                             Q += np.sum(ll_bb[:, 0, :] * w)
 
+                    # Beta(a, b) log-prior: (a-1)*log(θ) + (b-1)*log(1-θ)
+                    a_theta, b_theta = self._theta_prior
+                    tv = float(theta_val[0])
+                    Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(
+                        1.0 - tv
+                    )
                     return -Q
 
                 res = minimize_scalar(

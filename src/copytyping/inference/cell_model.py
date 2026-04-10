@@ -41,14 +41,18 @@ class Cell_Model(Base_Model):
         )
 
     def _init_params(self, fit_mode, init_fix_params, init_params):
-        is_normal = self._identify_normal_cells(
-            init_fix_params,
-            init_params,
-        )
-
         params = {
             "pi": init_params.get("pi", np.ones(self.K) / self.K),
         }
+
+        # Identify normals (skip in allele_only to avoid recursion
+        # from _identify_normal_cells inner sub-EM)
+        is_normal = None
+        if fit_mode != "allele_only":
+            is_normal = self._identify_normal_cells(
+                init_fix_params,
+                init_params,
+            )
 
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
@@ -114,7 +118,7 @@ class Cell_Model(Base_Model):
                 contrib[~mask_n, :] = 0.0
                 global_lls += contrib
 
-        global_lls += np.log(params["pi"])[None, :]
+        global_lls += np.log(np.clip(params["pi"], 1e-300, None))[None, :]
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
@@ -139,16 +143,10 @@ class Cell_Model(Base_Model):
                     X_gnk,
                     mu_gnk,
                     gamma_gnk,
-                    self._invphi_bounds,
                     prior=self._invphi_prior,
                 )
                 params[f"{data_type}-inv_phi"][:] = invphi_map
-                invphi_mle = mle_invphi(
-                    X_gnk,
-                    mu_gnk,
-                    gamma_gnk,
-                    self._invphi_bounds,
-                )
+                invphi_mle = mle_invphi(X_gnk, mu_gnk, gamma_gnk)
                 logging.debug(
                     f"{data_type} inv_phi: MLE={invphi_mle:.4f} "
                     f"MAP={invphi_map:.4f} "
@@ -169,17 +167,10 @@ class Cell_Model(Base_Model):
                     D_gnk,
                     p_gnk,
                     gamma_gnk,
-                    self._logtau_bounds,
                     prior=self._tau_prior,
                 )
                 params[f"{data_type}-tau"][:] = tau_map
-                tau_mle = mle_tau(
-                    Y_gnk,
-                    D_gnk,
-                    p_gnk,
-                    gamma_gnk,
-                    self._logtau_bounds,
-                )
+                tau_mle = mle_tau(Y_gnk, D_gnk, p_gnk, gamma_gnk)
                 logging.debug(
                     f"{data_type} tau: MLE={tau_mle:.2f} MAP={tau_map:.2f} "
                     f"ratio={tau_map / tau_mle:.2f}"

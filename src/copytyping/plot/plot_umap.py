@@ -1,12 +1,9 @@
-import os
-
 import pandas as pd
 import numpy as np
 import scanpy as sc
 from scanpy import AnnData
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.sx_data.sx_data import SX_Data
@@ -48,7 +45,7 @@ def plot_umap_copynumber(
         sc.pl.umap(
             adata,
             color="max_posterior",
-            title=f"colored by copytyping posterior probability",
+            title="colored by copytyping posterior probability",
             show=False,
             cmap="viridis",
             ax=axes[2],

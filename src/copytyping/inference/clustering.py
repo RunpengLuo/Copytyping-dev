@@ -1,16 +1,12 @@
-import os
-import sys
-
 import numpy as np
 import pandas as pd
 
 import scanpy as sc
 from scanpy import AnnData
-from sklearn import cluster, mixture
+from sklearn import cluster
 
 from copytyping.utils import *
 from copytyping.inference.cell_model import Cell_Model
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.inference.inference_utils import prepare_rdr_baf_features
 
 

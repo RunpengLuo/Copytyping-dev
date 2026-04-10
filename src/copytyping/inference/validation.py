@@ -8,7 +8,7 @@ from sklearn.metrics import (
     accuracy_score,
 )
 
-from copytyping.utils import is_tumor_label, is_normal_label, NA_CELLTYPE
+from copytyping.utils import is_tumor_label, NA_CELLTYPE
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
     clone_pi_gk,
@@ -228,17 +228,26 @@ def compute_cluster_discrimination(
             members = np.where(cluster_ids == cid)[0]
             chroms = seg_cnv.iloc[members]["#CHR"].unique()
             short = ",".join(
-                sorted(chroms, key=lambda x: int(x.replace("chr", "").replace("X", "23").replace("Y", "24")))
+                sorted(
+                    chroms,
+                    key=lambda x: int(
+                        x.replace("chr", "").replace("X", "23").replace("Y", "24")
+                    ),
+                )
             ).replace("chr", "")
             cid_to_chroms[cid] = short
 
     rows = []
     for g in range(sx_data.G):
-        cnp_parts = [f"{sx_data.A[g,k]}|{sx_data.B[g,k]}" for k in range(1, K)]
+        cnp_parts = [f"{sx_data.A[g, k]}|{sx_data.B[g, k]}" for k in range(1, K)]
         cnp_str = ";".join(cnp_parts)
         is_imb = bool(np.any(sx_data.A[g, 1:] != sx_data.B[g, 1:]))
         is_ane = bool(np.any(sx_data.C[g, 1:] != 2))
-        n_segs = int(np.sum(sx_data.cluster_ids == g)) if hasattr(sx_data, "cluster_ids") else 1
+        n_segs = (
+            int(np.sum(sx_data.cluster_ids == g))
+            if hasattr(sx_data, "cluster_ids")
+            else 1
+        )
         chroms = cid_to_chroms.get(g, "")
 
         ari_baf, ari_rdr, ari_hyb = 0.0, 0.0, 0.0
@@ -247,13 +256,19 @@ def compute_cluster_discrimination(
         if is_imb and tau is not None:
             if is_spot and theta_tumor is not None:
                 ll_bb = cond_betabin_logpmf_theta(
-                    sx_data.Y[g:g+1, tumor_idx], sx_data.D[g:g+1, tumor_idx],
-                    tau[0:1], sx_data.BAF[g:g+1, 1:], rdrs_gk[g:g+1], theta_tumor,
+                    sx_data.Y[g : g + 1, tumor_idx],
+                    sx_data.D[g : g + 1, tumor_idx],
+                    tau[0:1],
+                    sx_data.BAF[g : g + 1, 1:],
+                    rdrs_gk[g : g + 1],
+                    theta_tumor,
                 )[0]
             else:
                 ll_bb = cond_betabin_logpmf(
-                    sx_data.Y[g:g+1, tumor_idx], sx_data.D[g:g+1, tumor_idx],
-                    tau[0:1], sx_data.BAF[g:g+1],
+                    sx_data.Y[g : g + 1, tumor_idx],
+                    sx_data.D[g : g + 1, tumor_idx],
+                    tau[0:1],
+                    sx_data.BAF[g : g + 1],
                 )[0]
                 if not is_spot:
                     ll_bb = ll_bb[:, 1:]  # drop normal for cell model comparison
@@ -265,14 +280,20 @@ def compute_cluster_discrimination(
         if is_ane and inv_phi is not None:
             if is_spot and theta_tumor is not None:
                 ll_nb = cond_negbin_logpmf_theta(
-                    sx_data.X[g:g+1, tumor_idx], sx_data.T[tumor_idx],
-                    lambda_g[g:g+1], inv_phi[0:1], rdrs_gk[g:g+1], theta_tumor,
+                    sx_data.X[g : g + 1, tumor_idx],
+                    sx_data.T[tumor_idx],
+                    lambda_g[g : g + 1],
+                    inv_phi[0:1],
+                    rdrs_gk[g : g + 1],
+                    theta_tumor,
                 )[0]
             else:
-                props_gk = clone_pi_gk(lambda_g, sx_data.C)[g:g+1]
+                props_gk = clone_pi_gk(lambda_g, sx_data.C)[g : g + 1]
                 ll_nb = cond_negbin_logpmf(
-                    sx_data.X[g:g+1, tumor_idx], sx_data.T[tumor_idx],
-                    props_gk, inv_phi[0:1],
+                    sx_data.X[g : g + 1, tumor_idx],
+                    sx_data.T[tumor_idx],
+                    props_gk,
+                    inv_phi[0:1],
                 )[0]
                 if not is_spot:
                     ll_nb = ll_nb[:, 1:]
@@ -285,14 +306,24 @@ def compute_cluster_discrimination(
             pred = np.array(tumor_clones)[ll_hyb.argmax(axis=1)]
             ari_hyb = adjusted_rand_score(gt_labels, pred)
 
-        rows.append({
-            "cid": g, "chroms": chroms, "CNP": cnp_str, "n_segs": n_segs,
-            "IMB": is_imb, "ANE": is_ane,
-            "med_D": int(np.median(sx_data.D[g])),
-            "ARI_baf": round(ari_baf, 4),
-            "ARI_rdr": round(ari_rdr, 4),
-            "ARI_hyb": round(ari_hyb, 4),
-        })
+        rows.append(
+            {
+                "cid": g,
+                "chroms": chroms,
+                "CNP": cnp_str,
+                "n_segs": n_segs,
+                "IMB": is_imb,
+                "ANE": is_ane,
+                "med_D": int(np.median(sx_data.D[g])),
+                "ARI_baf": round(ari_baf, 4),
+                "ARI_rdr": round(ari_rdr, 4),
+                "ARI_hyb": round(ari_hyb, 4),
+            }
+        )
 
-    df = pd.DataFrame(rows).sort_values("ARI_hyb", ascending=False).reset_index(drop=True)
+    df = (
+        pd.DataFrame(rows)
+        .sort_values("ARI_hyb", ascending=False)
+        .reset_index(drop=True)
+    )
     return df

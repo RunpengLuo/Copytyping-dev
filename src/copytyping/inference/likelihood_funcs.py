@@ -187,10 +187,13 @@ def cond_negbin_logpmf_theta(
 
 ##################################################
 # fit functions
-def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds, prior=None, eps=1e-12):
+def mle_invphi(
+    X_gnk, mu_gnk, weights, invphi_bounds=(1e-4, 1e8), prior=None, eps=1e-12
+):
     """MAP estimate of NB inv_phi with optional Gamma(a, b) prior.
 
     Args:
+        invphi_bounds: (lo, hi) bounds for optimizer. Default (1e-4, 1e8).
         prior: tuple (a, b) for Gamma prior, or None for pure MLE.
     """
     mu_gnk = np.clip(mu_gnk, eps, None)
@@ -221,10 +224,18 @@ def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds, prior=None, eps=1e-12):
     return invphi_hat
 
 
-def mle_tau(Y_gnk, D_gnk, p_gnk, weights, logtau_bounds, prior=None):
+def mle_tau(
+    Y_gnk,
+    D_gnk,
+    p_gnk,
+    weights,
+    logtau_bounds=(np.log(1e-4), np.log(1e8)),
+    prior=None,
+):
     """MAP estimate of BB tau with optional Gamma(a, b) prior.
 
     Args:
+        logtau_bounds: (log_lo, log_hi) bounds. Default (log(1e-4), log(1e8)).
         prior: tuple (a, b) for Gamma prior, or None for pure MLE.
     """
     X_gnk = D_gnk - Y_gnk

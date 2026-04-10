@@ -1,18 +1,7 @@
-import os
-import sys
-
 import numpy as np
-import pandas as pd
 
-import scanpy as sc
-from scanpy import AnnData
-import squidpy as sq
 
-from scipy.io import mmread
-from scipy.sparse import csr_matrix
-from scipy import sparse
-
-from scipy import sparse, stats
+from scipy import stats
 
 from copytyping.utils import *
 from copytyping.io_utils import *

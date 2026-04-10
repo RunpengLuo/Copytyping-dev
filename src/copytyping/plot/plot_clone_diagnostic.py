@@ -12,7 +12,7 @@ from scipy.stats import beta as beta_dist, norm as norm_dist
 import seaborn as sns
 
 from copytyping.sx_data.sx_data import SX_Data
-from copytyping.utils import is_tumor_label, is_normal_label, NA_CELLTYPE
+from copytyping.utils import is_tumor_label, is_normal_label
 
 
 def plot_clone_diagnostic(
