@@ -57,6 +57,7 @@ class Spot_Model(Base_Model):
             init_params,
             ref_label="path_label",
         )
+        self._init_is_normal = is_normal
 
         params = {
             "pi": init_params.get("pi", np.ones(self.K_tumor) / self.K_tumor),

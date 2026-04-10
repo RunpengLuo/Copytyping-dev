@@ -11,6 +11,7 @@ from copytyping.copytyping_parser import (
     check_arguments_inference,
 )
 from copytyping.inference.cell_model import Cell_Model
+from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
     compute_cluster_discrimination,
@@ -249,28 +250,30 @@ def run(args=None):
             )
             logging.info(f"saved cluster discrimination to {out_dir}")
 
-    # Remap cluster-level params to segment-level for plotting
     if aggr_mode == "clust":
+        is_normal = getattr(instance, "_init_is_normal", None)
         for data_type in data_types:
             clust_obj = data_sources[data_type]
-            if hasattr(clust_obj, "cluster_ids"):
-                cids = clust_obj.cluster_ids
-                lam_key = f"{data_type}-lambda"
-                if lam_key in model_params:
-                    model_params[lam_key] = model_params[lam_key][cids]
-                for disp_key in [
-                    f"{data_type}-tau",
-                    f"{data_type}-inv_phi",
-                ]:
-                    if disp_key in model_params and len(model_params[disp_key]) > 0:
-                        seg_sx = seg_data_sources[data_type]
-                        val = model_params[disp_key][0]
-                        n_seg = (
-                            seg_sx.nrows_imbalanced
-                            if "tau" in disp_key
-                            else seg_sx.nrows_aneuploid
-                        )
-                        model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
+            if not hasattr(clust_obj, "cluster_ids"):
+                continue
+            seg_sx = seg_data_sources[data_type]
+            lam_key = f"{data_type}-lambda"
+            if lam_key in model_params and is_normal is not None:
+                model_params[lam_key] = compute_baseline_proportions(
+                    seg_sx.X, seg_sx.T, is_normal
+                )
+            for disp_key in [
+                f"{data_type}-tau",
+                f"{data_type}-inv_phi",
+            ]:
+                if disp_key in model_params and len(model_params[disp_key]) > 0:
+                    val = model_params[disp_key][0]
+                    n_seg = (
+                        seg_sx.nrows_imbalanced
+                        if "tau" in disp_key
+                        else seg_sx.nrows_aneuploid
+                    )
+                    model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
 
     # ---- Evaluation (per-rep) ----
     metric = {}

@@ -53,6 +53,7 @@ class Cell_Model(Base_Model):
                 init_fix_params,
                 init_params,
             )
+        self._init_is_normal = is_normal
 
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
