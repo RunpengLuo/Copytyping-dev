@@ -134,6 +134,7 @@ class Cell_Model(Base_Model):
             if (
                 fit_mode in {"total_only", "hybrid"}
                 and not fix_params[f"{data_type}-inv_phi"]
+                and sx_data.nrows_aneuploid > 0
             ):
                 lambda_g = params[f"{data_type}-lambda"]
                 nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
@@ -158,6 +159,7 @@ class Cell_Model(Base_Model):
             if (
                 fit_mode in {"allele_only", "hybrid"}
                 and not fix_params[f"{data_type}-tau"]
+                and sx_data.nrows_imbalanced > 0
             ):
                 MA, _ = sx_data.apply_mask_shallow(mask_id="IMBALANCED")
                 p_gnk = MA["BAF"][:, None, :]

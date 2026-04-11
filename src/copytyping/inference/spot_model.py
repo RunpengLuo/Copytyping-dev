@@ -167,8 +167,10 @@ class Spot_Model(Base_Model):
             rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
 
             # BB tau update
-            if fit_mode in {"allele_only", "hybrid"} and not fix_params.get(
-                f"{data_type}-tau", True
+            if (
+                fit_mode in {"allele_only", "hybrid"}
+                and not fix_params[f"{data_type}-tau"]
+                and sx_data.nrows_imbalanced > 0
             ):
                 bb_mask = sx_data.MASK["IMBALANCED"] & (lambda_g > 0)
                 baf_gk = sx_data.BAF[:, 1:]
@@ -199,8 +201,10 @@ class Spot_Model(Base_Model):
                 )
 
             # NB inv_phi update
-            if fit_mode in {"total_only", "hybrid"} and not fix_params.get(
-                f"{data_type}-inv_phi", True
+            if (
+                fit_mode in {"total_only", "hybrid"}
+                and not fix_params[f"{data_type}-inv_phi"]
+                and sx_data.nrows_aneuploid > 0
             ):
                 nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
                 rdr_nb = rdrs_gk[nb_mask]  # (G_nb, K_tumor)
@@ -229,101 +233,83 @@ class Spot_Model(Base_Model):
                 )
 
         # Per-spot theta update: sum Q across all data_types
-        theta_keys = [
-            f"{dt}-theta"
-            for dt in self.data_types
-            if f"{dt}-theta" in params and not fix_params.get(f"{dt}-theta", True)
-        ]
-        if theta_keys:
-            purity_bounds = (1e-4, 1.0 - 1e-4)
+        purity_bounds = (1e-4, 1.0 - 1e-4)
+        a_theta, b_theta = self._theta_prior
 
-            # Pre-compute per-modality masks and intermediates
-            dt_info = []
-            for data_type in self.data_types:
-                if f"{data_type}-theta" not in params:
-                    continue
-                sx_data = self.data_sources[data_type]
-                mask_n = self.modality_masks[data_type]
-                lambda_g = params[f"{data_type}-lambda"]
-                rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
-                nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
-                bb_mask = sx_data.MASK["IMBALANCED"] & (lambda_g > 0)
-                dt_info.append(
-                    {
-                        "data_type": data_type,
-                        "sx_data": sx_data,
-                        "mask_n": mask_n,
-                        "lambda_g": lambda_g,
-                        "rdrs_gk": rdrs_gk,
-                        "nb_mask": nb_mask,
-                        "bb_mask": bb_mask,
-                        "p_gk": sx_data.BAF[:, 1:],
-                    }
+        # Precompute per-modality masks once (outside per-spot loop)
+        bb_masks = {}
+        nb_masks = {}
+        rdrs = {}
+        for data_type in self.data_types:
+            sx = self.data_sources[data_type]
+            lg = params[f"{data_type}-lambda"]
+            rdrs[data_type] = clone_rdr_gk(lg, sx.C)[:, 1:]
+            nb_masks[data_type] = sx.MASK["ANEUPLOID"] & (lg > 0)
+            bb_masks[data_type] = sx.MASK["IMBALANCED"] & (lg > 0)
+
+        theta_arr = params[f"{self.data_types[0]}-theta"].copy()
+
+        for n in range(self.N):
+
+            def neg_Q_theta(theta_val, _n=n):
+                theta_val = np.array([theta_val], dtype=float)
+                Q = 0.0
+                if _n in tumor_idx:
+                    tidx = np.searchsorted(tumor_idx, _n)
+                    w = gamma[tidx][None, :]
+                else:
+                    w = np.ones((1, self.K_tumor)) / self.K_tumor
+
+                for data_type in self.data_types:
+                    if not self.modality_masks[data_type][_n]:
+                        continue
+                    sx = self.data_sources[data_type]
+                    lg = params[f"{data_type}-lambda"]
+                    nb_mask = nb_masks[data_type]
+                    bb_mask = bb_masks[data_type]
+                    rdrs_gk = rdrs[data_type]
+
+                    if fit_mode in {"total_only", "hybrid"} and nb_mask.any():
+                        ll_nb = cond_negbin_logpmf_theta(
+                            sx.X[nb_mask][:, _n : _n + 1],
+                            np.array([sx.T[_n]], dtype=float),
+                            lg[nb_mask],
+                            params[f"{data_type}-inv_phi"][
+                                lg[sx.MASK["ANEUPLOID"]] > 0
+                            ],
+                            rdrs_gk[nb_mask],
+                            theta_val,
+                        )
+                        Q += np.sum(ll_nb[:, 0, :] * w)
+
+                    if fit_mode in {"allele_only", "hybrid"} and bb_mask.any():
+                        ll_bb = cond_betabin_logpmf_theta(
+                            sx.Y[bb_mask][:, _n : _n + 1],
+                            sx.D[bb_mask][:, _n : _n + 1],
+                            params[f"{data_type}-tau"][
+                                lg[sx.MASK["IMBALANCED"]] > 0
+                            ],
+                            sx.BAF[bb_mask, 1:],
+                            rdrs_gk[bb_mask],
+                            theta_val,
+                        )
+                        Q += np.sum(ll_bb[:, 0, :] * w)
+
+                # Beta(a, b) log-prior: (a-1)*log(θ) + (b-1)*log(1-θ)
+                tv = float(theta_val[0])
+                Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(
+                    1.0 - tv
                 )
+                return -Q
 
-            theta_arr = np.full(self.N, 0.5, dtype=np.float64)
-            # Initialize from first available modality's theta
-            for info in dt_info:
-                dt = info["data_type"]
-                theta_arr = params[f"{dt}-theta"].copy()
-                break
+            res = minimize_scalar(
+                neg_Q_theta, bounds=purity_bounds, method="bounded"
+            )
+            theta_arr[n] = np.clip(res.x, 1e-4, 1.0 - 1e-4)
 
-            for n in range(self.N):
-
-                def neg_Q_theta(theta_val, _n=n):
-                    theta_val = np.array([theta_val], dtype=float)
-                    Q = 0.0
-                    if _n in tumor_idx:
-                        tidx = np.searchsorted(tumor_idx, _n)
-                        w = gamma[tidx][None, :]
-                    else:
-                        w = np.ones((1, self.K_tumor)) / self.K_tumor
-
-                    for info in dt_info:
-                        if not info["mask_n"][_n]:
-                            continue
-                        sx = info["sx_data"]
-                        lg = info["lambda_g"]
-                        dt = info["data_type"]
-
-                        if fit_mode in {"total_only", "hybrid"}:
-                            ll_nb = cond_negbin_logpmf_theta(
-                                sx.X[info["nb_mask"]][:, _n : _n + 1],
-                                np.array([sx.T[_n]], dtype=float),
-                                lg[info["nb_mask"]],
-                                params[f"{dt}-inv_phi"][lg[sx.MASK["ANEUPLOID"]] > 0],
-                                info["rdrs_gk"][info["nb_mask"]],
-                                theta_val,
-                            )
-                            Q += np.sum(ll_nb[:, 0, :] * w)
-
-                        if fit_mode in {"allele_only", "hybrid"}:
-                            ll_bb = cond_betabin_logpmf_theta(
-                                sx.Y[info["bb_mask"]][:, _n : _n + 1],
-                                sx.D[info["bb_mask"]][:, _n : _n + 1],
-                                params[f"{dt}-tau"][lg[sx.MASK["IMBALANCED"]] > 0],
-                                info["p_gk"][info["bb_mask"]],
-                                info["rdrs_gk"][info["bb_mask"]],
-                                theta_val,
-                            )
-                            Q += np.sum(ll_bb[:, 0, :] * w)
-
-                    # Beta(a, b) log-prior: (a-1)*log(θ) + (b-1)*log(1-θ)
-                    a_theta, b_theta = self._theta_prior
-                    tv = float(theta_val[0])
-                    Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(
-                        1.0 - tv
-                    )
-                    return -Q
-
-                res = minimize_scalar(
-                    neg_Q_theta, bounds=purity_bounds, method="bounded"
-                )
-                theta_arr[n] = np.clip(res.x, 1e-4, 1.0 - 1e-4)
-
-            # Set the same theta for all modalities
-            for info in dt_info:
-                params[f"{info['data_type']}-theta"] = theta_arr.copy()
+        for data_type in self.data_types:
+            if not fix_params[f"{data_type}-theta"]:
+                params[f"{data_type}-theta"] = theta_arr.copy()
 
     # ------------------------------------------------------------------
     # Predict

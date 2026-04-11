@@ -221,6 +221,18 @@ class Base_Model:
 
         assert fit_mode in allowed_fit_mode
 
+        # Sanity check: EM needs at least some informative bins.
+        total_imb = sum(sx.nrows_imbalanced for sx in self.data_sources.values())
+        total_aneu = sum(sx.nrows_aneuploid for sx in self.data_sources.values())
+        if fit_mode == "allele_only":
+            assert total_imb > 0, "no imbalanced bins: allele_only fit has no data"
+        elif fit_mode == "total_only":
+            assert total_aneu > 0, "no aneuploid bins: total_only fit has no data"
+        else:
+            assert total_imb + total_aneu > 0, (
+                "no imbalanced or aneuploid bins: hybrid fit has no data"
+            )
+
         self._pi_alpha = init_params["pi_alpha"]
         self._tau_prior = (init_params["tau_prior_a"], init_params["tau_prior_b"])
         self._invphi_prior = (
