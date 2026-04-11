@@ -260,8 +260,10 @@ def plot_rdr_baf_1d_aggregated(
     ).to_numpy()
     abs_starts = cnv_blocks.apply(
         func=lambda r: chr_offsets[r["#CHR"]] + r.START, axis=1
-    )
-    abs_ends = cnv_blocks.apply(func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1)
+    ).to_numpy()
+    abs_ends = cnv_blocks.apply(
+        func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1
+    ).to_numpy()
 
     # Clamp to 20 for any reasonably sized dataset (formula goes negative above ~2k bins).
     markersize = float(max(20, 4 - np.floor(len(cnv_blocks) / 500)))
@@ -298,7 +300,14 @@ def plot_rdr_baf_1d_aggregated(
                 alpha=0.8,
                 color=color,
             )
-            # expected RDR line at 1.0 (normal baseline)
+            ax_rdr.vlines(
+                list(chr_offsets.values()),
+                ymin=0,
+                ymax=1,
+                transform=ax_rdr.get_xaxis_transform(),
+                linewidth=0.5,
+                colors="k",
+            )
             ax_rdr.hlines(
                 y=1.0,
                 xmin=0,
@@ -307,31 +316,30 @@ def plot_rdr_baf_1d_aggregated(
                 linestyle=":",
                 linewidth=1,
             )
-            # expected RDR per segment for this clone: C[g,k] / C[g,0]
+            # expected RDR lines
+            exp_rdr_max = 1.0
             if cell_label != "NA":
-                try:
-                    clone_idx = sx_data.clones.index(cell_label)
-                    C_normal = np.maximum(sx_data.C[:, 0], 1)
-                    if mask_cnp:
-                        C_normal = C_normal[sx_data.MASK[mask_id]]
-                        clone_C = sx_data.C[sx_data.MASK[mask_id], clone_idx]
-                    else:
-                        clone_C = sx_data.C[:, clone_idx]
-                    exp_rdr = clone_C / C_normal
-                    exp_rdr_lines = [
-                        [(s, r), (t, r)]
-                        for s, t, r in zip(abs_starts, abs_ends, exp_rdr)
-                    ]
-                    ax_rdr.add_collection(
-                        LineCollection(
-                            exp_rdr_lines,
-                            linewidth=2,
-                            colors=[(0, 0, 0, 1)] * len(exp_rdr),
-                        )
+                clone_idx = sx_data.clones.index(cell_label)
+                C_normal = np.maximum(sx_data.C[:, 0], 1).astype(np.float64)
+                clone_C = sx_data.C[:, clone_idx].astype(np.float64)
+                if mask_cnp:
+                    C_normal = C_normal[sx_data.MASK[mask_id]]
+                    clone_C = clone_C[sx_data.MASK[mask_id]]
+                exp_rdr = clone_C / C_normal
+                exp_rdr_lines = [
+                    [(s, r), (t, r)]
+                    for s, t, r in zip(abs_starts, abs_ends, exp_rdr)
+                ]
+                ax_rdr.add_collection(
+                    LineCollection(
+                        exp_rdr_lines,
+                        linewidth=2,
+                        colors=[(0, 0, 0, 1)] * len(exp_rdr),
                     )
-                except ValueError:
-                    pass
-            ax_rdr.set_ylim([-0.1, min(max(val_rdr.max() * 1.1, 2.0), 6.0)])
+                )
+                exp_rdr_max = float(exp_rdr.max())
+            y_top = min(max(val_rdr.max() * 1.1, exp_rdr_max * 1.1, 2.0), 6.0)
+            ax_rdr.set_ylim([-0.1, y_top])
         else:
             ax_rdr.text(
                 0.5,
@@ -341,14 +349,6 @@ def plot_rdr_baf_1d_aggregated(
                 ha="center",
                 va="center",
             )
-        ax_rdr.vlines(
-            list(chr_offsets.values()),
-            ymin=0,
-            ymax=1,
-            transform=ax_rdr.get_xaxis_transform(),
-            linewidth=0.5,
-            colors="k",
-        )
         ax_rdr.set_ylabel(f"{cell_label}\nRDR")
         ax_rdr.set_title(f"{sample} {data_type} — {cell_label} (n={num_bcs})")
         ax_rdr.grid(False)
@@ -387,22 +387,19 @@ def plot_rdr_baf_1d_aggregated(
         )
         # expected BAF lines
         if exp_bafs is not None and cell_label != "NA":
-            try:
-                clone_idx = sx_data.clones.index(cell_label)
-                clone_baf = exp_bafs[:, clone_idx]
-                exp_baf_lines = [
-                    [(s, baf), (t, baf)]
-                    for s, t, baf in zip(abs_starts, abs_ends, clone_baf)
-                ]
-                ax_baf.add_collection(
-                    LineCollection(
-                        exp_baf_lines,
-                        linewidth=2,
-                        colors=[(0, 0, 0, 1)] * len(clone_baf),
-                    )
+            clone_idx = sx_data.clones.index(cell_label)
+            clone_baf = exp_bafs[:, clone_idx]
+            exp_baf_lines = [
+                [(s, baf), (t, baf)]
+                for s, t, baf in zip(abs_starts, abs_ends, clone_baf)
+            ]
+            ax_baf.add_collection(
+                LineCollection(
+                    exp_baf_lines,
+                    linewidth=2,
+                    colors=[(0, 0, 0, 1)] * len(clone_baf),
                 )
-            except ValueError:
-                pass
+            )
         ax_baf.set_ylim([-0.05, 1.05])
         ax_baf.set_ylabel(f"{cell_label}\nphased AF")
         ax_baf.grid(False)
