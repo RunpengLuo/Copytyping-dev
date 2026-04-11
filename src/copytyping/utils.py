@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 import numpy as np
 import logging
@@ -154,6 +155,7 @@ def setup_logging(args) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
+        stream=sys.stdout,
     )
 
 
