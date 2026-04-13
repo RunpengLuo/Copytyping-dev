@@ -8,7 +8,7 @@ from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.utils import get_chr_sizes
+from copytyping.utils import get_chr_sizes, is_tumor_label
 from copytyping.sx_data.sx_data import SX_Data
 
 
@@ -327,8 +327,7 @@ def plot_rdr_baf_1d_aggregated(
                     clone_C = clone_C[sx_data.MASK[mask_id]]
                 exp_rdr = clone_C / C_normal
                 exp_rdr_lines = [
-                    [(s, r), (t, r)]
-                    for s, t, r in zip(abs_starts, abs_ends, exp_rdr)
+                    [(s, r), (t, r)] for s, t, r in zip(abs_starts, abs_ends, exp_rdr)
                 ]
                 ax_rdr.add_collection(
                     LineCollection(
@@ -493,81 +492,115 @@ def plot_cross_heatmap(
     bcol="Decision",
 ):
     """
-    Plot heatmap to cross-check assignments vs reference cell types.
+    Plot cross-tabulation heatmap: rows = GT labels (bcol), cols = predicted (acol).
 
-    Rows = predicted labels (acol), columns = reference cell types (bcol).
-    Color encodes row-normalized fraction so each predicted label's distribution
-    is directly comparable. Raw counts are annotated in each cell.
+    Cells are white by default. Red highlights misassignments:
+    - GT non-tumor assigned to clone*/NA
+    - GT tumor assigned to normal/NA
+    Raw counts annotated in each cell.
     """
-    # --- build pivot table (counts) ---
-    data = pd.pivot_table(
-        assign_df, index=acol, columns=bcol, aggfunc="size", fill_value=0
-    ).astype(int)
+    ct = pd.crosstab(assign_df[bcol], assign_df[acol])
 
-    # sort rows: normal first, then clones, NA last
-    row_order = (
-        [r for r in ["normal"] if r in data.index]
-        + sorted([r for r in data.index if r.startswith("clone")])
-        + [r for r in data.index if r not in ["normal"] and not r.startswith("clone")]
-    )
-    # sort columns: put tumor-like labels first
-    tumor_first = [c for c in data.columns if c.lower() in {"tumor", "tumor_cell"}]
-    other_cols = [c for c in data.columns if c not in tumor_first]
-    col_order = tumor_first + other_cols
+    # Sort rows: tumor GT first, then non-tumor
+    gt_tumor = sorted([r for r in ct.index if is_tumor_label(r)])
+    gt_normal = sorted([r for r in ct.index if not is_tumor_label(r)])
+    row_order = gt_tumor + gt_normal
 
-    data = data.loc[row_order, col_order]
-    counts = data.to_numpy(dtype=float)
+    # Sort cols: normal, clone*, NA/other
+    pred_normal = [c for c in ct.columns if c == "normal"]
+    pred_clone = sorted([c for c in ct.columns if c.startswith("clone")])
+    pred_other = sorted([c for c in ct.columns if c not in pred_normal + pred_clone])
+    col_order = pred_normal + pred_clone + pred_other
 
-    # row-normalise → fraction of each predicted label
-    row_sums = counts.sum(axis=1, keepdims=True)
-    fractions = np.divide(
-        counts, row_sums, where=row_sums > 0, out=np.zeros_like(counts)
-    )
-
+    row_order = [r for r in row_order if r in ct.index]
+    col_order = [c for c in col_order if c in ct.columns]
+    ct = ct.loc[row_order, col_order]
+    counts = ct.to_numpy(dtype=float)
     num_rows, num_cols = counts.shape
-    cell_w = max(0.7, 8.0 / num_cols)
-    cell_h = 1.2
-    fig_w = max(8, cell_w * num_cols + 2)
-    fig_h = max(3, cell_h * num_rows + 1.5)
 
+    # Compute precision / recall / f1 for the title
+    gt_tumor_mask = np.array([is_tumor_label(r) for r in row_order])
+    pred_tumor_mask = np.array([c.startswith("clone") for c in col_order])
+    tp = counts[np.ix_(gt_tumor_mask, pred_tumor_mask)].sum()
+    fp = counts[np.ix_(~gt_tumor_mask, pred_tumor_mask)].sum()
+    fn = counts[np.ix_(gt_tumor_mask, ~pred_tumor_mask)].sum()
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+
+    # Build error mask: red for misassignments
+    error = np.zeros((num_rows, num_cols), dtype=bool)
+    for i, gt_lab in enumerate(row_order):
+        gt_is_tumor = is_tumor_label(gt_lab)
+        for j, pred_lab in enumerate(col_order):
+            pred_is_tumor = pred_lab.startswith("clone")
+            pred_is_normal = pred_lab == "normal"
+            pred_is_na = pred_lab == "NA"
+            if gt_is_tumor and (pred_is_normal or pred_is_na):
+                error[i, j] = True
+            if not gt_is_tumor and (pred_is_tumor or pred_is_na):
+                error[i, j] = True
+
+    # Red for any error cell with count > 0; white otherwise
+    rgba = np.ones((num_rows, num_cols, 4))
+    for i in range(num_rows):
+        for j in range(num_cols):
+            if error[i, j] and counts[i, j] > 0:
+                rgba[i, j] = [1.0, 0.85, 0.85, 1.0]
+
+    cell_w = max(0.5, min(0.7, 5.0 / num_cols))
+    cell_h = max(0.35, min(0.5, 4.0 / num_rows))
+    fig_w = max(4, cell_w * num_cols + 2.5)
+    fig_h = max(2.5, cell_h * num_rows + 1.8)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-    im = ax.imshow(fractions, aspect="auto", cmap="RdYlGn", vmin=0, vmax=1)
+    ax.imshow(rgba, aspect="auto")
 
-    # annotate with raw counts; auto-size font to fit cells
-    font_size = max(6, min(11, int(280 / num_cols)))
+    font_size = max(5, min(8, int(160 / max(num_cols, num_rows))))
     for i in range(num_rows):
         for j in range(num_cols):
             n = int(counts[i, j])
-            frac = fractions[i, j]
-            text_color = "white" if frac < 0.35 or frac > 0.75 else "black"
+            color = "grey" if n == 0 else "black"
             ax.text(
                 j,
                 i,
                 str(n),
                 ha="center",
                 va="center",
-                color=text_color,
+                color=color,
                 fontsize=font_size,
-                fontweight="bold",
             )
 
+    # Tick labels with counts and percentages
+    total_n = counts.sum()
+    col_sums = counts.sum(axis=0)
+    row_sums_1d = counts.sum(axis=1)
+    col_labels = [
+        f"{c}\n({int(col_sums[j])}, {col_sums[j] / total_n * 100:.1f}%)"
+        for j, c in enumerate(col_order)
+    ]
+    row_labels = [
+        f"{r}  ({int(row_sums_1d[i])}, {row_sums_1d[i] / total_n * 100:.1f}%)"
+        for i, r in enumerate(row_order)
+    ]
     ax.set_xticks(np.arange(num_cols))
-    ax.set_xticklabels(col_order, rotation=45, ha="right", fontsize=9)
+    ax.set_xticklabels(col_labels, rotation=45, ha="right", fontsize=8)
     ax.set_yticks(np.arange(num_rows))
-    ax.set_yticklabels(row_order, fontsize=10)
+    ax.set_yticklabels(row_labels, fontsize=8)
     ax.tick_params(length=0)
-    ax.set_xlabel(bcol, fontsize=10)
-    ax.set_ylabel(acol, fontsize=10)
+    ax.set_xlabel(f"predicted ({acol})", fontsize=10)
+    ax.set_ylabel(f"GT ({bcol})", fontsize=10)
     ax.set_title(
-        f"Cell Assignment Heatmap  {sample}", fontweight="bold", fontsize=13, pad=10
+        f"{sample}\nprec={prec:.3f}  recall={rec:.3f}  f1={f1:.3f}",
+        fontsize=11,
     )
 
-    cbar = plt.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
-    cbar.set_label("Fraction within predicted label", fontsize=8)
-    cbar.ax.tick_params(labelsize=7)
+    # Grid lines between cells
+    for i in range(num_rows + 1):
+        ax.axhline(i - 0.5, color="grey", linewidth=0.5)
+    for j in range(num_cols + 1):
+        ax.axvline(j - 0.5, color="grey", linewidth=0.5)
 
     plt.tight_layout()
     plt.savefig(outfile, dpi=300, bbox_inches="tight")
     plt.close()
-    return
