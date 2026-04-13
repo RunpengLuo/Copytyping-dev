@@ -20,7 +20,7 @@ BB_DIR_NAME="bb_msr${MSR}_mspb${MSPB}"
 #
 # Panel TSV columns (tab-separated, header required):
 #   SAMPLE  cancer_type  platform  celltype_file  bbc_phase
-#   seg_ucn  sol_id  PLOIDY  CLONE
+#   seg_ucn  PLOIDY  CLONE  sol_id
 #
 # Field conventions:
 #   celltype_file : path or "UNKNOWN"
@@ -53,7 +53,7 @@ run_one() {
 # ============================================================
 # Main loop
 # ============================================================
-tail -n +2 "${PANEL_TSV}" | while IFS=$'\t' read -r SAMPLE cancer_type platform celltype_file bbc_phase seg_ucn sol_id PLOIDY CLONE; do
+tail -n +2 "${PANEL_TSV}" | while IFS=$'\t' read -r SAMPLE cancer_type platform celltype_file bbc_phase seg_ucn PLOIDY CLONE sol_id; do
 
     # Platform filter
     if [ -n "$PLATFORM_FILTER" ] && [ "$platform" != "$PLATFORM_FILTER" ]; then
