@@ -209,6 +209,22 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="if set, update Beta-binomial dispersion "
         "in M-step (default: fixed after init)",
     )
+    parser.add_argument(
+        "--update_purity",
+        required=False,
+        action="store_true",
+        default=False,
+        help="if set, update per-spot tumor purity (theta) "
+        "in M-step (default: fixed after init, spatial only)",
+    )
+    parser.add_argument(
+        "--hard_em",
+        required=False,
+        action="store_true",
+        default=False,
+        help="if set, use hard EM (argmax clone assignment) "
+        "instead of soft EM in M-step",
+    )
     # post selection
     parser.add_argument(
         "--posterior_thres",

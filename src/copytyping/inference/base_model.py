@@ -27,6 +27,7 @@ class Base_Model:
         prefix="copytyping",
         verbose=1,
         modality_masks: dict = None,
+        hard_em: bool = False,
     ) -> None:
         self.barcodes = barcodes
         self.data_types = data_types
@@ -38,6 +39,7 @@ class Base_Model:
         self.work_dir = work_dir
         self.prefix = prefix
         self.verbose = verbose
+        self.hard_em = hard_em
         if modality_masks is None:
             modality_masks = {dt: np.ones(self.N, dtype=bool) for dt in data_types}
         self.modality_masks = modality_masks
@@ -251,7 +253,12 @@ class Base_Model:
         for t in range(1, max_iter):
             param_trace.append(copy.deepcopy(params))
             gamma = self._e_step(fit_mode, params, t)
-            self._m_step(fit_mode, gamma, params, fix_params, t=t, eps=eps)
+            if self.hard_em:
+                hard = np.zeros_like(gamma)
+                hard[np.arange(len(gamma)), gamma.argmax(axis=1)] = 1.0
+                self._m_step(fit_mode, hard, params, fix_params, t=t, eps=eps)
+            else:
+                self._m_step(fit_mode, gamma, params, fix_params, t=t, eps=eps)
 
             ll, _, _ = self.compute_log_likelihood(fit_mode, params)
             ll_trace.append(ll)

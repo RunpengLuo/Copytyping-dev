@@ -28,6 +28,7 @@ class Cell_Model(Base_Model):
         prefix="copytyping",
         verbose=1,
         modality_masks=None,
+        hard_em=False,
     ):
         super().__init__(
             barcodes,
@@ -38,6 +39,7 @@ class Cell_Model(Base_Model):
             prefix,
             verbose,
             modality_masks=modality_masks,
+            hard_em=hard_em,
         )
 
     def _init_params(self, fit_mode, init_fix_params, init_params):

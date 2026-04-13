@@ -190,6 +190,7 @@ def run(args=None):
     for data_type in data_types:
         fix_params[f"{data_type}-inv_phi"] = not args["update_NB_dispersion"]
         fix_params[f"{data_type}-tau"] = not args["update_BB_dispersion"]
+        fix_params[f"{data_type}-theta"] = not args["update_purity"]
 
     if platform == "single_cell":
         model = Cell_Model
@@ -207,6 +208,7 @@ def run(args=None):
         out_prefix,
         verbosity,
         modality_masks=clust_masks,
+        hard_em=args.get("hard_em", False),
     )
     model_params = instance.fit(
         fit_mode,

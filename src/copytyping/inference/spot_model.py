@@ -37,6 +37,7 @@ class Spot_Model(Base_Model):
         prefix="copytyping",
         verbose=1,
         modality_masks=None,
+        hard_em=False,
     ):
         super().__init__(
             barcodes,
@@ -47,6 +48,7 @@ class Spot_Model(Base_Model):
             prefix,
             verbose,
             modality_masks=modality_masks,
+            hard_em=hard_em,
         )
         self.tumor_clones = self.clones[1:]
         self.K_tumor = len(self.tumor_clones)
