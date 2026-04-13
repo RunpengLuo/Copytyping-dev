@@ -10,7 +10,7 @@ simulations/sim_*/
 dispersion_analysis/
 tmp/
 .DS_Store
-*.sh
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
