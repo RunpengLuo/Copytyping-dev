@@ -152,7 +152,11 @@ def read_whitelist_segments(bed_file: str):
 
 
 def setup_logging(args) -> None:
-    v = getattr(args, "verbosity", None) or (args.get("verbosity") if isinstance(args, dict) else 0) or 0
+    v = (
+        getattr(args, "verbosity", None)
+        or (args.get("verbosity") if isinstance(args, dict) else 0)
+        or 0
+    )
     level = logging.DEBUG if v >= 2 else logging.INFO
     logging.basicConfig(
         level=level,
@@ -185,3 +189,13 @@ def add_file_logging(out_dir: str, command: str = "copytyping"):
     if logging.root.level > level:
         logging.root.setLevel(level)
     return fh
+
+
+def save_cnp_profile(sx_data, out_file):
+    """Save input CNP profile as TSV with columns #CHR, START, END, cn_<clone>."""
+    cnp_df = sx_data.cnv_blocks[["#CHR", "START", "END"]].copy()
+    for ki, clone_name in enumerate(sx_data.clones):
+        cnp_df[f"cn_{clone_name}"] = [
+            f"{a}|{b}" for a, b in zip(sx_data.A[:, ki], sx_data.B[:, ki])
+        ]
+    cnp_df.to_csv(out_file, sep="\t", index=False)

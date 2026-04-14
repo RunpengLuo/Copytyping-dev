@@ -38,6 +38,7 @@ from copytyping.utils import (
     add_file_logging,
     is_tumor_label,
     read_whitelist_segments,
+    save_cnp_profile,
     setup_logging,
 )
 
@@ -162,6 +163,12 @@ def run(args=None):
         barcodes[ref_label] = barcodes[ref_label].fillna("Unknown").astype(str)
 
     cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
+
+    # Save input CNP profile
+    save_cnp_profile(
+        seg_data_sources[data_types[0]],
+        os.path.join(out_dir, f"{out_prefix}.cnp_profile.tsv"),
+    )
 
     method = args["method"]
     fit_mode = args.get("fit_mode", "hybrid")
