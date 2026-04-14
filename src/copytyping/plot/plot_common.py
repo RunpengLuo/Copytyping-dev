@@ -7,6 +7,7 @@ from collections import OrderedDict
 from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
 from copytyping.plot.plot_cnp import get_cn_colors, plot_cnv_legend, plot_cnv_profile
 from copytyping.utils import NA_CELLTYPE, get_chr_sizes, is_tumor_label
@@ -416,22 +417,43 @@ def plot_rdr_baf_1d_pseudobulk(
     state_style, _ = get_cn_colors()
 
     # ── Build single-page figure ──
-    # 2 rows (RDR + BAF) per clone, then CNP profile + CNP legend at bottom
+    # 2 rows (RDR + BAF) per clone, then CNP profile + CNP legend at bottom.
+    # Use nested GridSpec: tight hspace within each clone pair, larger gap between.
     n_clones = len(ordered_labels)
-    height_ratios = [1, 1] * n_clones
-    if has_cnp:
-        height_ratios += [0.5, 0.3]
-    else:
-        height_ratios += [0.3]
-    nrows = len(height_ratios)
-    row_h = figsize[1] / 2  # height per scatter row
+    # outer grid: one slot per clone + one for bottom rows
+    row_h = figsize[1] / 2
     fig_h = row_h * n_clones * 2 + (2 if has_cnp else 1)
-    fig, axes = plt.subplots(
-        nrows=nrows,
-        ncols=1,
-        figsize=(figsize[0], fig_h),
-        gridspec_kw={"height_ratios": height_ratios},
+    fig = plt.figure(figsize=(figsize[0], fig_h))
+
+    outer_ratios = [2] * n_clones + [0.5 + 0.3 if has_cnp else 0.3]
+    outer = GridSpec(
+        n_clones + 1,
+        1,
+        figure=fig,
+        height_ratios=outer_ratios,
+        hspace=0.35,
     )
+
+    axes = []
+    for ci in range(n_clones):
+        inner = GridSpecFromSubplotSpec(
+            2, 1, subplot_spec=outer[ci], height_ratios=[1, 1], hspace=0.08
+        )
+        axes.append(fig.add_subplot(inner[0]))
+        axes.append(fig.add_subplot(inner[1]))
+
+    if has_cnp:
+        inner_bot = GridSpecFromSubplotSpec(
+            2,
+            1,
+            subplot_spec=outer[n_clones],
+            height_ratios=[0.5, 0.3],
+            hspace=0.15,
+        )
+        axes.append(fig.add_subplot(inner_bot[0]))
+        axes.append(fig.add_subplot(inner_bot[1]))
+    else:
+        axes.append(fig.add_subplot(outer[n_clones]))
 
     for ci, cell_label in enumerate(ordered_labels):
         ax_rdr = axes[ci * 2]
@@ -601,9 +623,9 @@ def plot_rdr_baf_1d_pseudobulk(
     fig.suptitle(
         f"sample={sample}  data_type={data_type}",
         fontsize=10,
+        y=1.0,
     )
-    fig.tight_layout()
-    fig.savefig(filename, dpi=150)
+    fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return
 
