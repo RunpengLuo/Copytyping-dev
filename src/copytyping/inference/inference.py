@@ -25,7 +25,7 @@ from copytyping.io_utils import (
     subset_sx_data,
     union_align_barcodes,
 )
-from copytyping.plot.plot_cell import plot_cnv_heatmap
+from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_common import (
     plot_crosstab,
     plot_rdr_baf_1d_pseudobulk,
@@ -397,6 +397,8 @@ def run(args=None):
                 sample,
                 data_type,
                 genome_size,
+                haplo_blocks=cnv_blocks,
+                wl_segments=wl_segments,
                 mask_cnp=False,
                 lab_type=label,
                 filename=os.path.join(

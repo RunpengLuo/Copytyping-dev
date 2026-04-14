@@ -8,7 +8,7 @@ from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.plot.plot_cnp import plot_cnv_legend
+from copytyping.plot.plot_cnp import plot_cnv_legend, plot_cnv_profile
 from copytyping.utils import NA_CELLTYPE, get_chr_sizes, is_tumor_label
 from copytyping.sx_data.sx_data import SX_Data
 
@@ -215,6 +215,8 @@ def plot_rdr_baf_1d_pseudobulk(
     sample: str,
     data_type: str,
     genome_file: str,
+    haplo_blocks: pd.DataFrame = None,
+    wl_segments: pd.DataFrame = None,
     mask_cnp=True,
     mask_id="CNP",
     lab_type="cell_label",
@@ -335,12 +337,21 @@ def plot_rdr_baf_1d_pseudobulk(
                 clone_C_full = clone_C_full[sx_data.MASK[mask_id]]
             bin_colors = _get_cnp_colors(clone_C_full, C_normal_full)
 
-        fig, (ax_rdr, ax_baf, ax_legend) = plt.subplots(
-            nrows=3,
-            ncols=1,
-            figsize=(figsize[0], figsize[1] + 1),
-            gridspec_kw={"height_ratios": [1, 1, 0.3]},
-        )
+        has_cnp = haplo_blocks is not None and wl_segments is not None
+        if has_cnp:
+            fig, (ax_rdr, ax_baf, ax_cnp, ax_legend) = plt.subplots(
+                nrows=4,
+                ncols=1,
+                figsize=(figsize[0], figsize[1] + 2),
+                gridspec_kw={"height_ratios": [1, 1, 0.5, 0.3]},
+            )
+        else:
+            fig, (ax_rdr, ax_baf, ax_legend) = plt.subplots(
+                nrows=3,
+                ncols=1,
+                figsize=(figsize[0], figsize[1] + 1),
+                gridspec_kw={"height_ratios": [1, 1, 0.3]},
+            )
         ax_rdr.sharex(ax_baf)
 
         # ── RDR panel ──
@@ -410,6 +421,9 @@ def plot_rdr_baf_1d_pseudobulk(
         ax_rdr.set_ylabel(rdr_label, fontsize=8)
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
         ax_rdr.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
+        ax_rdr.tick_params(
+            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
+        )
         ax_rdr.grid(False)
 
         # ── BAF panel ──
@@ -460,9 +474,12 @@ def plot_rdr_baf_1d_pseudobulk(
         ax_baf.set_ylim([-0.05, 1.05])
         ax_baf.set_ylabel("BAF", fontsize=8)
         plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
-        ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
+        ax_baf.set_xticklabels([])
+        ax_baf.tick_params(axis="x", bottom=False)
         ax_baf.grid(False)
 
+        if has_cnp:
+            plot_cnv_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
         plot_cnv_legend(ax_legend)
 
         fig.suptitle(
