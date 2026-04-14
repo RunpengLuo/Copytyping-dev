@@ -630,12 +630,13 @@ def plot_rdr_baf_1d_pseudobulk(
         plot_cnv_profile(axes[-2], haplo_blocks, wl_segments, plot_chrname=False)
     plot_cnv_legend(axes[-1])
 
+    fig.tight_layout()
     fig.suptitle(
         f"sample={sample}  data_type={data_type}  resolution={resolution}",
-        fontsize=18,
+        fontsize=12,
         fontweight="bold",
+        y=1.02,
     )
-    fig.tight_layout()
     fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return
