@@ -29,6 +29,7 @@ def load_modality_data(
         barcodes_df: DataFrame with BARCODE, REP_ID columns.
         seg_df: Segment-level DataFrame with CNP, PROPS columns.
         X_seg, Y_seg, D_seg: Dense int32 count matrices (G_seg, N).
+        bbc_data: dict with keys 'bbc_df', 'X', 'Y', 'D' (sparse, G_bbc × N).
     """
     barcodes_df = pd.read_table(
         bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
@@ -80,7 +81,8 @@ def load_modality_data(
     Y_seg = Y_sp.toarray().astype(np.int32)
     D_seg = D_sp.toarray().astype(np.int32)
 
-    return barcodes_df, seg_df, X_seg, Y_seg, D_seg
+    bbc_data = {"bbc_df": bbc_df, "X": X_bbc, "Y": Y_bbc, "D": D_bbc}
+    return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_data
 
 
 def subset_sx_data(sx_data, idx):

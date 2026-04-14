@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -25,8 +26,7 @@ from copytyping.io_utils import (
 )
 from copytyping.plot.plot_cell import plot_cnv_heatmap
 from copytyping.plot.plot_common import (
-    plot_cross_heatmap,
-    plot_posteriors,
+    plot_crosstab,
     plot_rdr_baf_1d_aggregated,
 )
 from copytyping.plot.plot_visium import plot_visium_debug, plot_visium_panel
@@ -81,9 +81,10 @@ def run(args=None):
     aggr_mode = args.get("aggr_mode", "clust")
     data_sources = {}  # used by EM (seg or clust level)
     seg_data_sources = {}  # always seg level, used for plotting
+    bbc_data_sources = {}  # BBC-level phased data, used for plotting
     adatas = {}
     for data_type in data_types:
-        barcodes_df, seg_df, X_seg, Y_seg, D_seg = load_modality_data(
+        barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_data = load_modality_data(
             args[f"{data_type}_barcodes"],
             args[f"{data_type}_cnv_segments"],
             args[f"{data_type}_X_count"],
@@ -117,6 +118,7 @@ def run(args=None):
 
         seg_sx = SX_Data(barcodes_df, seg_df, X_seg, Y_seg, D_seg)
         seg_data_sources[data_type] = seg_sx
+        bbc_data_sources[data_type] = bbc_data
 
         if aggr_mode == "clust":
             data_sources[data_type] = seg_sx.to_cluster_level()
@@ -226,8 +228,8 @@ def run(args=None):
     )
     logging.info(f"clone fractions: {clone_props}")
 
+    is_normal = getattr(instance, "_init_is_normal", None)
     if aggr_mode == "clust":
-        is_normal = getattr(instance, "_init_is_normal", None)
         for data_type in data_types:
             clust_obj = data_sources[data_type]
             if not hasattr(clust_obj, "cluster_ids"):
@@ -302,19 +304,23 @@ def run(args=None):
         params_rep = subset_model_params(model_params, rep_mask, data_types)
         rep_tag = f".{rep_id}" if len(rep_ids) > 1 else ""
 
-        # posteriors
-        plot_posteriors(
-            anns_rep,
-            os.path.join(
-                validation_dir,
-                f"{out_prefix}.{platform}{rep_tag}.posteriors.png",
-            ),
-            lab_type=ref_label if ref_label in anns_rep else label,
-        )
+        # Log per-group posterior diagnostics
+        post_label = label
+        if "max_posterior" in anns_rep.columns:
+            logging.info(f"posterior diagnostics{rep_tag}:")
+            for grp, sub in anns_rep.groupby(post_label, sort=True):
+                mp = sub["max_posterior"].to_numpy()
+                md = sub["margin_delta"].to_numpy()
+                logging.info(
+                    f"  {grp:8s} (n={len(sub):4d}): "
+                    f"max_post min={mp.min():.3f} mean={mp.mean():.3f} "
+                    f"median={np.median(mp):.3f} max={mp.max():.3f}  "
+                    f"margin min={md.min():.3f} mean={md.mean():.3f}"
+                )
 
         # cross heatmap (only if ref_label available)
         if ref_label in anns_rep.columns:
-            plot_cross_heatmap(
+            plot_crosstab(
                 anns_rep,
                 sample,
                 os.path.join(
@@ -362,6 +368,7 @@ def run(args=None):
                             transparent=transparent,
                         )
 
+            # Segment-level 1D scatter
             plot_rdr_baf_1d_aggregated(
                 sx_rep,
                 anns_rep,
@@ -377,6 +384,38 @@ def run(args=None):
                     f".1d_scatter.{data_type}.{label}.pdf",
                 ),
             )
+
+            # BBC-level 1D scatter (phased)
+            if data_type in bbc_data_sources:
+                bbc = bbc_data_sources[data_type]
+                bbc_sx = SimpleNamespace(
+                    cnv_blocks=bbc["bbc_df"],
+                    X=bbc["X"].toarray().astype(np.int32)[:, rep_mask],
+                    Y=bbc["Y"].toarray().astype(np.int32)[:, rep_mask],
+                    D=bbc["D"].toarray().astype(np.int32)[:, rep_mask],
+                    T=bbc["X"].toarray().astype(np.int32)[:, rep_mask]
+                    .sum(axis=0),
+                )
+                bbc_lambda = None
+                if is_normal is not None:
+                    bbc_lambda = compute_baseline_proportions(
+                        bbc_sx.X, bbc_sx.T, is_normal[rep_mask]
+                    )
+                plot_rdr_baf_1d_aggregated(
+                    bbc_sx,
+                    anns_rep,
+                    bbc_lambda,
+                    sample,
+                    data_type + " (bbc)",
+                    genome_size,
+                    mask_cnp=False,
+                    lab_type=label,
+                    filename=os.path.join(
+                        scatter_dir,
+                        f"{out_prefix}.{platform}{rep_tag}"
+                        f".1d_scatter_bbc.{data_type}.{label}.pdf",
+                    ),
+                )
 
     if args["umap"]:
         pass  # not yet implemented

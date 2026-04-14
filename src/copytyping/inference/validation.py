@@ -100,7 +100,7 @@ def evaluate_malignant_accuracy(
     logging.info(f"  AUC_soft  = {auc_soft_str}")
     logging.info(f"  ARI       = {ari_str}")
     logging.info(f"  #NA       = {metric_all['#NA']}/{metric_all['total']}")
-    logging.info(f"  crosstab (rows=GT {cell_type}, cols=pred {cell_label}):")
+    logging.info(f"  crosstab (rows=ref {cell_type}, cols=pred {cell_label}):")
     for line in ct.to_string().splitlines():
         logging.info(f"    {line}")
 
