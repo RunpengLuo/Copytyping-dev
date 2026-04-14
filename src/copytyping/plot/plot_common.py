@@ -564,7 +564,7 @@ def plot_rdr_baf_1d_pseudobulk(
         )
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
         ax_rdr.set_xticklabels([])
-        ax_rdr.tick_params(axis="x", bottom=False)
+        ax_rdr.tick_params(axis="x", bottom=False, top=False, labeltop=False)
         ax_rdr.grid(False)
 
         # ── BAF panel ──
@@ -615,6 +615,7 @@ def plot_rdr_baf_1d_pseudobulk(
         ax_baf.set_ylim([-0.05, 1.05])
         ax_baf.set_ylabel("BAF", fontsize=8)
         plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
+        ax_baf.tick_params(axis="x", top=False, labeltop=False)
         if ci == n_clones - 1:
             ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
         else:
