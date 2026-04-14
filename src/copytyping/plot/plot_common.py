@@ -432,6 +432,7 @@ def plot_rdr_baf_1d_pseudobulk(
         figure=fig,
         height_ratios=outer_ratios,
         hspace=0.35,
+        top=0.97,
     )
 
     axes = []
