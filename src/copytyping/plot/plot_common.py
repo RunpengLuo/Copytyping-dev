@@ -905,7 +905,11 @@ def plot_metrics_barplot(
             ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
             ax.set_ylim(0, 1.15)
             ax.set_ylabel("Score")
-            ax.legend(fontsize=8)
+            ax.legend(
+                fontsize=8,
+                loc="center left",
+                bbox_to_anchor=(1.0, 0.5),
+            )
             title = grp if grp else "all samples"
             ax.set_title(title, fontsize=11, fontweight="bold")
             fig.tight_layout()
