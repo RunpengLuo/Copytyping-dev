@@ -27,7 +27,7 @@ def _eval_subset(anns_sub, cell_label, cell_type, tumor_post, skip_binary=False)
     if not skip_binary and has_both:
         y_pred = anns_known[cell_label].apply(is_tumor_label).to_numpy(dtype=int)
         precision, recall, f1, _ = precision_recall_fscore_support(
-            y_true, y_pred, average="binary"
+            y_true, y_pred, average="binary", zero_division=0.0
         )
         accuracy = accuracy_score(y_true, y_pred)
         auc_hard = roc_auc_score(y_true, y_pred)
