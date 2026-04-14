@@ -426,6 +426,8 @@ def run(args=None):
                     sample,
                     data_type + " (bbc)",
                     genome_size,
+                    haplo_blocks=cnv_blocks,
+                    wl_segments=wl_segments,
                     mask_cnp=False,
                     lab_type=label,
                     markersize=2,
