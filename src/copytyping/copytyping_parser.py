@@ -404,6 +404,14 @@ def add_arguments_pipeline(parser):
         help="Only run samples matching this platform",
     )
     parser.add_argument(
+        "--sol_pattern",
+        default="*{SOLID}*.tsv",
+        type=str,
+        help="Glob pattern for solfiles under PATH_TO_SOLDIR. "
+        "{SOLID} is replaced by the SOLID column value "
+        "(default: '*{SOLID}*.tsv')",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         default=False,
