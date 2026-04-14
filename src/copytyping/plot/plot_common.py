@@ -8,7 +8,7 @@ from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.plot.plot_cnp import plot_cnv_legend, plot_cnv_profile
+from copytyping.plot.plot_cnp import get_cn_colors, plot_cnv_legend, plot_cnv_profile
 from copytyping.utils import NA_CELLTYPE, get_chr_sizes, is_tumor_label
 from copytyping.sx_data.sx_data import SX_Data
 
@@ -302,26 +302,13 @@ def plot_rdr_baf_1d_pseudobulk(
 
     pdf_pages = PdfPages(filename)
 
-    # CNP color map: blue for deletion, grey for neutral, red for amplification
-    _cnp_cmap = {
-        0: "#2166ac",
-        1: "#67a9cf",
-        2: "#d9d9d9",
-        3: "#ef8a62",
-        4: "#b2182b",
-        5: "#67001f",
-    }
-
-    def _get_cnp_colors(clone_C, C_normal):
-        """Per-bin color based on total CN ratio."""
-        cn = np.round(clone_C).astype(int)
-        return [_cnp_cmap.get(c, _cnp_cmap[5] if c > 5 else _cnp_cmap[0]) for c in cn]
+    state_style, _ = get_cn_colors()
 
     for i, cell_label in enumerate(ordered_labels):
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
         num_bcs = len(barcode_idxs)
 
-        # Determine per-bin colors from CNP
+        # Determine per-bin colors from (A,B) copy-number state
         bin_colors = [default_color] * len(cnv_blocks)
         clone_C_full = None
         if (
@@ -332,10 +319,17 @@ def plot_rdr_baf_1d_pseudobulk(
             clone_idx = sx_data.clones.index(cell_label)
             C_normal_full = np.maximum(sx_data.C[:, 0], 1).astype(np.float64)
             clone_C_full = sx_data.C[:, clone_idx].astype(np.float64)
+            clone_A = sx_data.A[:, clone_idx]
+            clone_B = sx_data.B[:, clone_idx]
             if mask_cnp:
                 C_normal_full = C_normal_full[sx_data.MASK[mask_id]]
                 clone_C_full = clone_C_full[sx_data.MASK[mask_id]]
-            bin_colors = _get_cnp_colors(clone_C_full, C_normal_full)
+                clone_A = clone_A[sx_data.MASK[mask_id]]
+                clone_B = clone_B[sx_data.MASK[mask_id]]
+            bin_colors = [
+                state_style.get((int(a), int(b)), state_style["default"])
+                for a, b in zip(clone_A, clone_B)
+            ]
 
         has_cnp = haplo_blocks is not None and wl_segments is not None
         if has_cnp:
