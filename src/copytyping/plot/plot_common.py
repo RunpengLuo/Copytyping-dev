@@ -208,6 +208,112 @@ def _merge_exp_lines(abs_starts, abs_ends, exp_vals, chrs):
     return lines
 
 
+def build_wl_coords(cnv_blocks, wl_segments):
+    """Map bins to the wl_segments coordinate system (same as plot_cnv_profile).
+
+    Returns a dict with:
+        positions, abs_starts, abs_ends — per-bin arrays (length G)
+        x_edges, col_bin_ids — for pcolormesh grid (heatmap)
+        ch_coords, seg_coords — chromosome / centromere boundary offsets
+        chr_vlines, chr_end, xlab_chrs, xtick_chrs — axis decoration
+    """
+    cnv_blocks = cnv_blocks.reset_index(drop=True)
+    chs = cnv_blocks["#CHR"].unique()
+    wl_chs = wl_segments.groupby("#CHR", sort=False)
+    bins_chs = cnv_blocks.groupby("#CHR", sort=False, observed=True)
+
+    G = len(cnv_blocks)
+    positions = np.full(G, np.nan)
+    abs_starts = np.full(G, np.nan)
+    abs_ends = np.full(G, np.nan)
+
+    x_edges = [0.0]
+    col_bin_ids = []
+
+    ch_offset = 0.0
+    ch_coords = []
+    seg_coords = []
+
+    for ch in chs:
+        ch_coords.append(ch_offset)
+        wl_ch = wl_chs.get_group(ch)
+        bins_ch = bins_chs.get_group(ch)
+
+        for si in range(len(wl_ch)):
+            wl_row = wl_ch.iloc[si]
+            wl_s, wl_e = wl_row["START"], wl_row["END"]
+            seg_start = ch_offset
+            seg_end = ch_offset + (wl_e - wl_s)
+
+            in_seg = bins_ch[(bins_ch["START"] < wl_e) & (bins_ch["END"] > wl_s)]
+
+            if in_seg.empty:
+                if seg_end > x_edges[-1]:
+                    col_bin_ids.append(-1)
+                    x_edges.append(seg_end)
+                ch_offset = seg_end
+                if (si < len(wl_ch) - 1) or (si == 0 and wl_s > 0):
+                    seg_coords.append(ch_offset)
+                continue
+
+            bin_starts = (
+                np.maximum(in_seg["START"], wl_s) - wl_s + ch_offset
+            ).to_numpy(float)
+            bin_ends = (np.minimum(in_seg["END"], wl_e) - wl_s + ch_offset).to_numpy(
+                float
+            )
+            bin_ids = in_seg.index.to_numpy()
+
+            for idx, bs, be in zip(bin_ids, bin_starts, bin_ends):
+                abs_starts[idx] = bs
+                abs_ends[idx] = be
+                positions[idx] = (bs + be) / 2
+
+            ch_offset = seg_end
+            if (si < len(wl_ch) - 1) or (si == 0 and wl_s != 0):
+                seg_coords.append(ch_offset)
+
+            cur = seg_start
+            if seg_start > x_edges[-1]:
+                col_bin_ids.append(-1)
+                x_edges.append(seg_start)
+                cur = seg_start
+
+            for s, e, bid in zip(bin_starts, bin_ends, bin_ids):
+                if s > cur:
+                    col_bin_ids.append(-1)
+                    x_edges.append(s)
+                    cur = s
+                if e > cur:
+                    col_bin_ids.append(bid)
+                    x_edges.append(e)
+                    cur = e
+
+            if cur < seg_end:
+                col_bin_ids.append(-1)
+                x_edges.append(seg_end)
+    ch_coords.append(ch_offset)
+
+    chr_end = ch_offset
+    xlab_chrs = list(chs)
+    xtick_chrs = [(ch_coords[i] + ch_coords[i + 1]) / 2 for i in range(len(chs))]
+    chr_vlines = ch_coords[:-1]
+
+    return {
+        "positions": positions,
+        "abs_starts": abs_starts,
+        "abs_ends": abs_ends,
+        "x_edges": np.asarray(x_edges, dtype=float),
+        "col_bin_ids": col_bin_ids,
+        "ch_coords": ch_coords,
+        "seg_coords": seg_coords,
+        "chr_vlines": chr_vlines,
+        "chr_end": chr_end,
+        "xlab_chrs": xlab_chrs,
+        "xtick_chrs": xtick_chrs,
+    }
+
+
 def plot_rdr_baf_1d_pseudobulk(
     sx_data: SX_Data,
     anns: pd.DataFrame,
@@ -269,42 +375,69 @@ def plot_rdr_baf_1d_pseudobulk(
         f"cell count mismatch: Y has {Y.shape[1]} columns but annotations has {len(cell_labels)}"
     )
 
-    # genome coordinates
-    cnv_blocks["SAMPLE"] = sample
-    chrs = cnv_blocks["#CHR"].unique().tolist()
-    ret = build_ch_boundary(cnv_blocks, chrs, chrom_sizes, chr_shift=int(10e6))
-    chr_offsets, chr_bounds, chr_gaps, chr_end, xlab_chrs, xtick_chrs = ret
+    # genome coordinates — use wl_segments system when CNP row will be shown,
+    # so scatter and plot_cnv_profile share the same x-axis range.
+    has_cnp = haplo_blocks is not None and wl_segments is not None
+    if has_cnp:
+        wl = build_wl_coords(cnv_blocks, wl_segments)
+        positions = wl["positions"]
+        abs_starts = wl["abs_starts"]
+        abs_ends = wl["abs_ends"]
+        chr_vlines = wl["chr_vlines"]
+        chr_end = wl["chr_end"]
+        xlab_chrs = wl["xlab_chrs"]
+        xtick_chrs = wl["xtick_chrs"]
+    else:
+        cnv_blocks["SAMPLE"] = sample
+        chrs = cnv_blocks["#CHR"].unique().tolist()
+        ret = build_ch_boundary(cnv_blocks, chrs, chrom_sizes, chr_shift=int(10e6))
+        chr_offsets, chr_bounds, chr_gaps, chr_end, xlab_chrs, xtick_chrs = ret
+        chr_vlines = list(chr_offsets.values())
 
-    positions = cnv_blocks.apply(
-        func=lambda r: chr_offsets[r["#CHR"]] + (r.START + r.END) // 2, axis=1
-    ).to_numpy()
-    abs_starts = cnv_blocks.apply(
-        func=lambda r: chr_offsets[r["#CHR"]] + r.START, axis=1
-    ).to_numpy()
-    abs_ends = cnv_blocks.apply(
-        func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1
-    ).to_numpy()
+        positions = cnv_blocks.apply(
+            func=lambda r: chr_offsets[r["#CHR"]] + (r.START + r.END) // 2, axis=1
+        ).to_numpy()
+        abs_starts = cnv_blocks.apply(
+            func=lambda r: chr_offsets[r["#CHR"]] + r.START, axis=1
+        ).to_numpy()
+        abs_ends = cnv_blocks.apply(
+            func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1
+        ).to_numpy()
 
     linecolor = (0, 0, 0, 1)
 
-    # Order labels: normal, clone1, clone2, ..., NA
-    ordered_labels = (
-        [x for x in ["normal"] if x in uniq_cell_labels]
-        + sorted([x for x in uniq_cell_labels if x.startswith("clone")])
-        + [
-            x
-            for x in uniq_cell_labels
-            if x not in ["normal"] and not x.startswith("clone")
-        ]
+    # Order labels: normal, clone1, clone2, ... (skip NA)
+    ordered_labels = [x for x in ["normal"] if x in uniq_cell_labels] + sorted(
+        [x for x in uniq_cell_labels if x.startswith("clone")]
     )
     rdr_label = "log2RDR" if log2 else "RDR"
     default_color = "grey"
 
-    pdf_pages = PdfPages(filename)
-
     state_style, _ = get_cn_colors()
 
-    for i, cell_label in enumerate(ordered_labels):
+    # ── Build single-page figure ──
+    # 2 rows (RDR + BAF) per clone, then CNP profile + CNP legend at bottom
+    n_clones = len(ordered_labels)
+    height_ratios = [1, 1] * n_clones
+    if has_cnp:
+        height_ratios += [0.5, 0.3]
+    else:
+        height_ratios += [0.3]
+    nrows = len(height_ratios)
+    row_h = figsize[1] / 2  # height per scatter row
+    fig_h = row_h * n_clones * 2 + (2 if has_cnp else 1)
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=1,
+        figsize=(figsize[0], fig_h),
+        gridspec_kw={"height_ratios": height_ratios},
+    )
+
+    for ci, cell_label in enumerate(ordered_labels):
+        ax_rdr = axes[ci * 2]
+        ax_baf = axes[ci * 2 + 1]
+        ax_rdr.sharex(ax_baf)
+
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
         num_bcs = len(barcode_idxs)
 
@@ -330,23 +463,6 @@ def plot_rdr_baf_1d_pseudobulk(
                 state_style.get((int(a), int(b)), state_style["default"])
                 for a, b in zip(clone_A, clone_B)
             ]
-
-        has_cnp = haplo_blocks is not None and wl_segments is not None
-        if has_cnp:
-            fig, (ax_rdr, ax_baf, ax_cnp, ax_legend) = plt.subplots(
-                nrows=4,
-                ncols=1,
-                figsize=(figsize[0], figsize[1] + 2),
-                gridspec_kw={"height_ratios": [1, 1, 0.5, 0.3]},
-            )
-        else:
-            fig, (ax_rdr, ax_baf, ax_legend) = plt.subplots(
-                nrows=3,
-                ncols=1,
-                figsize=(figsize[0], figsize[1] + 1),
-                gridspec_kw={"height_ratios": [1, 1, 0.3]},
-            )
-        ax_rdr.sharex(ax_baf)
 
         # ── RDR panel ──
         if masked_base_props is not None:
@@ -376,7 +492,7 @@ def plot_rdr_baf_1d_pseudobulk(
             for coll in ax_rdr.collections:
                 coll.set_rasterized(True)
             ax_rdr.vlines(
-                list(chr_offsets.values()),
+                chr_vlines,
                 ymin=0,
                 ymax=1,
                 transform=ax_rdr.get_xaxis_transform(),
@@ -412,12 +528,17 @@ def plot_rdr_baf_1d_pseudobulk(
                 ax_rdr.set_ylim(
                     [-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)]
                 )
-        ax_rdr.set_ylabel(rdr_label, fontsize=8)
+        ax_rdr.set_ylabel(f"{cell_label} (n={num_bcs})\n{rdr_label}", fontsize=8)
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
-        ax_rdr.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
-        ax_rdr.tick_params(
-            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
-        )
+        # chrnames only on the first RDR row
+        if ci == 0:
+            ax_rdr.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
+            ax_rdr.tick_params(
+                axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
+            )
+        else:
+            ax_rdr.set_xticklabels([])
+            ax_rdr.tick_params(axis="x", bottom=False)
         ax_rdr.grid(False)
 
         # ── BAF panel ──
@@ -438,7 +559,7 @@ def plot_rdr_baf_1d_pseudobulk(
         for coll in ax_baf.collections:
             coll.set_rasterized(True)
         ax_baf.vlines(
-            list(chr_offsets.values()),
+            chr_vlines,
             ymin=0,
             ymax=1,
             transform=ax_baf.get_xaxis_transform(),
@@ -472,19 +593,18 @@ def plot_rdr_baf_1d_pseudobulk(
         ax_baf.tick_params(axis="x", bottom=False)
         ax_baf.grid(False)
 
-        if has_cnp:
-            plot_cnv_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
-        plot_cnv_legend(ax_legend)
+    # ── Bottom rows: CNP profile + legend ──
+    if has_cnp:
+        plot_cnv_profile(axes[-2], haplo_blocks, wl_segments, plot_chrname=False)
+    plot_cnv_legend(axes[-1])
 
-        fig.suptitle(
-            f"sample={sample}  data_type={data_type}  {cell_label}  n={num_bcs}",
-            fontsize=10,
-        )
-        fig.tight_layout()
-        pdf_pages.savefig(fig, dpi=150)
-        plt.close(fig)
-
-    pdf_pages.close()
+    fig.suptitle(
+        f"sample={sample}  data_type={data_type}",
+        fontsize=10,
+    )
+    fig.tight_layout()
+    fig.savefig(filename, dpi=150)
+    plt.close(fig)
     return
 
 

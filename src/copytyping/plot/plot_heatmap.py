@@ -16,6 +16,7 @@ from copytyping.plot.plot_cnp import (
     plot_cnv_legend,
     plot_cnv_profile,
 )
+from copytyping.plot.plot_common import build_wl_coords
 
 from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
 
@@ -42,80 +43,13 @@ def plot_heatmap(
     assert len(cnv_blocks) == G, "unmatched data"
     assert len(cell_labels) == N, "unmatched data"
 
-    cnv_blocks = cnv_blocks.reset_index(drop=True)
-    wl_segments_chs = wl_segments.groupby("#CHR", sort=False)
-    bins_chs = cnv_blocks.groupby("#CHR", sort=False, observed=True)
-
-    x_edges = [0.0]  # running global x edges (length = n_cols + 1)
-    col_bin_ids = []  # length = n_cols; bin index or -1 (gap)
-
-    ch_offset = 0.0
-    ch_coords = []
-    seg_coords = []
+    wl = build_wl_coords(cnv_blocks, wl_segments)
+    x_edges = wl["x_edges"]
+    col_bin_ids = wl["col_bin_ids"]
+    ch_coords = wl["ch_coords"]
+    seg_coords = wl["seg_coords"]
+    ch_offset = wl["chr_end"]
     chs = cnv_blocks["#CHR"].unique()
-    for ch in chs:
-        ch_coords.append(ch_offset)
-        wl_segments_ch = wl_segments_chs.get_group(ch)
-        bins_ch = bins_chs.get_group(ch)
-        for si in range(len(wl_segments_ch)):
-            wl_segment = wl_segments_ch.iloc[si]
-            seg_start = ch_offset
-            wl_start = wl_segment["START"]
-            wl_end = wl_segment["END"]
-            seg_end = ch_offset + (wl_end - wl_start)
-
-            bins_seg = bins_ch.loc[
-                (bins_ch["START"] < wl_end) & (bins_ch["END"] >= wl_start)
-            ]
-
-            if bins_seg.empty:
-                if seg_end > x_edges[-1]:
-                    col_bin_ids.append(-1)
-                    x_edges.append(seg_end)
-                ch_offset = seg_end
-                if (si < len(wl_segments_ch) - 1) or (si == 0 and wl_start > 0):
-                    seg_coords.append(ch_offset)  # centromere offset
-                continue
-
-            # global bin coords
-            bin_starts = (
-                np.maximum(bins_seg["START"], wl_start) - wl_start + ch_offset
-            ).to_numpy(float)
-            bin_ends = (
-                np.minimum(bins_seg["END"], wl_end) - wl_start + ch_offset
-            ).to_numpy(float)
-            bin_ids = bins_seg.index.to_numpy()
-            # update global offsets
-            ch_offset = seg_end
-            if (si < len(wl_segments_ch) - 1) or (si == 0 and wl_start != 0):
-                seg_coords.append(ch_offset)  # centromere offset
-
-            cur = seg_start
-            # if there is a gap between previous edge and seg_start
-            if seg_start > x_edges[-1]:
-                col_bin_ids.append(-1)
-                x_edges.append(seg_start)
-                cur = seg_start
-
-            # walk through bins, inserting gap + bin columns
-            for s, e, bid in zip(bin_starts, bin_ends, bin_ids):
-                # gap before this bin
-                if s > cur:
-                    col_bin_ids.append(-1)
-                    x_edges.append(s)
-                    cur = s
-
-                # bin itself
-                if e > cur:
-                    col_bin_ids.append(bid)
-                    x_edges.append(e)
-                    cur = e
-
-            # tail gap inside the segment (after last bin)
-            if cur < seg_end:
-                col_bin_ids.append(-1)
-                x_edges.append(seg_end)
-    ch_coords.append(ch_offset)
 
     # -------- build extended matrix with NaN gaps --------
     n_cols = len(col_bin_ids)
