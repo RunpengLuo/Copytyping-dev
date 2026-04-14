@@ -128,9 +128,9 @@ def _run_one(run_args, run_dir, genome_size, region_bed, verbosity, force):
         root.setLevel(logging.WARNING)
         run_inference(inf_args)
         root.setLevel(prev_level)
-    except Exception as e:
+    except Exception:
         root.setLevel(prev_level)
-        logging.error(f"FAILED {run_dir}: {e}")
+        logging.exception(f"FAILED {run_dir}")
         return "FAILED", {}
 
     metrics = {}
@@ -194,7 +194,7 @@ def run(args):
                 out_dir,
                 run_args["sample"],
                 run_args["platform"],
-                f"p{ploidy}_c{clone}_{tag}",
+                f"{ploidy}_n{clone}_{tag}",
             )
 
             status, metrics = _run_one(
