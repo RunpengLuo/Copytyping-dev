@@ -460,7 +460,6 @@ def plot_rdr_baf_1d_pseudobulk(
     for ci, cell_label in enumerate(ordered_labels):
         ax_rdr = axes[ci * 2]
         ax_baf = axes[ci * 2 + 1]
-        ax_rdr.sharex(ax_baf)
 
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
         num_bcs = len(barcode_idxs)
@@ -566,7 +565,7 @@ def plot_rdr_baf_1d_pseudobulk(
         )
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
         ax_rdr.set_xticklabels([])
-        ax_rdr.tick_params(axis="x", bottom=False, top=False, labeltop=False)
+        ax_rdr.tick_params(axis="x", bottom=False)
         ax_rdr.grid(False)
 
         # ── BAF panel ──
@@ -617,7 +616,6 @@ def plot_rdr_baf_1d_pseudobulk(
         ax_baf.set_ylim([-0.05, 1.05])
         ax_baf.set_ylabel("BAF", fontsize=8)
         plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
-        ax_baf.tick_params(axis="x", top=False, labeltop=False)
         if ci == n_clones - 1:
             ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
         else:
