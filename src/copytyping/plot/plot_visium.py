@@ -10,6 +10,9 @@ import seaborn as sns
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 
+# Silence anndata "storing X as categorical" messages
+logging.getLogger("anndata").setLevel(logging.WARNING)
+
 
 def set_clone_colors(adata, col, gray="#b0b0b0"):
     adata.obs[col] = adata.obs[col].astype("category")

@@ -48,7 +48,6 @@ def plot_cnv_profile(
         bins_ch = bins_chs.get_group(ch)
         for si in range(len(wl_segments_ch)):
             wl_segment = wl_segments_ch.iloc[si]
-            seg_start = ch_offset
             wl_start = wl_segment["START"]
             wl_end = wl_segment["END"]
             seg_end = ch_offset + (wl_end - wl_start)
@@ -102,7 +101,7 @@ def plot_cnv_profile(
                                 [x0, y0 + h],
                                 [x0 + w, y0 + h / 2],
                                 [x0, y0],
-                            ],  # top-left → mid-right → bottom-left
+                            ],  # top-left -> mid-right -> bottom-left
                             linewidth=0,
                             closed=True,
                             facecolor=BLACK,
@@ -342,7 +341,7 @@ def plot_cnv_legend(ax: plt.Axes):
     # nice limits + aspect
     ax.set_xlim(-2.0, leg_x)
     ax.set_ylim(-0.8, pair_h + 0.8)
-    ax.set_aspect("auto")  # was 'equal' → made legend look too thin
+    ax.set_aspect("auto")  # was 'equal' -> made legend look too thin
 
     return ax
 
@@ -417,7 +416,7 @@ def get_cn_colors():
             "#6f42c1",
             "#4b0082",
             "#2e0854",
-        ],  # violet → indigo gradient
+        ],  # violet -> indigo gradient
     }
 
     default_color = "#333333"

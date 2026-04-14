@@ -192,7 +192,22 @@ def build_ch_boundary(
     )
 
 
-def plot_rdr_baf_1d_aggregated(
+def _merge_exp_lines(abs_starts, abs_ends, exp_vals, chrs):
+    """Merge adjacent bins with the same expected value into one line segment."""
+    lines = []
+    chr_arr = np.asarray(chrs)
+    n = len(exp_vals)
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and exp_vals[j] == exp_vals[i] and chr_arr[j] == chr_arr[i]:
+            j += 1
+        lines.append([(abs_starts[i], exp_vals[i]), (abs_ends[j - 1], exp_vals[i])])
+        i = j
+    return lines
+
+
+def plot_rdr_baf_1d_pseudobulk(
     sx_data: SX_Data,
     anns: pd.DataFrame,
     base_props: np.ndarray,
@@ -205,6 +220,7 @@ def plot_rdr_baf_1d_aggregated(
     figsize=(20, 4),
     filename=None,
     log2=True,
+    markersize=20,
     **kwargs,
 ):
     """
@@ -266,7 +282,7 @@ def plot_rdr_baf_1d_aggregated(
         func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1
     ).to_numpy()
 
-    markersize = float(max(20, 4 - np.floor(len(cnv_blocks) / 500)))
+    linecolor = (0, 0, 0, 1)
 
     # Order labels: normal, clone1, clone2, ..., NA
     ordered_labels = (
@@ -277,39 +293,17 @@ def plot_rdr_baf_1d_aggregated(
     n_groups = len(ordered_labels)
     colors = sns.color_palette("husl", n_colors=n_groups)
     rdr_label = "log2RDR" if log2 else "RDR"
-    baseline = 0.0 if log2 else 1.0
 
-    # Layout: 3 rows per group (RDR, BAF, spacer), drop last spacer.
-    # Spacer rows are invisible and create the between-group gap.
-    n_rows = 3 * n_groups - 1  # RDR, BAF, spacer, RDR, BAF, spacer, ..., RDR, BAF
-    ratios = []
-    for g in range(n_groups):
-        ratios += [1, 1]
-        if g < n_groups - 1:
-            ratios.append(0.4)  # spacer
-
-    fig, all_axes = plt.subplots(
-        nrows=n_rows, ncols=1,
-        figsize=(figsize[0], figsize[1] * n_groups),
-        gridspec_kw={"height_ratios": ratios, "hspace": 0.1},
-        sharex=True,
-    )
-    if n_rows == 1:
-        all_axes = [all_axes]
-
-    # Hide spacer axes
-    axes = []
-    for r in range(n_rows):
-        if r % 3 == 2:  # spacer row
-            all_axes[r].set_visible(False)
-        else:
-            axes.append(all_axes[r])
+    pdf_pages = PdfPages(filename)
 
     for i, cell_label in enumerate(ordered_labels):
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
+        num_bcs = len(barcode_idxs)
         color = colors[i]
-        ax_rdr = axes[2 * i]
-        ax_baf = axes[2 * i + 1]
+
+        fig, (ax_rdr, ax_baf) = plt.subplots(
+            nrows=2, ncols=1, figsize=figsize, sharex=True,
+        )
 
         # ── RDR panel ──
         if masked_base_props is not None:
@@ -324,19 +318,19 @@ def plot_rdr_baf_1d_aggregated(
                 log2_mask = rdr_valid & (obs_rdr > 0)
                 obs_rdr[log2_mask] = np.log2(obs_rdr[log2_mask])
                 obs_rdr[rdr_valid & ~log2_mask] = np.nan
-            pos_rdr = positions[rdr_valid & np.isfinite(obs_rdr)]
-            val_rdr = obs_rdr[rdr_valid & np.isfinite(obs_rdr)]
-            ax_rdr.scatter(
-                pos_rdr, val_rdr, s=markersize,
-                edgecolors="black", linewidths=0.5, alpha=0.8, color=color,
+            valid = rdr_valid & np.isfinite(obs_rdr)
+            pos_rdr = positions[valid]
+            val_rdr = obs_rdr[valid]
+            sns.scatterplot(
+                x=pos_rdr, y=val_rdr, ax=ax_rdr,
+                s=markersize, color=color, edgecolor="none", linewidth=0,
+                legend=False,
             )
+            for coll in ax_rdr.collections:
+                coll.set_rasterized(True)
             ax_rdr.vlines(
                 list(chr_offsets.values()), ymin=0, ymax=1,
                 transform=ax_rdr.get_xaxis_transform(), linewidth=0.5, colors="k",
-            )
-            ax_rdr.hlines(
-                y=baseline, xmin=0, xmax=chr_end,
-                colors="grey", linestyle=":", linewidth=1,
             )
             exp_vals = None
             if cell_label != "NA" and hasattr(sx_data, "clones"):
@@ -351,8 +345,8 @@ def plot_rdr_baf_1d_aggregated(
                     exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
                 ax_rdr.add_collection(
                     LineCollection(
-                        [[(s, r), (t, r)] for s, t, r in zip(abs_starts, abs_ends, exp_vals)],
-                        linewidth=2, colors=[(0, 0, 0, 1)] * len(exp_vals),
+                        _merge_exp_lines(abs_starts, abs_ends, exp_vals, cnv_blocks["#CHR"]),
+                        linewidth=1.5, colors=[linecolor],
                     )
                 )
             if log2:
@@ -365,9 +359,9 @@ def plot_rdr_baf_1d_aggregated(
             else:
                 exp_max = float(exp_vals.max()) if exp_vals is not None else 1.0
                 ax_rdr.set_ylim([-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)])
-        ax_rdr.set_ylabel(f"{cell_label} {rdr_label}", fontsize=7)
-        if i == 0:
-            ax_rdr.set_title(f"{sample} {data_type}")
+        ax_rdr.set_ylabel(rdr_label, fontsize=8)
+        plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
+        ax_rdr.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
         ax_rdr.grid(False)
 
         # ── BAF panel ──
@@ -376,10 +370,13 @@ def plot_rdr_baf_1d_aggregated(
         baf_valid = agg_tcounts > 0
         agg_bafs = agg_bcounts[baf_valid] / agg_tcounts[baf_valid]
         pos_baf = positions[baf_valid]
-        ax_baf.scatter(
-            pos_baf, agg_bafs, s=markersize,
-            edgecolors="black", linewidths=0.5, alpha=0.8, color=color,
+        sns.scatterplot(
+            x=pos_baf, y=agg_bafs, ax=ax_baf,
+            s=markersize, color=color, edgecolor="none", linewidth=0,
+            legend=False,
         )
+        for coll in ax_baf.collections:
+            coll.set_rasterized(True)
         ax_baf.vlines(
             list(chr_offsets.values()), ymin=0, ymax=1,
             transform=ax_baf.get_xaxis_transform(), linewidth=0.5, colors="k",
@@ -393,20 +390,25 @@ def plot_rdr_baf_1d_aggregated(
             clone_baf = exp_bafs[:, clone_idx]
             ax_baf.add_collection(
                 LineCollection(
-                    [[(s, b), (t, b)] for s, t, b in zip(abs_starts, abs_ends, clone_baf)],
-                    linewidth=2, colors=[(0, 0, 0, 1)] * len(clone_baf),
+                    _merge_exp_lines(abs_starts, abs_ends, clone_baf, cnv_blocks["#CHR"]),
+                    linewidth=1.5, colors=[linecolor],
                 )
             )
         ax_baf.set_ylim([-0.05, 1.05])
-        ax_baf.set_ylabel(f"{cell_label} BAF", fontsize=7)
+        ax_baf.set_ylabel("BAF", fontsize=8)
+        plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
+        ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
         ax_baf.grid(False)
 
-    # X-axis labels on bottom-most panel only
-    plt.setp(axes[-1], xlim=(0, chr_end), xticks=xtick_chrs)
-    axes[-1].set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
+        fig.suptitle(
+            f"sample={sample}  data_type={data_type}  {cell_label}  n={num_bcs}",
+            fontsize=10,
+        )
+        fig.tight_layout()
+        pdf_pages.savefig(fig, dpi=150)
+        plt.close(fig)
 
-    fig.savefig(filename, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    pdf_pages.close()
     return
 
 

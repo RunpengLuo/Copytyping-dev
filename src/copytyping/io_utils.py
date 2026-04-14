@@ -57,7 +57,7 @@ def load_modality_data(
         "some BBC blocks have no matching phase in --bbc_phases"
     )
 
-    # Apply phase correction: PHASE=1 → B-allele is B; PHASE=0 → B-allele is A (swap)
+    # Apply phase correction: PHASE=1 -> B-allele is B; PHASE=0 -> B-allele is A (swap)
     phases = bbc_df["PHASE"].to_numpy()[:, None]
     Y_bbc = A_bbc.multiply(1 - phases) + B_bbc.multiply(phases)
     Y_bbc.data = np.rint(Y_bbc.data).astype(np.int32)
@@ -83,6 +83,64 @@ def load_modality_data(
 
     bbc_data = {"bbc_df": bbc_df, "X": X_bbc, "Y": Y_bbc, "D": D_bbc}
     return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_data
+
+
+def build_bbc_sx(bbc_data, seg_sx, rep_mask=None):
+    """Build a BBC-level SX_Data-like namespace with segment CN profiles.
+
+    Maps each BBC bin to its parent segment via coordinate containment,
+    then propagates A/B/C/BAF/clones from the segment level.
+
+    Args:
+        bbc_data: dict with 'bbc_df', 'X', 'Y', 'D' (sparse, G_bbc x N).
+        seg_sx: segment-level SX_Data with cnv_blocks, C, BAF, clones.
+        rep_mask: optional boolean mask (N,) to subset barcodes.
+
+    Returns:
+        SimpleNamespace with cnv_blocks, X, Y, D, T, C, BAF, clones.
+    """
+    from types import SimpleNamespace
+
+    bbc_df = bbc_data["bbc_df"]
+    if rep_mask is not None:
+        X = bbc_data["X"].toarray().astype(np.int32)[:, rep_mask]
+        Y = bbc_data["Y"].toarray().astype(np.int32)[:, rep_mask]
+        D = bbc_data["D"].toarray().astype(np.int32)[:, rep_mask]
+    else:
+        X = bbc_data["X"].toarray().astype(np.int32)
+        Y = bbc_data["Y"].toarray().astype(np.int32)
+        D = bbc_data["D"].toarray().astype(np.int32)
+
+    bbc_sx = SimpleNamespace(
+        cnv_blocks=bbc_df,
+        X=X, Y=Y, D=D,
+        T=X.sum(axis=0),
+        clones=seg_sx.clones,
+    )
+
+    seg_blocks = seg_sx.cnv_blocks
+    bbc_mid = ((bbc_df["START"] + bbc_df["END"]) / 2).astype(int)
+    seg_idx = np.full(len(bbc_df), -1, dtype=int)
+    for chrom in seg_blocks["#CHR"].unique():
+        bm = (bbc_df["#CHR"] == chrom).to_numpy()
+        seg_ch = seg_blocks[seg_blocks["#CHR"] == chrom].sort_values("START")
+        if len(seg_ch) == 0 or not bm.any():
+            continue
+        starts = seg_ch["START"].to_numpy()
+        ends = seg_ch["END"].to_numpy()
+        sids = np.arange(len(seg_blocks))[seg_blocks["#CHR"] == chrom]
+        idx = np.searchsorted(starts, bbc_mid[bm].to_numpy(), side="right") - 1
+        safe = idx.clip(min=0)
+        ok = (idx >= 0) & (bbc_mid[bm].to_numpy() < ends[safe])
+        seg_idx[np.where(bm)[0][ok]] = sids[idx[ok]]
+
+    mapped = seg_idx >= 0
+    bbc_sx.C = np.full((len(bbc_df), seg_sx.C.shape[1]), 2, dtype=seg_sx.C.dtype)
+    bbc_sx.C[mapped] = seg_sx.C[seg_idx[mapped]]
+    bbc_sx.BAF = np.full((len(bbc_df), seg_sx.BAF.shape[1]), 0.5, dtype=seg_sx.BAF.dtype)
+    bbc_sx.BAF[mapped] = seg_sx.BAF[seg_idx[mapped]]
+
+    return bbc_sx
 
 
 def subset_sx_data(sx_data, idx):
@@ -143,7 +201,7 @@ def union_align_barcodes(data_dict, data_types):
     After alignment, all objects share the same N_union columns.
 
     Args:
-        data_dict: dict mapping data_type → SX_Data or SimpleNamespace.
+        data_dict: dict mapping data_type -> SX_Data or SimpleNamespace.
         data_types: ordered list of data_type keys.
 
     Returns:
@@ -189,7 +247,7 @@ def union_align_barcodes(data_dict, data_types):
             obj.barcodes = union_barcodes_df
             continue
 
-        # Realign (G, N_orig) → (G, N_union) with zero-fill
+        # Realign (G, N_orig) -> (G, N_union) with zero-fill
         G = obj.X.shape[0]
         X_new = np.zeros((G, N_union), dtype=obj.X.dtype)
         Y_new = np.zeros((G, N_union), dtype=obj.Y.dtype)
@@ -223,7 +281,7 @@ def mark_imbalanced(segs: pd.DataFrame):
 
 
 ##################################################
-# bbc → segment aggregation
+# bbc -> segment aggregation
 ##################################################
 
 
@@ -245,7 +303,7 @@ def _apply_solfile(seg_df, solfile):
         f"{len(cn_cols)} clones ({clones}), {len(sol_df)} clusters"
     )
 
-    # build cluster → (cn, u) mapping
+    # build cluster -> (cn, u) mapping
     sol_map = sol_df.set_index("CLUSTER")[cn_cols + u_cols].to_dict("index")
 
     # drop old cn_/u_ columns that don't match the solution's clone count
@@ -308,7 +366,7 @@ def aggregate_bbc_to_seg(
     seg_df["seg_id"] = np.arange(len(seg_df))
     n_seg = len(seg_df)
     n_bbc = len(bbc_df)
-    logging.info(f"{tag}aggregate_bbc_to_seg: {n_bbc} bbc bins → {n_seg} segments")
+    logging.info(f"{tag}aggregate_bbc_to_seg: {n_bbc} bbc bins -> {n_seg} segments")
 
     # map each bbc bin to a segment by coordinate containment
     # bbc bins are subsets of segments, so use midpoint for assignment

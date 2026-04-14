@@ -52,10 +52,9 @@ class SX_Data:
 
         self.T = np.sum(self.X, axis=0)
 
-        if verbose:
-            logging.info(f"data loaded #cells={self.N}, #bins={self.G}")
-            logging.info(f"#effective imbalanced CNA bins={self.nrows_imbalanced}")
-            logging.info(f"#effective aneuploid CNA bins={self.nrows_aneuploid}")
+        logging.debug(f"data loaded #cells={self.N}, #bins={self.G}")
+        logging.debug(f"#effective imbalanced CNA bins={self.nrows_imbalanced}")
+        logging.debug(f"#effective aneuploid CNA bins={self.nrows_aneuploid}")
 
     def apply_mask_shallow(self, mask_id="CNP", additional_mask=None):
         if additional_mask is None:

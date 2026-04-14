@@ -370,7 +370,7 @@ def plot_cnv_heatmap(
     style="cnv",
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
-    logging.info(f"plot CNV heatmap val={val}")
+    logging.debug(f"plot CNV heatmap val={val}")
 
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
@@ -472,7 +472,7 @@ def plot_cnv_heatmap(
         norm = mcolors.Normalize(vmin=data_matrix.min(), vmax=data_matrix.max())
 
     if proportions is not None:
-        logging.info("plot tumor proportions")
+        logging.debug("plot tumor proportions")
         N = data_matrix.shape[0]
         assert len(proportions) == N
         change_pts = np.flatnonzero(cell_labels[1:] != cell_labels[:-1]) + 1

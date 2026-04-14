@@ -165,8 +165,8 @@ def log_arguments(args) -> None:
     logging.info(f"parsed arguments:\n{lines}")
 
 
-def add_file_logging(out_dir: str, command: str = "copytyping") -> None:
-    """Attach a FileHandler to the root logger so logs are also written to *out_dir/<command>.log*."""
+def add_file_logging(out_dir: str, command: str = "copytyping"):
+    """Attach a FileHandler to the root logger. Returns the handler for later removal."""
     os.makedirs(out_dir, exist_ok=True)
     level = (
         logging.root.level if logging.root.level != logging.WARNING else logging.INFO
@@ -182,3 +182,4 @@ def add_file_logging(out_dir: str, command: str = "copytyping") -> None:
     logging.root.addHandler(fh)
     if logging.root.level > level:
         logging.root.setLevel(level)
+    return fh

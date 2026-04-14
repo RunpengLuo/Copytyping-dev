@@ -1,7 +1,6 @@
 import argparse
 import logging
 import os
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -20,6 +19,7 @@ from copytyping.inference.validation import (
     refine_labels_by_reference,
 )
 from copytyping.io_utils import (
+    build_bbc_sx,
     load_modality_data,
     subset_model_params,
     subset_sx_data,
@@ -28,7 +28,7 @@ from copytyping.io_utils import (
 from copytyping.plot.plot_cell import plot_cnv_heatmap
 from copytyping.plot.plot_common import (
     plot_crosstab,
-    plot_rdr_baf_1d_aggregated,
+    plot_rdr_baf_1d_pseudobulk,
 )
 from copytyping.plot.plot_visium import plot_visium_debug, plot_visium_panel
 from copytyping.sx_data.sx_data import SX_Data
@@ -57,7 +57,7 @@ def run(args=None):
     if out_prefix == "":
         out_prefix = str(sample)
     os.makedirs(out_dir, exist_ok=True)
-    add_file_logging(out_dir)
+    _file_handler = add_file_logging(out_dir)
     plot_dir = os.path.join(out_dir, "plots")
     heatmap_dir = os.path.join(plot_dir, "heatmaps")
     heatmap_agg1_dir = os.path.join(heatmap_dir, "agg1")
@@ -227,7 +227,10 @@ def run(args=None):
         posterior_thres=posterior_thres,
         margin_thres=margin_thres,
     )
-    logging.info(f"clone fractions: {clone_props}")
+    logging.info(
+        "clone fractions: "
+        + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
+    )
 
     is_normal = getattr(instance, "_init_is_normal", None)
     if aggr_mode == "clust":
@@ -393,7 +396,7 @@ def run(args=None):
                         )
 
             # Segment-level 1D scatter
-            plot_rdr_baf_1d_aggregated(
+            plot_rdr_baf_1d_pseudobulk(
                 sx_rep,
                 anns_rep,
                 params_rep.get(f"{data_type}-lambda", None),
@@ -409,23 +412,18 @@ def run(args=None):
                 ),
             )
 
-            # BBC-level 1D scatter (phased)
             if data_type in bbc_data_sources:
-                bbc = bbc_data_sources[data_type]
-                bbc_sx = SimpleNamespace(
-                    cnv_blocks=bbc["bbc_df"],
-                    X=bbc["X"].toarray().astype(np.int32)[:, rep_mask],
-                    Y=bbc["Y"].toarray().astype(np.int32)[:, rep_mask],
-                    D=bbc["D"].toarray().astype(np.int32)[:, rep_mask],
-                    T=bbc["X"].toarray().astype(np.int32)[:, rep_mask]
-                    .sum(axis=0),
+                bbc_sx = build_bbc_sx(
+                    bbc_data_sources[data_type],
+                    seg_data_sources[data_type],
+                    rep_mask=rep_mask,
                 )
                 bbc_lambda = None
                 if is_normal is not None:
                     bbc_lambda = compute_baseline_proportions(
                         bbc_sx.X, bbc_sx.T, is_normal[rep_mask]
                     )
-                plot_rdr_baf_1d_aggregated(
+                plot_rdr_baf_1d_pseudobulk(
                     bbc_sx,
                     anns_rep,
                     bbc_lambda,
@@ -434,6 +432,7 @@ def run(args=None):
                     genome_size,
                     mask_cnp=False,
                     lab_type=label,
+                    markersize=2,
                     filename=os.path.join(
                         scatter_dir,
                         f"{out_prefix}.{platform}{rep_tag}"
@@ -482,6 +481,10 @@ def run(args=None):
                 ref_label=(ref_label if ref_label in barcodes.columns else None),
                 dpi=dpi,
             )
+
+    # Remove per-run file handler to avoid log leaking across pipeline runs
+    logging.root.removeHandler(_file_handler)
+    _file_handler.close()
 
 
 if __name__ == "__main__":
