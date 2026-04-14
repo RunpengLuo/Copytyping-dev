@@ -863,9 +863,11 @@ def plot_metrics_barplot(
             if df.empty:
                 continue
 
-            # One entry per sample: pick row with highest f1
-            sample_df = df.sort_values("f1", ascending=False).drop_duplicates(
-                subset=[sample_col], keep="first"
+            # One entry per sample: pick row with highest f1, sort by name
+            sample_df = (
+                df.sort_values("f1", ascending=False)
+                .drop_duplicates(subset=[sample_col], keep="first")
+                .sort_values(sample_col)
             )
             samples = sample_df[sample_col].tolist()
             if dtypes_col in sample_df.columns:
