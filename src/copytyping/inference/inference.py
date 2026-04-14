@@ -58,18 +58,17 @@ def run(args=None):
         out_prefix = str(sample)
     os.makedirs(out_dir, exist_ok=True)
     _file_handler = add_file_logging(out_dir)
-    plot_dir = os.path.join(out_dir, "plots")
-    heatmap_dir = os.path.join(plot_dir, "heatmaps")
-    heatmap_agg1_dir = os.path.join(heatmap_dir, "agg1")
-    heatmap_aggx_dir = os.path.join(heatmap_dir, f"agg{args['heatmap_agg']}")
-    scatter_dir = plot_dir
-    validation_dir = plot_dir
-    for d in [heatmap_agg1_dir, heatmap_aggx_dir, plot_dir]:
-        os.makedirs(d, exist_ok=True)
+    dirs = {
+        "work": os.path.join(out_dir, "work"),
+        "plots": os.path.join(out_dir, "plots"),
+        "heatmap_agg1": os.path.join(out_dir, "plots", "heatmaps", "agg1"),
+        "heatmap_aggx": os.path.join(out_dir, "plots", "heatmaps", f"agg{args['heatmap_agg']}"),
+        "scatter": os.path.join(out_dir, "plots", "scatters"),
+    }
     if platform in SPATIAL_PLATFORMS:
-        visium_dir = plot_dir
-    work_dir = os.path.join(out_dir, "work")
-    os.makedirs(work_dir, exist_ok=True)
+        dirs["visium"] = os.path.join(out_dir, "plots", "spatial_images")
+    for d in dirs.values():
+        os.makedirs(d, exist_ok=True)
     verbosity = args["verbosity"]
 
     logging.info(f"sample={sample}, platform={platform}, data_types={data_types}")
@@ -82,8 +81,8 @@ def run(args=None):
 
     aggr_mode = args.get("aggr_mode", "clust")
     data_sources = {}  # used by EM (seg or clust level)
-    seg_data_sources = {}  # always seg level, used for plotting
-    bbc_data_sources = {}  # BBC-level phased data, used for plotting
+    seg_data_sources = {}
+    bbc_data_sources = {}
     adatas = {}
     for data_type in data_types:
         barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_data = load_modality_data(
@@ -208,7 +207,7 @@ def run(args=None):
         platform,
         data_types,
         data_sources,
-        work_dir,
+        dirs["work"],
         out_prefix,
         verbosity,
         modality_masks=clust_masks,
@@ -351,7 +350,7 @@ def run(args=None):
                 anns_rep,
                 sample,
                 os.path.join(
-                    validation_dir,
+                    dirs["plots"],
                     f"{out_prefix}.{platform}{rep_tag}.cross_heatmap.png",
                 ),
                 acol=label,
@@ -368,8 +367,8 @@ def run(args=None):
                     if my_label not in anns_rep:
                         continue
                     agg_levels = [
-                        (1, heatmap_agg1_dir),
-                        (agg_size, heatmap_aggx_dir),
+                        (1, dirs["heatmap_agg1"]),
+                        (agg_size, dirs["heatmap_aggx"]),
                     ]
                     for agg, agg_dir in agg_levels:
                         plot_cnv_heatmap(
@@ -406,7 +405,7 @@ def run(args=None):
                 mask_cnp=False,
                 lab_type=label,
                 filename=os.path.join(
-                    scatter_dir,
+                    dirs["scatter"],
                     f"{out_prefix}.{platform}{rep_tag}"
                     f".1d_scatter.{data_type}.{label}.pdf",
                 ),
@@ -434,7 +433,7 @@ def run(args=None):
                     lab_type=label,
                     markersize=2,
                     filename=os.path.join(
-                        scatter_dir,
+                        dirs["scatter"],
                         f"{out_prefix}.{platform}{rep_tag}"
                         f".1d_scatter_bbc.{data_type}.{label}.pdf",
                     ),
@@ -463,7 +462,7 @@ def run(args=None):
         plot_visium_panel(
             sample,
             visium_slices,
-            visium_dir,
+            dirs["visium"],
             spot_label=label,
             path_label=ref_label,
             dpi=dpi,
@@ -476,7 +475,7 @@ def run(args=None):
                 instance.param_trace,
                 barcodes=barcodes,
                 data_type=data_types[0],
-                out_dir=visium_dir,
+                out_dir=dirs["visium"],
                 clones=seg_data_sources[data_types[0]].clones,
                 ref_label=(ref_label if ref_label in barcodes.columns else None),
                 dpi=dpi,
