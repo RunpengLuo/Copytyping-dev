@@ -581,8 +581,8 @@ def plot_rdr_baf_1d_pseudobulk(
             agg_bafs,
             s=markersize,
             c=baf_colors,
-            edgecolors="none",
-            linewidths=0,
+            edgecolors="black",
+            linewidths=0.3,
         )
         for coll in ax_baf.collections:
             coll.set_rasterized(True)
