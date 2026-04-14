@@ -66,6 +66,7 @@ def run(args=None):
             out_dir, "plots", "heatmaps", f"agg{args['heatmap_agg']}"
         ),
         "scatter": os.path.join(out_dir, "plots", "scatters"),
+        "validation": os.path.join(out_dir, "plots", "validation")
     }
     if platform in SPATIAL_PLATFORMS:
         dirs["visium"] = os.path.join(out_dir, "plots", "spatial_images")
@@ -340,12 +341,12 @@ def run(args=None):
                     f"margin min={md.min():.3f} mean={md.mean():.3f}"
                 )
 
-        if ref_label in anns_rep.columns:
+        if ref_label in anns_rep.columns and not is_spot:
             plot_crosstab(
                 anns_rep,
                 sample,
                 os.path.join(
-                    dirs["plots"],
+                    dirs["validation"],
                     f"{out_prefix}.{platform}{rep_tag}.crosstab.png",
                 ),
                 metric=metric,
