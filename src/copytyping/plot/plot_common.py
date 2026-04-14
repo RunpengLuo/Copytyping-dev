@@ -552,7 +552,7 @@ def plot_rdr_baf_1d_pseudobulk(
                 )
         ax_rdr.set_ylabel(f"{cell_label} (n={num_bcs})\n{rdr_label}", fontsize=8)
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
-        # chrnames only on the first RDR row
+        # chrnames on top of the first RDR row only
         if ci == 0:
             ax_rdr.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
             ax_rdr.tick_params(
@@ -611,8 +611,7 @@ def plot_rdr_baf_1d_pseudobulk(
         ax_baf.set_ylim([-0.05, 1.05])
         ax_baf.set_ylabel("BAF", fontsize=8)
         plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
-        ax_baf.set_xticklabels([])
-        ax_baf.tick_params(axis="x", bottom=False)
+        ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
         ax_baf.grid(False)
 
     # ── Bottom rows: CNP profile + legend ──
@@ -623,7 +622,6 @@ def plot_rdr_baf_1d_pseudobulk(
     fig.suptitle(
         f"sample={sample}  data_type={data_type}",
         fontsize=10,
-        y=1.0,
     )
     fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
