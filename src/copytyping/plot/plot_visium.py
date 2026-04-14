@@ -187,7 +187,13 @@ def plot_visium_panel(
                     continue
                 handles.append(mpatches.Patch(color=base_pal[j], label=c))
                 j += 1
-            ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.8)
+            ax.legend(
+                handles=handles,
+                loc="center left",
+                bbox_to_anchor=(1.0, 0.5),
+                fontsize=7,
+                framealpha=0.8,
+            )
 
         ri += 1
         sq.pl.spatial_scatter(
@@ -202,12 +208,17 @@ def plot_visium_panel(
             edgecolors="none",
         )
 
-    # only show legend on the last column
+    # only show legend on the last column, positioned outside the plot
     for ri in range(nrows):
-        for ci in range(ncols - 1):
+        for ci in range(ncols):
             legend = axes[ri, ci].get_legend()
-            if legend is not None:
+            if legend is None:
+                continue
+            if ci < ncols - 1:
                 legend.remove()
+            else:
+                legend.set_bbox_to_anchor((1.0, 0.5))
+                legend._loc = 6  # center left
 
     # set every axes title to sample_rep_id, overriding squidpy defaults
     for ri in range(nrows):
@@ -378,12 +389,17 @@ def plot_visium_debug(
             rotation=90,
         )
 
-    # only keep legend on last column
+    # only keep legend on last column, positioned outside the plot
     for ri in range(niters):
-        for ci in range(ncols - 1):
+        for ci in range(ncols):
             legend = axes[ri, ci].get_legend()
-            if legend is not None:
+            if legend is None:
+                continue
+            if ci < ncols - 1:
                 legend.remove()
+            else:
+                legend.set_bbox_to_anchor((1.0, 0.5))
+                legend._loc = 6  # center left
 
     fig.suptitle(
         f"{sample} — clone x purity per iteration", fontsize=14, fontweight="bold"

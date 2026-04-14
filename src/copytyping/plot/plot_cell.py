@@ -13,8 +13,6 @@ from matplotlib.patches import Rectangle
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.plot.plot_cnp import (
     BLACK,
-    plot_ascn_legend,
-    plot_ascn_profile,
     plot_cnv_legend,
     plot_cnv_profile,
 )
@@ -367,7 +365,6 @@ def plot_cnv_heatmap(
     dpi=300,
     transparent=False,
     title_info="",
-    style="cnv",
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
     logging.debug(f"plot CNV heatmap val={val}")
@@ -504,10 +501,8 @@ def plot_cnv_heatmap(
         norm=norm,
     )
 
-    profile_fn = plot_ascn_profile if style == "ascn" else plot_cnv_profile
-    legend_fn = plot_ascn_legend if style == "ascn" else plot_cnv_legend
-    profile_fn(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
-    legend_fn(axes[2])
+    plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
+    plot_cnv_legend(axes[2])
 
     title = f"{sample} {data_type} {val} Heatmap"
     if agg_size > 1:

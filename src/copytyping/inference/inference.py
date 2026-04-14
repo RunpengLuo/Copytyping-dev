@@ -62,7 +62,9 @@ def run(args=None):
         "work": os.path.join(out_dir, "work"),
         "plots": os.path.join(out_dir, "plots"),
         "heatmap_agg1": os.path.join(out_dir, "plots", "heatmaps", "agg1"),
-        "heatmap_aggx": os.path.join(out_dir, "plots", "heatmaps", f"agg{args['heatmap_agg']}"),
+        "heatmap_aggx": os.path.join(
+            out_dir, "plots", "heatmaps", f"agg{args['heatmap_agg']}"
+        ),
         "scatter": os.path.join(out_dir, "plots", "scatters"),
     }
     if platform in SPATIAL_PLATFORMS:
@@ -227,8 +229,7 @@ def run(args=None):
         margin_thres=margin_thres,
     )
     logging.info(
-        "clone fractions: "
-        + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
+        "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
     )
 
     is_normal = getattr(instance, "_init_is_normal", None)
@@ -259,9 +260,7 @@ def run(args=None):
     metric = {}
     is_spot = platform in SPATIAL_PLATFORMS
     if ref_label in barcodes.columns:
-        anns = refine_labels_by_reference(
-            anns, ref_label, label, f"{label}-refined"
-        )
+        anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
         metric = evaluate_malignant_accuracy(
             anns,
             cell_label=label,
@@ -286,9 +285,7 @@ def run(args=None):
                 metric[f"JC_{lab}"] = z
 
             if ref_label in anns_indexed.columns:
-                gt_tumor = anns_indexed[ref_label].apply(
-                    is_tumor_label
-                ).to_numpy()
+                gt_tumor = anns_indexed[ref_label].apply(is_tumor_label).to_numpy()
                 if gt_tumor.any():
                     jc_tumor = joincount_zscore(
                         clone_labels[gt_tumor], coords[gt_tumor]
@@ -330,10 +327,9 @@ def run(args=None):
         params_rep = subset_model_params(model_params, rep_mask, data_types)
         rep_tag = f".{rep_id}" if len(rep_ids) > 1 else ""
 
-        # Log per-group posterior diagnostics
         post_label = label
         if "max_posterior" in anns_rep.columns:
-            logging.info(f"posterior diagnostics{rep_tag}:")
+            logging.info(f"posterior statistics{rep_tag}:")
             for grp, sub in anns_rep.groupby(post_label, sort=True):
                 mp = sub["max_posterior"].to_numpy()
                 md = sub["margin_delta"].to_numpy()
@@ -344,14 +340,13 @@ def run(args=None):
                     f"margin min={md.min():.3f} mean={md.mean():.3f}"
                 )
 
-        # cross heatmap (only if ref_label available)
         if ref_label in anns_rep.columns:
             plot_crosstab(
                 anns_rep,
                 sample,
                 os.path.join(
                     dirs["plots"],
-                    f"{out_prefix}.{platform}{rep_tag}.cross_heatmap.png",
+                    f"{out_prefix}.{platform}{rep_tag}.crosstab.png",
                 ),
                 acol=label,
                 bcol=ref_label,

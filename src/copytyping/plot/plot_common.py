@@ -8,7 +8,8 @@ from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.utils import get_chr_sizes, is_tumor_label
+from copytyping.plot.plot_cnp import plot_cnv_legend
+from copytyping.utils import NA_CELLTYPE, get_chr_sizes, is_tumor_label
 from copytyping.sx_data.sx_data import SX_Data
 
 
@@ -288,22 +289,59 @@ def plot_rdr_baf_1d_pseudobulk(
     ordered_labels = (
         [x for x in ["normal"] if x in uniq_cell_labels]
         + sorted([x for x in uniq_cell_labels if x.startswith("clone")])
-        + [x for x in uniq_cell_labels if x not in ["normal"] and not x.startswith("clone")]
+        + [
+            x
+            for x in uniq_cell_labels
+            if x not in ["normal"] and not x.startswith("clone")
+        ]
     )
-    n_groups = len(ordered_labels)
-    colors = sns.color_palette("husl", n_colors=n_groups)
     rdr_label = "log2RDR" if log2 else "RDR"
+    default_color = "grey"
 
     pdf_pages = PdfPages(filename)
+
+    # CNP color map: blue for deletion, grey for neutral, red for amplification
+    _cnp_cmap = {
+        0: "#2166ac",
+        1: "#67a9cf",
+        2: "#d9d9d9",
+        3: "#ef8a62",
+        4: "#b2182b",
+        5: "#67001f",
+    }
+
+    def _get_cnp_colors(clone_C, C_normal):
+        """Per-bin color based on total CN ratio."""
+        cn = np.round(clone_C).astype(int)
+        return [_cnp_cmap.get(c, _cnp_cmap[5] if c > 5 else _cnp_cmap[0]) for c in cn]
 
     for i, cell_label in enumerate(ordered_labels):
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
         num_bcs = len(barcode_idxs)
-        color = colors[i]
 
-        fig, (ax_rdr, ax_baf) = plt.subplots(
-            nrows=2, ncols=1, figsize=figsize, sharex=True,
+        # Determine per-bin colors from CNP
+        bin_colors = [default_color] * len(cnv_blocks)
+        clone_C_full = None
+        if (
+            cell_label != "NA"
+            and hasattr(sx_data, "clones")
+            and cell_label in sx_data.clones
+        ):
+            clone_idx = sx_data.clones.index(cell_label)
+            C_normal_full = np.maximum(sx_data.C[:, 0], 1).astype(np.float64)
+            clone_C_full = sx_data.C[:, clone_idx].astype(np.float64)
+            if mask_cnp:
+                C_normal_full = C_normal_full[sx_data.MASK[mask_id]]
+                clone_C_full = clone_C_full[sx_data.MASK[mask_id]]
+            bin_colors = _get_cnp_colors(clone_C_full, C_normal_full)
+
+        fig, (ax_rdr, ax_baf, ax_legend) = plt.subplots(
+            nrows=3,
+            ncols=1,
+            figsize=(figsize[0], figsize[1] + 1),
+            gridspec_kw={"height_ratios": [1, 1, 0.3]},
         )
+        ax_rdr.sharex(ax_baf)
 
         # ── RDR panel ──
         if masked_base_props is not None:
@@ -321,32 +359,40 @@ def plot_rdr_baf_1d_pseudobulk(
             valid = rdr_valid & np.isfinite(obs_rdr)
             pos_rdr = positions[valid]
             val_rdr = obs_rdr[valid]
-            sns.scatterplot(
-                x=pos_rdr, y=val_rdr, ax=ax_rdr,
-                s=markersize, color=color, edgecolor="none", linewidth=0,
-                legend=False,
+            rdr_colors = [bin_colors[j] for j in np.where(valid)[0]]
+            ax_rdr.scatter(
+                pos_rdr,
+                val_rdr,
+                s=markersize,
+                c=rdr_colors,
+                edgecolors="none",
+                linewidths=0,
             )
             for coll in ax_rdr.collections:
                 coll.set_rasterized(True)
             ax_rdr.vlines(
-                list(chr_offsets.values()), ymin=0, ymax=1,
-                transform=ax_rdr.get_xaxis_transform(), linewidth=0.5, colors="k",
+                list(chr_offsets.values()),
+                ymin=0,
+                ymax=1,
+                transform=ax_rdr.get_xaxis_transform(),
+                linewidth=0.5,
+                colors="k",
             )
             exp_vals = None
-            if cell_label != "NA" and hasattr(sx_data, "clones"):
-                clone_idx = sx_data.clones.index(cell_label)
+            if clone_C_full is not None:
                 C_normal = np.maximum(sx_data.C[:, 0], 1).astype(np.float64)
-                clone_C = sx_data.C[:, clone_idx].astype(np.float64)
                 if mask_cnp:
                     C_normal = C_normal[sx_data.MASK[mask_id]]
-                    clone_C = clone_C[sx_data.MASK[mask_id]]
-                exp_vals = clone_C / C_normal
+                exp_vals = clone_C_full / C_normal
                 if log2:
                     exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
                 ax_rdr.add_collection(
                     LineCollection(
-                        _merge_exp_lines(abs_starts, abs_ends, exp_vals, cnv_blocks["#CHR"]),
-                        linewidth=1.5, colors=[linecolor],
+                        _merge_exp_lines(
+                            abs_starts, abs_ends, exp_vals, cnv_blocks["#CHR"]
+                        ),
+                        linewidth=1.5,
+                        colors=[linecolor],
                     )
                 )
             if log2:
@@ -358,7 +404,9 @@ def plot_rdr_baf_1d_pseudobulk(
                 ax_rdr.set_ylim([y_lo, y_hi])
             else:
                 exp_max = float(exp_vals.max()) if exp_vals is not None else 1.0
-                ax_rdr.set_ylim([-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)])
+                ax_rdr.set_ylim(
+                    [-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)]
+                )
         ax_rdr.set_ylabel(rdr_label, fontsize=8)
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
         ax_rdr.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
@@ -370,28 +418,43 @@ def plot_rdr_baf_1d_pseudobulk(
         baf_valid = agg_tcounts > 0
         agg_bafs = agg_bcounts[baf_valid] / agg_tcounts[baf_valid]
         pos_baf = positions[baf_valid]
-        sns.scatterplot(
-            x=pos_baf, y=agg_bafs, ax=ax_baf,
-            s=markersize, color=color, edgecolor="none", linewidth=0,
-            legend=False,
+        baf_colors = [bin_colors[j] for j in np.where(baf_valid)[0]]
+        ax_baf.scatter(
+            pos_baf,
+            agg_bafs,
+            s=markersize,
+            c=baf_colors,
+            edgecolors="none",
+            linewidths=0,
         )
         for coll in ax_baf.collections:
             coll.set_rasterized(True)
         ax_baf.vlines(
-            list(chr_offsets.values()), ymin=0, ymax=1,
-            transform=ax_baf.get_xaxis_transform(), linewidth=0.5, colors="k",
+            list(chr_offsets.values()),
+            ymin=0,
+            ymax=1,
+            transform=ax_baf.get_xaxis_transform(),
+            linewidth=0.5,
+            colors="k",
         )
         ax_baf.hlines(
-            y=0.5, xmin=0, xmax=chr_end,
-            colors="grey", linestyle=":", linewidth=1,
+            y=0.5,
+            xmin=0,
+            xmax=chr_end,
+            colors="grey",
+            linestyle=":",
+            linewidth=1,
         )
         if exp_bafs is not None and cell_label != "NA" and hasattr(sx_data, "clones"):
             clone_idx = sx_data.clones.index(cell_label)
             clone_baf = exp_bafs[:, clone_idx]
             ax_baf.add_collection(
                 LineCollection(
-                    _merge_exp_lines(abs_starts, abs_ends, clone_baf, cnv_blocks["#CHR"]),
-                    linewidth=1.5, colors=[linecolor],
+                    _merge_exp_lines(
+                        abs_starts, abs_ends, clone_baf, cnv_blocks["#CHR"]
+                    ),
+                    linewidth=1.5,
+                    colors=[linecolor],
                 )
             )
         ax_baf.set_ylim([-0.05, 1.05])
@@ -399,6 +462,8 @@ def plot_rdr_baf_1d_pseudobulk(
         plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
         ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
         ax_baf.grid(False)
+
+        plot_cnv_legend(ax_legend)
 
         fig.suptitle(
             f"sample={sample}  data_type={data_type}  {cell_label}  n={num_bcs}",
@@ -483,29 +548,32 @@ def plot_loss(losses: list, out_loss_file: str, val_type="log-likelihood", dpi=1
     plt.close(fig)
 
 
+def _is_na_label(label):
+    """Check if label is uninformative (NA/Unknown, case-insensitive)."""
+    return label.lower() in {x.lower() for x in NA_CELLTYPE}
+
+
 def plot_crosstab(
     assign_df: pd.DataFrame,
     sample: str,
     outfile: str,
-    acol="final_type",
-    bcol="Decision",
+    acol="copytyping-label",
+    bcol="cell_type",
 ):
     """
     Plot cross-tabulation heatmap: rows = GT labels (bcol), cols = predicted (acol).
 
     Cells are white by default. Red highlights misassignments:
-    - GT non-tumor assigned to clone*/NA
-    - GT tumor assigned to normal/NA
-    Raw counts annotated in each cell.
+    - GT non-tumor assigned to clone*
+    - GT tumor assigned to normal
+    GT labels in NA_CELLTYPE (Unknown, NA) are never marked red.
     """
     ct = pd.crosstab(assign_df[bcol], assign_df[acol])
 
-    # Sort rows: tumor GT first, then non-tumor
     gt_tumor = sorted([r for r in ct.index if is_tumor_label(r)])
     gt_normal = sorted([r for r in ct.index if not is_tumor_label(r)])
     row_order = gt_tumor + gt_normal
 
-    # Sort cols: normal, clone*, NA/other
     pred_normal = [c for c in ct.columns if c == "normal"]
     pred_clone = sorted([c for c in ct.columns if c.startswith("clone")])
     pred_other = sorted([c for c in ct.columns if c not in pred_normal + pred_clone])
@@ -517,7 +585,6 @@ def plot_crosstab(
     counts = ct.to_numpy(dtype=float)
     num_rows, num_cols = counts.shape
 
-    # Compute precision / recall / f1 for the title
     gt_tumor_mask = np.array([is_tumor_label(r) for r in row_order])
     pred_tumor_mask = np.array([c.startswith("clone") for c in col_order])
     tp = counts[np.ix_(gt_tumor_mask, pred_tumor_mask)].sum()
@@ -527,17 +594,17 @@ def plot_crosstab(
     rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
 
-    # Build error mask: red for misassignments
     error = np.zeros((num_rows, num_cols), dtype=bool)
     for i, gt_lab in enumerate(row_order):
+        if _is_na_label(gt_lab):
+            continue
         gt_is_tumor = is_tumor_label(gt_lab)
         for j, pred_lab in enumerate(col_order):
             pred_is_tumor = pred_lab.startswith("clone")
             pred_is_normal = pred_lab == "normal"
-            pred_is_na = pred_lab == "NA"
-            if gt_is_tumor and (pred_is_normal or pred_is_na):
+            if gt_is_tumor and pred_is_normal:
                 error[i, j] = True
-            if not gt_is_tumor and (pred_is_tumor or pred_is_na):
+            if not gt_is_tumor and pred_is_tumor:
                 error[i, j] = True
 
     # Red for any error cell with count > 0; white otherwise
