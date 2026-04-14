@@ -431,7 +431,7 @@ def plot_rdr_baf_1d_pseudobulk(
     # outer grid: one slot per clone + one for bottom rows
     row_h = figsize[1] / 2
     fig_h = row_h * n_clones * 2 + (2 if has_cnp else 1)
-    fig = plt.figure(figsize=(figsize[0], fig_h), layout="constrained")
+    fig = plt.figure(figsize=(figsize[0], fig_h))
 
     outer_ratios = [2] * n_clones + [0.5 + 0.3 if has_cnp else 0.3]
     outer = GridSpec(
@@ -624,7 +624,9 @@ def plot_rdr_baf_1d_pseudobulk(
 
     # ── Bottom rows: CNP profile + legend ──
     if has_cnp:
-        plot_cnv_profile(axes[-2], haplo_blocks, wl_segments, plot_chrname=False)
+        ax_cnp = axes[-2]
+        plot_cnv_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
+        ax_cnp.set_xlim(0, chr_end)
     plot_cnv_legend(axes[-1])
 
     title = f"sample={sample}  data_type={data_type}  resolution={resolution}"
