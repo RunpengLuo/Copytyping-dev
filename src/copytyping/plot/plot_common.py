@@ -324,6 +324,7 @@ def plot_rdr_baf_1d_pseudobulk(
     genome_file: str,
     haplo_blocks: pd.DataFrame = None,
     wl_segments: pd.DataFrame = None,
+    resolution: str = "seg",
     mask_cnp=True,
     mask_id="CNP",
     lab_type="cell_label",
@@ -630,7 +631,7 @@ def plot_rdr_baf_1d_pseudobulk(
     plot_cnv_legend(axes[-1])
 
     fig.suptitle(
-        f"sample={sample}  data_type={data_type}",
+        f"sample={sample}  data_type={data_type}  resolution={resolution}",
         fontsize=18,
         fontweight="bold",
     )
