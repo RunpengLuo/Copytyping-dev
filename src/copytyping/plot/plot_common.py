@@ -431,7 +431,7 @@ def plot_rdr_baf_1d_pseudobulk(
         1,
         figure=fig,
         height_ratios=outer_ratios,
-        hspace=0.35,
+        hspace=0.15,
         top=0.97,
     )
 
@@ -459,6 +459,10 @@ def plot_rdr_baf_1d_pseudobulk(
     for ci, cell_label in enumerate(ordered_labels):
         ax_rdr = axes[ci * 2]
         ax_baf = axes[ci * 2 + 1]
+        ax_rdr.set_zorder(2)
+        ax_baf.set_zorder(2)
+        ax_rdr.set_facecolor("white")
+        ax_baf.set_facecolor("white")
         ax_rdr.sharex(ax_baf)
 
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
