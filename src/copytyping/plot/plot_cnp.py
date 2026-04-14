@@ -91,6 +91,7 @@ def plot_cnv_profile(
                         edgecolor=BLACK,
                         transform=ax.get_xaxis_transform(),
                         linewidth=0,
+                        rasterized=True,
                     )
                     ax.add_patch(rect)
 
@@ -106,6 +107,7 @@ def plot_cnv_profile(
                             closed=True,
                             facecolor=BLACK,
                             transform=ax.get_xaxis_transform(),
+                            rasterized=True,
                         )
                         ax.add_patch(trig)
             # plot segment bound (centromere) as dashed line

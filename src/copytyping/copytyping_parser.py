@@ -258,7 +258,7 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         choices=["pdf", "png", "svg"],
         type=str,
         help="file format (pdf, png, svg)",
-        default="png",
+        default="pdf",
     )
     parser.add_argument(
         "--heatmap_agg",
@@ -360,15 +360,26 @@ def get_inference_defaults():
     """Get default inference args from the inference parser."""
     tmp = argparse.ArgumentParser()
     add_arguments_inference(tmp)
-    return vars(tmp.parse_args([
-        "--platform", "single_cell",
-        "--sample", "_",
-        "--seg_ucn", "_",
-        "--bbc_phases", "_",
-        "-o", "_",
-        "--genome_size", "_",
-        "--region_bed", "_",
-    ]))
+    return vars(
+        tmp.parse_args(
+            [
+                "--platform",
+                "single_cell",
+                "--sample",
+                "_",
+                "--seg_ucn",
+                "_",
+                "--bbc_phases",
+                "_",
+                "-o",
+                "_",
+                "--genome_size",
+                "_",
+                "--region_bed",
+                "_",
+            ]
+        )
+    )
 
 
 def add_arguments_pipeline(parser):
