@@ -203,9 +203,15 @@ def run(args):
                 run_args, run_dir, genome_size, region_bed, verbosity, force
             )
 
+            dtypes = []
+            if "gex_dir" in run_args:
+                dtypes.append("gex")
+            if "atac_dir" in run_args:
+                dtypes.append("atac")
             info = dict(row)
             info["OUT_PREFIX"] = os.path.relpath(run_dir, out_dir)
             info["SOLFILE"] = solfile or ""
+            info["DATA_TYPES"] = "+".join(dtypes) if dtypes else ""
             info["STATUS"] = status
             info.update(metrics)
             summary_rows.append(info)

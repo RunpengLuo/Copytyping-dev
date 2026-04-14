@@ -832,6 +832,7 @@ def plot_metrics_barplot(
     outfile: str,
     metrics=("precision", "recall", "f1"),
     sample_col="SAMPLE",
+    dtypes_col="DATA_TYPES",
     group_col="cancer_type",
     dpi=200,
 ):
@@ -862,7 +863,17 @@ def plot_metrics_barplot(
             if df.empty:
                 continue
 
-            samples = df[sample_col].tolist()
+            # One entry per sample: pick row with highest f1
+            sample_df = df.sort_values("f1", ascending=False).drop_duplicates(
+                subset=[sample_col], keep="first"
+            )
+            samples = sample_df[sample_col].tolist()
+            if dtypes_col in sample_df.columns:
+                tick_labels = [
+                    f"{s}\n({dt})" for s, dt in zip(samples, sample_df[dtypes_col])
+                ]
+            else:
+                tick_labels = samples
             n = len(samples)
             x = np.arange(n)
             bar_w = 1.0 / (n_metrics + 0.5)
@@ -871,7 +882,7 @@ def plot_metrics_barplot(
             fig, ax = plt.subplots(figsize=(fig_w, 4))
 
             for mi, m in enumerate(metrics):
-                vals = df[m].astype(float).to_numpy()
+                vals = sample_df[m].astype(float).to_numpy()
                 bars = ax.bar(
                     x + mi * bar_w,
                     vals,
@@ -891,7 +902,7 @@ def plot_metrics_barplot(
                         )
 
             ax.set_xticks(x + bar_w * (n_metrics - 1) / 2)
-            ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=8)
+            ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
             ax.set_ylim(0, 1.15)
             ax.set_ylabel("Score")
             ax.legend(fontsize=8)
