@@ -1,9 +1,8 @@
-# src/copytyping/__main__.py
 import argparse
 
+from copytyping.copytyping_parser import add_arguments_inference, add_arguments_pipeline
 from copytyping.inference.inference import run as copytyping_inference
-
-from copytyping.copytyping_parser import add_arguments_inference
+from copytyping.pipeline import run as copytyping_pipeline
 from copytyping.utils import log_arguments, setup_logging
 
 
@@ -11,9 +10,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="copytyping")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p_inf = subparsers.add_parser("inference", help="run inference")
+    p_inf = subparsers.add_parser("inference", help="run inference on one sample")
     add_arguments_inference(p_inf)
     p_inf.set_defaults(func=copytyping_inference)
+
+    p_pipe = subparsers.add_parser(
+        "run_pipeline", help="batch run from a panel TSV"
+    )
+    add_arguments_pipeline(p_pipe)
+    p_pipe.set_defaults(func=copytyping_pipeline)
 
     args = parser.parse_args(argv)
     setup_logging(args)

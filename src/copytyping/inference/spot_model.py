@@ -38,6 +38,8 @@ class Spot_Model(Base_Model):
         verbose=1,
         modality_masks=None,
         hard_em=False,
+        allele_mask_id="IMBALANCED",
+        total_mask_id="ANEUPLOID",
     ):
         super().__init__(
             barcodes,
@@ -49,6 +51,8 @@ class Spot_Model(Base_Model):
             verbose,
             modality_masks=modality_masks,
             hard_em=hard_em,
+            allele_mask_id=allele_mask_id,
+            total_mask_id=total_mask_id,
         )
         self.tumor_clones = self.clones[1:]
         self.K_tumor = len(self.tumor_clones)
@@ -72,26 +76,26 @@ class Spot_Model(Base_Model):
             params[f"{data_type}-theta"] = estimate_tumor_proportion(sx_data, lambda_g)
 
             if fit_mode in {"allele_only", "hybrid"}:
+                n_allele = int(sx_data.MASK[self.allele_mask_id].sum())
                 params[f"{data_type}-tau"] = np.full(
-                    sx_data.nrows_imbalanced,
+                    n_allele,
                     init_params["tau0"],
                     dtype=np.float32,
                 )
             if fit_mode in {"total_only", "hybrid"}:
+                n_total = int(sx_data.MASK[self.total_mask_id].sum())
                 params[f"{data_type}-inv_phi"] = np.full(
-                    sx_data.nrows_aneuploid,
+                    n_total,
                     1 / init_params["phi0"],
                     dtype=np.float32,
                 )
 
-        # Build fix_params
         fix_params = {key: False for key in params}
         if init_fix_params is not None:
             for key in init_fix_params:
                 if key in fix_params:
                     fix_params[key] = init_fix_params[key]
 
-        # All spots participate in EM
         self._tumor_idx = np.arange(self.N)
         self._N_tumor = self.N
 
@@ -111,22 +115,22 @@ class Spot_Model(Base_Model):
             rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
             theta_tumor = params[f"{data_type}-theta"][tumor_idx]
 
-            bb_mask = sx_data.MASK["IMBALANCED"] & (lambda_g > 0)
-            nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
+            allele_mask = sx_data.MASK[self.allele_mask_id] & (lambda_g > 0)
+            total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
 
             if fit_mode in {"allele_only", "hybrid"}:
                 MA, _ = sx_data.apply_mask_shallow(
-                    "IMBALANCED", additional_mask=lambda_g > 0
+                    self.allele_mask_id, additional_mask=lambda_g > 0
                 )
                 tau_valid = params[f"{data_type}-tau"][
-                    lambda_g[sx_data.MASK["IMBALANCED"]] > 0
+                    lambda_g[sx_data.MASK[self.allele_mask_id]] > 0
                 ]
                 allele_ll = cond_betabin_logpmf_theta(
                     MA["Y"][:, tumor_idx],
                     MA["D"][:, tumor_idx],
                     tau_valid,
                     MA["BAF"][:, 1:],
-                    rdrs_gk[bb_mask],
+                    rdrs_gk[allele_mask],
                     theta_tumor,
                 )
                 contrib = allele_ll.sum(axis=0)
@@ -135,14 +139,14 @@ class Spot_Model(Base_Model):
 
             if fit_mode in {"total_only", "hybrid"}:
                 invphi_valid = params[f"{data_type}-inv_phi"][
-                    lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
+                    lambda_g[sx_data.MASK[self.total_mask_id]] > 0
                 ]
                 total_ll = cond_negbin_logpmf_theta(
-                    sx_data.X[nb_mask][:, tumor_idx],
+                    sx_data.X[total_mask][:, tumor_idx],
                     sx_data.T[tumor_idx],
-                    lambda_g[nb_mask],
+                    lambda_g[total_mask],
                     invphi_valid,
-                    rdrs_gk[nb_mask],
+                    rdrs_gk[total_mask],
                     theta_tumor,
                 )
                 contrib = total_ll.sum(axis=0)
@@ -159,8 +163,7 @@ class Spot_Model(Base_Model):
 
         self._update_pi(gamma, params, fix_params, N_t, self.K_tumor)
 
-        # Dispersion updates (tau, inv_phi)
-        gamma_gnk = gamma[None, :, :]  # (1, N_tumor, K_tumor)
+        gamma_gnk = gamma[None, :, :]
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
             lambda_g = params[f"{data_type}-lambda"]
@@ -172,13 +175,13 @@ class Spot_Model(Base_Model):
             if (
                 fit_mode in {"allele_only", "hybrid"}
                 and not fix_params[f"{data_type}-tau"]
-                and sx_data.nrows_imbalanced > 0
+                and sx_data.MASK[self.allele_mask_id].sum() > 0
             ):
-                bb_mask = sx_data.MASK["IMBALANCED"] & (lambda_g > 0)
+                allele_mask = sx_data.MASK[self.allele_mask_id] & (lambda_g > 0)
                 baf_gk = sx_data.BAF[:, 1:]
                 # theta-adjusted BAF: p = (theta*rdr*BAF + 0.5*(1-theta)) / (theta*rdr + (1-theta))
-                rdr_bb = rdrs_gk[bb_mask]  # (G_bb, K_tumor)
-                baf_bb = baf_gk[bb_mask]  # (G_bb, K_tumor)
+                rdr_bb = rdrs_gk[allele_mask]  # (G_bb, K_tumor)
+                baf_bb = baf_gk[allele_mask]  # (G_bb, K_tumor)
                 p_gnk = (
                     theta_t[None, :, None] * rdr_bb[:, None, :] * baf_bb[:, None, :]
                     + 0.5 * (1 - theta_t[None, :, None])
@@ -186,8 +189,8 @@ class Spot_Model(Base_Model):
                     theta_t[None, :, None] * rdr_bb[:, None, :]
                     + (1 - theta_t[None, :, None])
                 )
-                Y_gnk = sx_data.Y[bb_mask][:, tumor_idx, None].astype(np.float64)
-                D_gnk = sx_data.D[bb_mask][:, tumor_idx, None].astype(np.float64)
+                Y_gnk = sx_data.Y[allele_mask][:, tumor_idx, None].astype(np.float64)
+                D_gnk = sx_data.D[allele_mask][:, tumor_idx, None].astype(np.float64)
                 tau_map = mle_tau(
                     Y_gnk,
                     D_gnk,
@@ -206,20 +209,20 @@ class Spot_Model(Base_Model):
             if (
                 fit_mode in {"total_only", "hybrid"}
                 and not fix_params[f"{data_type}-inv_phi"]
-                and sx_data.nrows_aneuploid > 0
+                and sx_data.MASK[self.total_mask_id].sum() > 0
             ):
-                nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
-                rdr_nb = rdrs_gk[nb_mask]  # (G_nb, K_tumor)
+                total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
+                rdr_nb = rdrs_gk[total_mask]  # (G_nb, K_tumor)
                 # theta-adjusted mu: mu = T * lambda * (theta * rdr + (1-theta))
                 mu_gnk = (
                     sx_data.T[tumor_idx][None, :, None]
-                    * lambda_g[nb_mask, None, None]
+                    * lambda_g[total_mask, None, None]
                     * (
                         theta_t[None, :, None] * rdr_nb[:, None, :]
                         + (1 - theta_t[None, :, None])
                     )
                 )
-                X_gnk = sx_data.X[nb_mask][:, tumor_idx, None].astype(np.float64)
+                X_gnk = sx_data.X[total_mask][:, tumor_idx, None].astype(np.float64)
                 invphi_map = mle_invphi(
                     X_gnk,
                     mu_gnk,
@@ -234,20 +237,18 @@ class Spot_Model(Base_Model):
                     f"(phi: MLE={1 / invphi_mle:.2f} MAP={1 / invphi_map:.2f})"
                 )
 
-        # Per-spot theta update: sum Q across all data_types
         purity_bounds = (1e-4, 1.0 - 1e-4)
         a_theta, b_theta = self._theta_prior
 
-        # Precompute per-modality masks once (outside per-spot loop)
-        bb_masks = {}
-        nb_masks = {}
+        allele_masks = {}
+        total_masks = {}
         rdrs = {}
         for data_type in self.data_types:
             sx = self.data_sources[data_type]
             lg = params[f"{data_type}-lambda"]
             rdrs[data_type] = clone_rdr_gk(lg, sx.C)[:, 1:]
-            nb_masks[data_type] = sx.MASK["ANEUPLOID"] & (lg > 0)
-            bb_masks[data_type] = sx.MASK["IMBALANCED"] & (lg > 0)
+            total_masks[data_type] = sx.MASK[self.total_mask_id] & (lg > 0)
+            allele_masks[data_type] = sx.MASK[self.allele_mask_id] & (lg > 0)
 
         theta_arr = params[f"{self.data_types[0]}-theta"].copy()
 
@@ -267,32 +268,32 @@ class Spot_Model(Base_Model):
                         continue
                     sx = self.data_sources[data_type]
                     lg = params[f"{data_type}-lambda"]
-                    nb_mask = nb_masks[data_type]
-                    bb_mask = bb_masks[data_type]
+                    total_mask = total_masks[data_type]
+                    allele_mask = allele_masks[data_type]
                     rdrs_gk = rdrs[data_type]
 
-                    if fit_mode in {"total_only", "hybrid"} and nb_mask.any():
+                    if fit_mode in {"total_only", "hybrid"} and total_mask.any():
                         ll_nb = cond_negbin_logpmf_theta(
-                            sx.X[nb_mask][:, _n : _n + 1],
+                            sx.X[total_mask][:, _n : _n + 1],
                             np.array([sx.T[_n]], dtype=float),
-                            lg[nb_mask],
+                            lg[total_mask],
                             params[f"{data_type}-inv_phi"][
-                                lg[sx.MASK["ANEUPLOID"]] > 0
+                                lg[sx.MASK[self.total_mask_id]] > 0
                             ],
-                            rdrs_gk[nb_mask],
+                            rdrs_gk[total_mask],
                             theta_val,
                         )
                         Q += np.sum(ll_nb[:, 0, :] * w)
 
-                    if fit_mode in {"allele_only", "hybrid"} and bb_mask.any():
+                    if fit_mode in {"allele_only", "hybrid"} and allele_mask.any():
                         ll_bb = cond_betabin_logpmf_theta(
-                            sx.Y[bb_mask][:, _n : _n + 1],
-                            sx.D[bb_mask][:, _n : _n + 1],
+                            sx.Y[allele_mask][:, _n : _n + 1],
+                            sx.D[allele_mask][:, _n : _n + 1],
                             params[f"{data_type}-tau"][
-                                lg[sx.MASK["IMBALANCED"]] > 0
+                                lg[sx.MASK[self.allele_mask_id]] > 0
                             ],
-                            sx.BAF[bb_mask, 1:],
-                            rdrs_gk[bb_mask],
+                            sx.BAF[allele_mask, 1:],
+                            rdrs_gk[allele_mask],
                             theta_val,
                         )
                         Q += np.sum(ll_bb[:, 0, :] * w)
@@ -323,7 +324,6 @@ class Spot_Model(Base_Model):
         label,
         posterior_thres=0.5,
         margin_thres=0.1,
-        tumorprop_threshold=0.5,
     ):
         logging.info("Decode labels with MAP estimation")
         posteriors = self._e_step(fit_mode, params)
@@ -331,7 +331,6 @@ class Spot_Model(Base_Model):
 
         anns = self.barcodes.copy(deep=True)
 
-        # Combine theta across modalities (average)
         theta_list = [
             params[f"{dt}-theta"] for dt in self.data_types if f"{dt}-theta" in params
         ]

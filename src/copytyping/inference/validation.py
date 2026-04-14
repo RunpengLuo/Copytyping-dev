@@ -1,48 +1,47 @@
 import logging
+
 import numpy as np
 import pandas as pd
+from scipy.spatial import distance
 from sklearn.metrics import (
-    roc_auc_score,
+    accuracy_score,
     adjusted_rand_score,
     precision_recall_fscore_support,
-    accuracy_score,
+    roc_auc_score,
 )
 
-from copytyping.utils import is_tumor_label, NA_CELLTYPE
+from copytyping.utils import NA_CELLTYPE, is_tumor_label
 
 
-def _eval_subset(anns_sub, cell_label, cell_type, tumor_post):
-    """Compute metrics for a subset of annotations. Returns dict."""
+def _eval_subset(anns_sub, cell_label, cell_type, tumor_post, skip_binary=False):
+    """Compute metrics for a subset of annotations."""
     known_mask = ~anns_sub[cell_type].isin(NA_CELLTYPE)
     anns_known = anns_sub[known_mask]
     na_count = int((anns_sub[cell_label] == "NA").sum())
     total = len(anns_sub)
 
     y_true = anns_known[cell_type].apply(is_tumor_label).to_numpy(dtype=int)
-    y_pred_hard = anns_known[cell_label].apply(is_tumor_label).to_numpy(dtype=int)
+    has_both = len(y_true) > 0 and 0 < y_true.sum() < len(y_true)
 
-    if len(y_true) == 0 or y_true.sum() == 0 or y_true.sum() == len(y_true):
-        precision = recall = f1 = accuracy = auc_hard = np.nan
-        auc_soft = np.nan
-    else:
+    precision = recall = f1 = accuracy = auc_hard = np.nan
+    if not skip_binary and has_both:
+        y_pred = anns_known[cell_label].apply(is_tumor_label).to_numpy(dtype=int)
         precision, recall, f1, _ = precision_recall_fscore_support(
-            y_true, y_pred_hard, average="binary"
+            y_true, y_pred, average="binary"
         )
-        accuracy = accuracy_score(y_true, y_pred_hard)
-        auc_hard = roc_auc_score(y_true, y_pred_hard)
-        auc_soft = None
-        if tumor_post in anns_known:
-            auc_soft = roc_auc_score(y_true, anns_known[tumor_post])
+        accuracy = accuracy_score(y_true, y_pred)
+        auc_hard = roc_auc_score(y_true, y_pred)
 
-    # multi-clone ARI: only meaningful when GT distinguishes >1 tumor label
+    auc_soft = np.nan
+    if has_both and tumor_post in anns_known:
+        auc_soft = roc_auc_score(y_true, anns_known[tumor_post])
+
     ari = np.nan
     tumor_mask = anns_known[cell_type].apply(is_tumor_label)
-    gt_tumor_labels = anns_known.loc[tumor_mask, cell_type]
-    if gt_tumor_labels.nunique() > 1:
-        pred_tumor_labels = anns_known.loc[tumor_mask, cell_label]
-        ari = adjusted_rand_score(gt_tumor_labels, pred_tumor_labels)
+    gt_tumor = anns_known[tumor_mask]
+    if gt_tumor[cell_type].nunique() > 1:
+        ari = adjusted_rand_score(gt_tumor[cell_type], gt_tumor[cell_label])
 
-    # per-clone counts
     label_counts = anns_sub[cell_label].value_counts()
     clone_cols = sorted([c for c in label_counts.index if c.startswith("clone")])
     metric = {
@@ -51,8 +50,8 @@ def _eval_subset(anns_sub, cell_label, cell_type, tumor_post):
         "recall": recall,
         "f1": f1,
         "accuracy": accuracy,
-        "ROC-AUC (hard)": auc_hard,
-        "ROC-AUC (soft)": auc_soft,
+        "AUC_hard": auc_hard,
+        "AUC_soft": auc_soft,
         "ARI": ari,
         "#normal": int(label_counts.get("normal", 0)),
     }
@@ -63,21 +62,21 @@ def _eval_subset(anns_sub, cell_label, cell_type, tumor_post):
 
 
 def evaluate_malignant_accuracy(
-    anns: pd.DataFrame,
+    anns,
     cell_label="cell_label",
     cell_type="cell_type",
     tumor_post="tumor",
+    skip_binary=False,
 ):
-    """Evaluate tumor/normal classification accuracy.
+    """Evaluate classification accuracy. Returns metric dict.
 
-    Returns per-REP_ID rows plus an "ALL" aggregate row.
-    Cells with Unknown cell_type are excluded from all metrics.
+    skip_binary: skip precision/recall/f1/accuracy/AUC_hard
+        (degenerate for spot model which never predicts normal).
     """
-    # overall metrics
-    metric_all = _eval_subset(anns, cell_label, cell_type, tumor_post)
-    metric_all["REP_ID"] = "ALL"
+    metric = _eval_subset(
+        anns, cell_label, cell_type, tumor_post, skip_binary=skip_binary
+    )
 
-    # GT (rows) -> predicted (columns) crosstab with row/col totals
     known_mask = ~anns[cell_type].isin(NA_CELLTYPE)
     anns_known = anns[known_mask]
     ct = pd.crosstab(
@@ -87,47 +86,67 @@ def evaluate_malignant_accuracy(
         margins_name="total",
     )
 
-    auc_soft = metric_all.get("ROC-AUC (soft)")
-    auc_soft_str = f"{auc_soft:.4f}" if auc_soft is not None else "NA"
-    ari = metric_all.get("ARI")
-    ari_str = f"{ari:.4f}" if ari is not None and not np.isnan(ari) else "NA"
-    logging.info("tumor/normal evaluation:")
-    logging.info(f"  precision = {metric_all['precision']:.4f}")
-    logging.info(f"  recall    = {metric_all['recall']:.4f}")
-    logging.info(f"  f1        = {metric_all['f1']:.4f}")
-    logging.info(f"  accuracy  = {metric_all['accuracy']:.4f}")
-    logging.info(f"  AUC_hard  = {metric_all['ROC-AUC (hard)']:.4f}")
-    logging.info(f"  AUC_soft  = {auc_soft_str}")
-    logging.info(f"  ARI       = {ari_str}")
-    logging.info(f"  #NA       = {metric_all['#NA']}/{metric_all['total']}")
+    def _fmt(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return "NA"
+        return f"{v:.4f}"
+
+    logging.info("evaluation:")
+    if not skip_binary:
+        logging.info(f"  precision = {_fmt(metric['precision'])}")
+        logging.info(f"  recall    = {_fmt(metric['recall'])}")
+        logging.info(f"  f1        = {_fmt(metric['f1'])}")
+        logging.info(f"  accuracy  = {_fmt(metric['accuracy'])}")
+        logging.info(f"  AUC_hard  = {_fmt(metric['AUC_hard'])}")
+    logging.info(f"  AUC_soft  = {_fmt(metric['AUC_soft'])}")
+    logging.info(f"  ARI       = {_fmt(metric['ARI'])}")
+    logging.info(f"  #NA       = {metric['#NA']}/{metric['total']}")
     logging.info(f"  crosstab (rows=ref {cell_type}, cols=pred {cell_label}):")
     for line in ct.to_string().splitlines():
         logging.info(f"    {line}")
 
-    # per-REP_ID metrics
-    rows = [metric_all]
-    if "REP_ID" in anns.columns:
-        for rep_id, anns_rep in anns.groupby("REP_ID", sort=True):
-            m = _eval_subset(anns_rep, cell_label, cell_type, tumor_post)
-            m["REP_ID"] = rep_id
-            rows.append(m)
-
-    metric_str = (
-        f"precision={metric_all['precision']:.3f}, "
-        f"recall={metric_all['recall']:.3f}, "
-        f"f1={metric_all['f1']:.3f}, "
-        f"accuracy={metric_all['accuracy']:.3f}"
-    )
-    return metric_all, metric_str, rows
+    return metric
 
 
-def refine_labels_by_reference(
-    anns: pd.DataFrame,
-    ref_label="cell_type",
-    cell_label="cell_label",
-    out_label="refined_label",
-):
-    # TODO, ref label vals
+def joincount_zscore(labels, coords, adjacent_dist=105.0):
+    """Per-label joincount z-score for spatial coherence.
+
+    Builds row-normalized adjacency from coordinates, binarizes each
+    label, computes z-score(J_11). Higher = more spatially coherent.
+
+    Ref: Bouayad Agha & Bellefon, Handbook of Spatial Analysis (2018).
+    """
+    labels = np.asarray(labels)
+    coords = np.asarray(coords, dtype=np.float64)
+    N = len(labels)
+
+    dists = distance.cdist(coords, coords)
+    W = (dists < adjacent_dist).astype(np.float64)
+    np.fill_diagonal(W, 0.0)
+    row_sums = W.sum(axis=1)
+    row_sums[row_sums == 0] = 1.0
+    W = W / row_sums[:, None]
+
+    W_sum = W.sum()
+    W2_sum = (W * W).sum()
+
+    results = {}
+    for lab in np.unique(labels):
+        mask = (labels == lab).astype(np.float64)
+        P = mask.sum() / N
+        if P < 1e-6 or P > 1.0 - 1e-6:
+            results[lab] = np.nan
+            continue
+
+        J = 0.5 * float(mask @ W @ mask)
+        E_J = 0.5 * W_sum * P * P
+        Var_J = 0.5 * W2_sum * P * P * (1.0 - P * P)
+        results[lab] = float((J - E_J) / np.sqrt(Var_J)) if Var_J > 0 else np.nan
+
+    return results
+
+
+def refine_labels_by_reference(anns, ref_label, cell_label, out_label):
     num_na_before = (anns[cell_label] == "NA").sum()
     anns[out_label] = anns[cell_label]
     ref_is_tumor = anns[ref_label].apply(is_tumor_label)

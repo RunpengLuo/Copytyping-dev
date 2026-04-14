@@ -28,6 +28,8 @@ class Base_Model:
         verbose=1,
         modality_masks: dict = None,
         hard_em: bool = False,
+        allele_mask_id: str = "IMBALANCED",
+        total_mask_id: str = "ANEUPLOID",
     ) -> None:
         self.barcodes = barcodes
         self.data_types = data_types
@@ -40,6 +42,8 @@ class Base_Model:
         self.prefix = prefix
         self.verbose = verbose
         self.hard_em = hard_em
+        self.allele_mask_id = allele_mask_id
+        self.total_mask_id = total_mask_id
         if modality_masks is None:
             modality_masks = {dt: np.ones(self.N, dtype=bool) for dt in data_types}
         self.modality_masks = modality_masks
@@ -81,7 +85,12 @@ class Base_Model:
         allele_post_thres=0.90,
         allele_max_iter=10,
     ):
-        """Identify normal cells/spots from reference labels or allele-only sub-EM."""
+        """Identify normal cells/spots from reference labels or allele-only sub-EM.
+
+        When running the sub-EM, only clonal imbalanced bins are used
+        (IMBALANCED & ~SUBCLONAL) so that the BB model discriminates
+        normal vs tumor without inter-clone confusion.
+        """
         from copytyping.inference.cell_model import Cell_Model
 
         is_normal = None
@@ -91,6 +100,13 @@ class Base_Model:
 
         if is_normal is None or np.sum(is_normal) == 0:
             logging.info("infer normal cells using allele-only BB model")
+            for dt in self.data_types:
+                sx = self.data_sources[dt]
+                n_clonal = int(sx.MASK["CLONAL_IMBALANCED"].sum())
+                n_all = int(sx.MASK["IMBALANCED"].sum())
+                logging.info(
+                    f"  [{dt}] clonal imbalanced: {n_clonal}/{n_all}"
+                )
             pure_model = Cell_Model(
                 self.barcodes,
                 self.platform,
@@ -98,6 +114,7 @@ class Base_Model:
                 self.data_sources,
                 work_dir=self.work_dir,
                 modality_masks=self.modality_masks,
+                allele_mask_id="CLONAL_IMBALANCED",
             )
             # Strip pi from init_params so Cell_Model uses uniform init
             cell_init = {k: v for k, v in init_params.items() if k != "pi"}
@@ -223,16 +240,21 @@ class Base_Model:
 
         assert fit_mode in allowed_fit_mode
 
-        # Sanity check: EM needs at least some informative bins.
-        total_imb = sum(sx.nrows_imbalanced for sx in self.data_sources.values())
-        total_aneu = sum(sx.nrows_aneuploid for sx in self.data_sources.values())
+        n_allele_bins = sum(
+            int(sx.MASK[self.allele_mask_id].sum())
+            for sx in self.data_sources.values()
+        )
+        n_total_bins = sum(
+            int(sx.MASK[self.total_mask_id].sum())
+            for sx in self.data_sources.values()
+        )
         if fit_mode == "allele_only":
-            assert total_imb > 0, "no imbalanced bins: allele_only fit has no data"
+            assert n_allele_bins > 0, f"no {self.allele_mask_id} bins for allele_only"
         elif fit_mode == "total_only":
-            assert total_aneu > 0, "no aneuploid bins: total_only fit has no data"
+            assert n_total_bins > 0, f"no {self.total_mask_id} bins for total_only"
         else:
-            assert total_imb + total_aneu > 0, (
-                "no imbalanced or aneuploid bins: hybrid fit has no data"
+            assert n_allele_bins + n_total_bins > 0, (
+                f"no {self.allele_mask_id} or {self.total_mask_id} bins for hybrid"
             )
 
         self._pi_alpha = init_params["pi_alpha"]
@@ -295,7 +317,6 @@ class Base_Model:
         label: str,
         posterior_thres: float = 0.5,
         margin_thres: float = 0.1,
-        tumorprop_threshold: float = 0.5,
     ):
         """Cell-model predict: posteriors over all K clones including normal."""
         logging.info("Decode labels with MAP estimation")

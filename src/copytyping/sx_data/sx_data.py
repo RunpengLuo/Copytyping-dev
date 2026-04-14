@@ -3,8 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from copytyping.utils import *
-from copytyping.io_utils import *
+from copytyping.io_utils import parse_cnv_profile
 
 
 class SX_Data:
@@ -208,6 +207,7 @@ def get_cnp_mask(A, B, C, and_mask=None):
     return {
         "CNP": tumor_mask,
         "IMBALANCED": ai_mask,
+        "CLONAL_IMBALANCED": ai_mask & ~subclonal_mask,
         "ANEUPLOID": c_mask,
         "SUBCLONAL": subclonal_mask,
         "CLONAL_LOH": clonal_loh_mask,

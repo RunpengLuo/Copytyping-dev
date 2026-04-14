@@ -240,22 +240,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         type=float,
         help="Assign cells/spots to NA if top-2 margin < threshold",
     )
-    parser.add_argument(
-        "--tumorprop_threshold",
-        required=False,
-        default=0.50,
-        type=float,
-        help="For spatial, assign spots to normal if purity < threshold",
-    )
-    parser.add_argument(
-        "--refine_label_by_reference",
-        required=False,
-        action="store_true",
-        default=False,
-        help="mark unassigned if predicted label disagree "
-        "with cell type (if available).",
-    )
-
     ##################################################
     # plot parameters
     parser.add_argument(
@@ -370,3 +354,66 @@ def check_arguments_inference(args: dict):
         assert os.path.exists(solfile), f"missing --solfile: {solfile}"
     args["data_types"] = data_types
     return args
+
+
+def get_inference_defaults():
+    """Get default inference args from the inference parser."""
+    tmp = argparse.ArgumentParser()
+    add_arguments_inference(tmp)
+    return vars(tmp.parse_args([
+        "--platform", "single_cell",
+        "--sample", "_",
+        "--seg_ucn", "_",
+        "--bbc_phases", "_",
+        "-o", "_",
+        "--genome_size", "_",
+        "--region_bed", "_",
+    ]))
+
+
+def add_arguments_pipeline(parser):
+    parser.add_argument(
+        "panel_tsv",
+        type=str,
+        help="Panel TSV file with one row per sample/run",
+    )
+    parser.add_argument(
+        "-o",
+        "--out_dir",
+        required=True,
+        type=str,
+        help="Base output directory",
+    )
+    parser.add_argument(
+        "--genome_size",
+        required=True,
+        type=str,
+        help="Chromosome sizes file",
+    )
+    parser.add_argument(
+        "--region_bed",
+        required=True,
+        type=str,
+        help="Chromosome regions BED file",
+    )
+    parser.add_argument(
+        "--platform_filter",
+        default=None,
+        type=str,
+        choices=["spatial", "single_cell"],
+        help="Only run samples matching this platform",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Re-run even if output already exists",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbosity",
+        default=0,
+        type=int,
+        help="Verbose level for each inference run",
+    )
+    return parser

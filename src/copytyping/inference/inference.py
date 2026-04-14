@@ -16,6 +16,7 @@ from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
     evaluate_malignant_accuracy,
+    joincount_zscore,
     refine_labels_by_reference,
 )
 from copytyping.io_utils import (
@@ -35,6 +36,7 @@ from copytyping.utils import (
     NA_CELLTYPE,
     SPATIAL_PLATFORMS,
     add_file_logging,
+    is_tumor_label,
     read_whitelist_segments,
     setup_logging,
 )
@@ -224,7 +226,6 @@ def run(args=None):
         label=label,
         posterior_thres=posterior_thres,
         margin_thres=margin_thres,
-        tumorprop_threshold=args["tumorprop_threshold"],
     )
     logging.info(f"clone fractions: {clone_props}")
 
@@ -253,33 +254,56 @@ def run(args=None):
                     )
                     model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
 
-    # ---- Evaluation (per-rep) ----
     metric = {}
-    metric_str = ""
+    is_spot = platform in SPATIAL_PLATFORMS
     if ref_label in barcodes.columns:
-        if args["refine_label_by_reference"]:
-            anns = refine_labels_by_reference(
-                anns, ref_label, label, f"{label}-refined"
-            )
-        tumor_post = "tumor_purity" if platform in SPATIAL_PLATFORMS else "tumor"
-        metric, metric_str, eval_rows = evaluate_malignant_accuracy(
+        anns = refine_labels_by_reference(
+            anns, ref_label, label, f"{label}-refined"
+        )
+        metric = evaluate_malignant_accuracy(
             anns,
             cell_label=label,
             cell_type=ref_label,
-            tumor_post=tumor_post,
+            tumor_post="tumor_purity" if is_spot else "tumor",
+            skip_binary=is_spot,
         )
-        for row in eval_rows:
-            row["SAMPLE"] = sample
-            row["platform"] = platform
-        eval_df = pd.DataFrame(eval_rows)
-        front_cols = ["SAMPLE", "platform", "REP_ID"]
-        other_cols = [c for c in eval_df.columns if c not in front_cols]
-        eval_df = eval_df[front_cols + other_cols]
+
+    if is_spot:
+        gex_adata = adatas.get("gex")
+        if gex_adata is not None and "spatial" in gex_adata.obsm:
+            common = anns["BARCODE"].values
+            adata_sub = gex_adata[gex_adata.obs_names.isin(common)]
+            anns_indexed = anns.set_index("BARCODE").loc[adata_sub.obs_names]
+            coords = adata_sub.obsm["spatial"]
+            clone_labels = anns_indexed[label].to_numpy()
+
+            jc_all = joincount_zscore(clone_labels, coords)
+            logging.info("joincount z-score (all spots):")
+            for lab, z in sorted(jc_all.items()):
+                logging.info(f"  {lab:8s}: {z:.4f}")
+                metric[f"JC_{lab}"] = z
+
+            if ref_label in anns_indexed.columns:
+                gt_tumor = anns_indexed[ref_label].apply(
+                    is_tumor_label
+                ).to_numpy()
+                if gt_tumor.any():
+                    jc_tumor = joincount_zscore(
+                        clone_labels[gt_tumor], coords[gt_tumor]
+                    )
+                    logging.info("joincount z-score (GT-tumor only):")
+                    for lab, z in sorted(jc_tumor.items()):
+                        logging.info(f"  {lab:8s}: {z:.4f}")
+                        metric[f"JC_tumor_{lab}"] = z
+
+    if metric:
+        eval_df = pd.DataFrame([{"SAMPLE": sample, "PLATFORM": platform, **metric}])
         eval_df.to_csv(
             os.path.join(out_dir, f"{out_prefix}.{platform}.evaluation.tsv"),
             sep="\t",
             header=True,
             index=False,
+            na_rep="",
         )
 
     anns.to_csv(
@@ -435,8 +459,8 @@ def run(args=None):
                 anns_vis[ref_label] = "Unknown"
             visium_slices.append((rep_id, anns_vis, vis_adata))
         visium_title = ""
-        if metric.get("ROC-AUC (soft)") is not None:
-            visium_title += f"AUC={metric['ROC-AUC (soft)']:.3f}"
+        if metric.get("AUC_soft") is not None:
+            visium_title += f"AUC={metric['AUC_soft']:.3f}"
         plot_visium_panel(
             sample,
             visium_slices,

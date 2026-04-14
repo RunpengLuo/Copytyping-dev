@@ -29,6 +29,8 @@ class Cell_Model(Base_Model):
         verbose=1,
         modality_masks=None,
         hard_em=False,
+        allele_mask_id="IMBALANCED",
+        total_mask_id="ANEUPLOID",
     ):
         super().__init__(
             barcodes,
@@ -40,6 +42,8 @@ class Cell_Model(Base_Model):
             verbose,
             modality_masks=modality_masks,
             hard_em=hard_em,
+            allele_mask_id=allele_mask_id,
+            total_mask_id=total_mask_id,
         )
 
     def _init_params(self, fit_mode, init_fix_params, init_params):
@@ -67,15 +71,17 @@ class Cell_Model(Base_Model):
 
                 lambda_g = compute_baseline_proportions(sx_data.X, sx_data.T, is_normal)
                 params[f"{data_type}-lambda"] = lambda_g
+                n_total = int(sx_data.MASK[self.total_mask_id].sum())
                 params[f"{data_type}-inv_phi"] = np.full(
-                    sx_data.nrows_aneuploid,
+                    n_total,
                     1 / init_params["phi0"],
                     dtype=np.float32,
                 )
 
             if fit_mode in {"allele_only", "hybrid"}:
+                n_allele = int(sx_data.MASK[self.allele_mask_id].sum())
                 params[f"{data_type}-tau"] = np.full(
-                    sx_data.nrows_imbalanced,
+                    n_allele,
                     init_params["tau0"],
                     dtype=np.float32,
                 )
@@ -96,7 +102,7 @@ class Cell_Model(Base_Model):
             mask_n = self.modality_masks[data_type]
 
             if fit_mode in {"allele_only", "hybrid"}:
-                MA, _ = sx_data.apply_mask_shallow(mask_id="IMBALANCED")
+                MA, _ = sx_data.apply_mask_shallow(mask_id=self.allele_mask_id)
                 allele_ll = cond_betabin_logpmf(
                     MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
                 )
@@ -106,13 +112,13 @@ class Cell_Model(Base_Model):
 
             if fit_mode in {"total_only", "hybrid"}:
                 lambda_g = params[f"{data_type}-lambda"]
-                nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
-                props_gk = clone_pi_gk(lambda_g, sx_data.C)[nb_mask, :]
+                total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
+                props_gk = clone_pi_gk(lambda_g, sx_data.C)[total_mask, :]
                 inv_phis = params[f"{data_type}-inv_phi"][
-                    lambda_g[sx_data.MASK["ANEUPLOID"]] > 0
+                    lambda_g[sx_data.MASK[self.total_mask_id]] > 0
                 ]
                 total_ll = cond_negbin_logpmf(
-                    sx_data.X[nb_mask],
+                    sx_data.X[total_mask],
                     sx_data.T,
                     props_gk,
                     inv_phis,
@@ -136,13 +142,13 @@ class Cell_Model(Base_Model):
             if (
                 fit_mode in {"total_only", "hybrid"}
                 and not fix_params[f"{data_type}-inv_phi"]
-                and sx_data.nrows_aneuploid > 0
+                and sx_data.MASK[self.total_mask_id].sum() > 0
             ):
                 lambda_g = params[f"{data_type}-lambda"]
-                nb_mask = sx_data.MASK["ANEUPLOID"] & (lambda_g > 0)
-                props_gk = clone_pi_gk(lambda_g, sx_data.C)[nb_mask]
+                total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
+                props_gk = clone_pi_gk(lambda_g, sx_data.C)[total_mask]
                 mu_gnk = props_gk[:, None, :] * sx_data.T[None, :, None]
-                X_gnk = sx_data.X[nb_mask][:, :, None]
+                X_gnk = sx_data.X[total_mask][:, :, None]
                 invphi_map = mle_invphi(
                     X_gnk,
                     mu_gnk,
@@ -161,9 +167,9 @@ class Cell_Model(Base_Model):
             if (
                 fit_mode in {"allele_only", "hybrid"}
                 and not fix_params[f"{data_type}-tau"]
-                and sx_data.nrows_imbalanced > 0
+                and sx_data.MASK[self.allele_mask_id].sum() > 0
             ):
-                MA, _ = sx_data.apply_mask_shallow(mask_id="IMBALANCED")
+                MA, _ = sx_data.apply_mask_shallow(mask_id=self.allele_mask_id)
                 p_gnk = MA["BAF"][:, None, :]
                 Y_gnk = MA["Y"][:, :, None]
                 D_gnk = MA["D"][:, :, None]
