@@ -66,7 +66,7 @@ def run(args=None):
             out_dir, "plots", "heatmaps", f"agg{args['heatmap_agg']}"
         ),
         "scatter": os.path.join(out_dir, "plots", "scatters"),
-        "validation": os.path.join(out_dir, "plots", "validation")
+        "validation": os.path.join(out_dir, "plots", "validation"),
     }
     if platform in SPATIAL_PLATFORMS:
         dirs["visium"] = os.path.join(out_dir, "plots", "spatial_images")
@@ -392,6 +392,7 @@ def run(args=None):
                         )
 
             # Segment-level 1D scatter
+            spot_purity = 0.5 if is_spot else None
             plot_rdr_baf_1d_pseudobulk(
                 sx_rep,
                 anns_rep,
@@ -401,6 +402,7 @@ def run(args=None):
                 genome_size,
                 haplo_blocks=cnv_blocks,
                 wl_segments=wl_segments,
+                purity_threshold=spot_purity,
                 mask_cnp=False,
                 lab_type=label,
                 filename=os.path.join(
@@ -431,6 +433,7 @@ def run(args=None):
                     haplo_blocks=cnv_blocks,
                     wl_segments=wl_segments,
                     resolution="bbc",
+                    purity_threshold=spot_purity,
                     mask_cnp=False,
                     lab_type=label,
                     markersize=2,

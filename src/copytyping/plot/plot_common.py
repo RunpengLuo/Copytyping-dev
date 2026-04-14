@@ -325,6 +325,7 @@ def plot_rdr_baf_1d_pseudobulk(
     haplo_blocks: pd.DataFrame = None,
     wl_segments: pd.DataFrame = None,
     resolution: str = "seg",
+    purity_threshold: float = None,
     mask_cnp=True,
     mask_id="CNP",
     lab_type="cell_label",
@@ -367,6 +368,12 @@ def plot_rdr_baf_1d_pseudobulk(
     masked_base_props = base_props
     if masked_base_props is not None and mask_cnp:
         masked_base_props = masked_base_props[sx_data.MASK[mask_id]]
+
+    # For spot model: reclassify low-purity spots as "normal" for pseudobulk
+    anns = anns.copy()
+    if purity_threshold is not None and "tumor_purity" in anns.columns:
+        low_purity = anns["tumor_purity"].astype(float) < purity_threshold
+        anns.loc[low_purity, lab_type] = "normal"
 
     cell_labels = anns[lab_type].tolist()
     uniq_cell_labels = anns[lab_type].unique()
@@ -593,14 +600,6 @@ def plot_rdr_baf_1d_pseudobulk(
             linewidth=0.5,
             colors="k",
         )
-        ax_baf.hlines(
-            y=0.5,
-            xmin=0,
-            xmax=chr_end,
-            colors="grey",
-            linestyle=":",
-            linewidth=1,
-        )
         if exp_bafs is not None and cell_label != "NA" and hasattr(sx_data, "clones"):
             clone_idx = sx_data.clones.index(cell_label)
             clone_baf = exp_bafs[:, clone_idx]
@@ -628,12 +627,10 @@ def plot_rdr_baf_1d_pseudobulk(
         plot_cnv_profile(axes[-2], haplo_blocks, wl_segments, plot_chrname=False)
     plot_cnv_legend(axes[-1])
 
-    fig.suptitle(
-        f"sample={sample}  data_type={data_type}  resolution={resolution}",
-        fontsize=12,
-        fontweight="bold",
-        y=1.02,
-    )
+    title = f"sample={sample}  data_type={data_type}  resolution={resolution}"
+    if purity_threshold is not None:
+        title += f"  (purity<{purity_threshold} as normal)"
+    fig.suptitle(title, fontsize=12, fontweight="bold", y=1.02)
     fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return
