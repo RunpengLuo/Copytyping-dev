@@ -459,10 +459,6 @@ def plot_rdr_baf_1d_pseudobulk(
     for ci, cell_label in enumerate(ordered_labels):
         ax_rdr = axes[ci * 2]
         ax_baf = axes[ci * 2 + 1]
-        ax_rdr.set_zorder(2)
-        ax_baf.set_zorder(2)
-        ax_rdr.set_facecolor("white")
-        ax_baf.set_facecolor("white")
         ax_rdr.sharex(ax_baf)
 
         barcode_idxs = anns[anns[lab_type] == cell_label].index.to_numpy()
@@ -630,18 +626,15 @@ def plot_rdr_baf_1d_pseudobulk(
 
     # ── Bottom rows: CNP profile + legend ──
     if has_cnp:
-        ax_cnp = axes[-2]
-        plot_cnv_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
-        for child in ax_cnp.get_children():
-            child.set_clip_on(True)
+        plot_cnv_profile(axes[-2], haplo_blocks, wl_segments, plot_chrname=False)
     plot_cnv_legend(axes[-1])
 
     fig.suptitle(
         f"sample={sample}  data_type={data_type}",
         fontsize=18,
         fontweight="bold",
-        y=1.01,
     )
+    fig.tight_layout()
     fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return
