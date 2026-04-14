@@ -152,8 +152,10 @@ def read_whitelist_segments(bed_file: str):
 
 
 def setup_logging(args) -> None:
+    v = getattr(args, "verbosity", None) or (args.get("verbosity") if isinstance(args, dict) else 0) or 0
+    level = logging.DEBUG if v >= 2 else logging.INFO
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s %(levelname)s %(message)s",
         stream=sys.stdout,
     )
