@@ -113,7 +113,9 @@ def build_bbc_sx(bbc_data, seg_sx, rep_mask=None):
 
     bbc_sx = SimpleNamespace(
         cnv_blocks=bbc_df,
-        X=X, Y=Y, D=D,
+        X=X,
+        Y=Y,
+        D=D,
         T=X.sum(axis=0),
         clones=seg_sx.clones,
     )
@@ -135,9 +137,14 @@ def build_bbc_sx(bbc_data, seg_sx, rep_mask=None):
         seg_idx[np.where(bm)[0][ok]] = sids[idx[ok]]
 
     mapped = seg_idx >= 0
-    bbc_sx.C = np.full((len(bbc_df), seg_sx.C.shape[1]), 2, dtype=seg_sx.C.dtype)
+    K = seg_sx.C.shape[1]
+    bbc_sx.A = np.full((len(bbc_df), K), 1, dtype=seg_sx.A.dtype)
+    bbc_sx.A[mapped] = seg_sx.A[seg_idx[mapped]]
+    bbc_sx.B = np.full((len(bbc_df), K), 1, dtype=seg_sx.B.dtype)
+    bbc_sx.B[mapped] = seg_sx.B[seg_idx[mapped]]
+    bbc_sx.C = np.full((len(bbc_df), K), 2, dtype=seg_sx.C.dtype)
     bbc_sx.C[mapped] = seg_sx.C[seg_idx[mapped]]
-    bbc_sx.BAF = np.full((len(bbc_df), seg_sx.BAF.shape[1]), 0.5, dtype=seg_sx.BAF.dtype)
+    bbc_sx.BAF = np.full((len(bbc_df), K), 0.5, dtype=seg_sx.BAF.dtype)
     bbc_sx.BAF[mapped] = seg_sx.BAF[seg_idx[mapped]]
 
     return bbc_sx
@@ -394,9 +401,7 @@ def aggregate_bbc_to_seg(
 
     n_unmapped = (seg_ids < 0).sum()
     if n_unmapped > 0:
-        logging.warning(
-            f"{tag}{n_unmapped}/{n_bbc} bbc bins not mapped to any segment"
-        )
+        logging.warning(f"{tag}{n_unmapped}/{n_bbc} bbc bins not mapped to any segment")
 
     mapped = seg_ids >= 0
     logging.info(f"{tag}mapped {mapped.sum()}/{n_bbc} bbc bins to {n_seg} segments")
