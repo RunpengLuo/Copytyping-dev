@@ -9,6 +9,8 @@ Required columns:
     PATH_TO_BBC_PHASE : path to bbc phases TSV
     PATH_TO_SOLDIR    : path to directory containing solfiles
     SOLID             : "DEFAULT" (no solfile) or pattern to match solfiles
+    PLOIDY            : ploidy value (used in output directory naming)
+    CLONE             : clone count (used in output directory naming)
     REF_LABEL         : reference label column name (e.g. "path_label")
 
 Optional columns:
@@ -87,9 +89,7 @@ def _resolve_solfiles(row, sol_pattern):
     pattern = os.path.join(soldir, sol_pattern.format(SOLID=solid))
     matches = sorted(glob.glob(pattern))
     if not matches:
-        logging.warning(
-            f"SKIP {row['SAMPLE']}: no solfiles matching {pattern}"
-        )
+        logging.warning(f"SKIP {row['SAMPLE']}: no solfiles matching {pattern}")
         return []
 
     results = []
@@ -155,8 +155,16 @@ def run(args):
 
     panel = pd.read_table(panel_tsv, dtype=str).fillna("")
     required = [
-        "SAMPLE", "PLATFORM", "PATH_TO_SEG", "PATH_TO_BBC_PHASE",
-        "PATH_TO_BB_INPUT", "PATH_TO_SOLDIR", "SOLID", "REF_LABEL",
+        "SAMPLE",
+        "PLATFORM",
+        "PATH_TO_SEG",
+        "PATH_TO_BBC_PHASE",
+        "PATH_TO_BB_INPUT",
+        "PATH_TO_SOLDIR",
+        "SOLID",
+        "PLOIDY",
+        "CLONE",
+        "REF_LABEL",
     ]
     for col in required:
         assert col in panel.columns, f"missing column: {col}"
@@ -180,8 +188,13 @@ def run(args):
             if solfile:
                 run_args["solfile"] = solfile
 
+            ploidy = row["PLOIDY"]
+            clone = row["CLONE"]
             run_dir = os.path.join(
-                out_dir, run_args["sample"], run_args["platform"], tag
+                out_dir,
+                run_args["sample"],
+                run_args["platform"],
+                f"p{ploidy}_c{clone}_{tag}",
             )
 
             status, metrics = _run_one(
