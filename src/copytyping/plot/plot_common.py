@@ -720,6 +720,7 @@ def plot_crosstab(
     assign_df: pd.DataFrame,
     sample: str,
     outfile: str,
+    metric: dict,
     acol="copytyping-label",
     bcol="cell_type",
 ):
@@ -748,14 +749,9 @@ def plot_crosstab(
     counts = ct.to_numpy(dtype=float)
     num_rows, num_cols = counts.shape
 
-    gt_tumor_mask = np.array([is_tumor_label(r) for r in row_order])
-    pred_tumor_mask = np.array([c.startswith("clone") for c in col_order])
-    tp = counts[np.ix_(gt_tumor_mask, pred_tumor_mask)].sum()
-    fp = counts[np.ix_(~gt_tumor_mask, pred_tumor_mask)].sum()
-    fn = counts[np.ix_(gt_tumor_mask, ~pred_tumor_mask)].sum()
-    prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+    prec = metric.get("precision", np.nan)
+    rec = metric.get("recall", np.nan)
+    f1 = metric.get("f1", np.nan)
 
     error = np.zeros((num_rows, num_cols), dtype=bool)
     for i, gt_lab in enumerate(row_order):

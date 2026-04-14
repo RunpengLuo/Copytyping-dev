@@ -348,6 +348,7 @@ def run(args=None):
                     dirs["plots"],
                     f"{out_prefix}.{platform}{rep_tag}.crosstab.png",
                 ),
+                metric=metric,
                 acol=label,
                 bcol=ref_label,
             )
