@@ -556,13 +556,13 @@ def plot_rdr_baf_1d_pseudobulk(
                     [-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)]
                 )
         ax_rdr.set_ylabel(rdr_label, fontsize=8)
-        umi_label = "atac-fragment" if "atac" in data_type else "umi"
-        total_gene = int(np.sum(X[:, barcode_idxs]))
-        total_snp = int(np.sum(D[:, barcode_idxs]))
+        feat_label = {"atac": "fragment", "gex": "umi"}[data_type]
+        total_counts = int(np.sum(X[:, barcode_idxs]))
+        snp_counts = int(np.sum(D[:, barcode_idxs]))
         ax_rdr.set_title(
             f"{cell_label} (n={num_bcs},"
-            f" gene-{umi_label}={total_gene:,},"
-            f" snp-{umi_label}={total_snp:,})",
+            f" {data_type}-{feat_label}={total_counts:,},"
+            f" snp-{feat_label}={snp_counts:,})",
             fontsize=9,
             fontweight="bold",
             loc="left",
@@ -635,7 +635,9 @@ def plot_rdr_baf_1d_pseudobulk(
 
     fig.suptitle(
         f"sample={sample}  data_type={data_type}",
-        fontsize=10,
+        fontsize=18,
+        fontweight="bold",
+        y=1.01,
     )
     fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
