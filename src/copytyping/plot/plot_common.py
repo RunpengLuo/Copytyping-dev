@@ -432,7 +432,7 @@ def plot_rdr_baf_1d_pseudobulk(
         1,
         figure=fig,
         height_ratios=outer_ratios,
-        hspace=0.15,
+        hspace=0.20,
         top=0.97,
     )
 
