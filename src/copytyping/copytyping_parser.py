@@ -261,6 +261,13 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default="pdf",
     )
     parser.add_argument(
+        "--purity_threshold",
+        required=False,
+        type=float,
+        help="purity threshold for normal spots (default: 0.5)",
+        default=0.5,
+    )
+    parser.add_argument(
         "--heatmap_agg",
         required=False,
         type=int,

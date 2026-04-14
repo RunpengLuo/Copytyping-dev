@@ -399,7 +399,8 @@ def run(args=None):
                         )
 
             # Segment-level 1D scatter
-            spot_purity = 0.5 if is_spot else None
+            pt = args.get("purity_threshold")
+            spot_purity = pt if is_spot and pt and pt > 0 else None
             plot_rdr_baf_1d_pseudobulk(
                 sx_rep,
                 anns_rep,
