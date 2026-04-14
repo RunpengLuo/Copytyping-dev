@@ -550,7 +550,13 @@ def plot_rdr_baf_1d_pseudobulk(
                 ax_rdr.set_ylim(
                     [-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)]
                 )
-        ax_rdr.set_ylabel(f"{cell_label} (n={num_bcs})\n{rdr_label}", fontsize=8)
+        ax_rdr.set_ylabel(rdr_label, fontsize=8)
+        ax_rdr.set_title(
+            f"{cell_label} (n={num_bcs})",
+            fontsize=9,
+            fontweight="bold",
+            loc="left",
+        )
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
         # chrnames on top of the first RDR row only
         if ci == 0:
