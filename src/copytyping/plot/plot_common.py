@@ -630,7 +630,10 @@ def plot_rdr_baf_1d_pseudobulk(
 
     # ── Bottom rows: CNP profile + legend ──
     if has_cnp:
-        plot_cnv_profile(axes[-2], haplo_blocks, wl_segments, plot_chrname=False)
+        ax_cnp = axes[-2]
+        plot_cnv_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
+        for child in ax_cnp.get_children():
+            child.set_clip_on(True)
     plot_cnv_legend(axes[-1])
 
     fig.suptitle(
