@@ -27,6 +27,8 @@ import os
 
 import pandas as pd
 
+from copytyping.plot.plot_common import plot_metrics_barplot
+
 from copytyping.copytyping_parser import get_inference_defaults
 from copytyping.inference.inference import run as run_inference
 
@@ -219,3 +221,8 @@ def run(args):
         summary = pd.DataFrame(summary_rows)
         summary.to_csv(summary_file, sep="\t", index=False, na_rep="")
         logging.info(f"saved {len(summary)} rows to {summary_file}")
+
+        plot_metrics_barplot(
+            summary,
+            os.path.join(out_dir, "pipeline_metrics.pdf"),
+        )

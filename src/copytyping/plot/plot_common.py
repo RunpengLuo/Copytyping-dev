@@ -825,3 +825,78 @@ def plot_crosstab(
     plt.tight_layout()
     plt.savefig(outfile, dpi=300, bbox_inches="tight")
     plt.close()
+
+
+def plot_metrics_barplot(
+    summary: pd.DataFrame,
+    outfile: str,
+    metrics=("precision", "recall", "f1"),
+    sample_col="SAMPLE",
+    group_col="cancer_type",
+    dpi=200,
+):
+    """Bar plot of prec/recall/f1 per sample, one page per cancer_type group.
+
+    If group_col is not in summary, all samples go on one page.
+    """
+    colors = {"precision": "#1f77b4", "recall": "#ff7f0e", "f1": "#2ca02c"}
+    n_metrics = len(metrics)
+
+    # drop rows with all-NaN metrics
+    valid = summary.dropna(subset=list(metrics), how="all").copy()
+    if valid.empty:
+        return
+
+    has_groups = group_col in valid.columns
+    if has_groups:
+        groups = sorted(valid[group_col].unique())
+    else:
+        groups = [None]
+
+    with PdfPages(outfile) as pdf:
+        for grp in groups:
+            if grp is not None:
+                df = valid[valid[group_col] == grp]
+            else:
+                df = valid
+            if df.empty:
+                continue
+
+            samples = df[sample_col].tolist()
+            n = len(samples)
+            x = np.arange(n)
+            bar_w = 1.0 / (n_metrics + 0.5)
+
+            fig_w = max(6, n * 0.8 + 2)
+            fig, ax = plt.subplots(figsize=(fig_w, 4))
+
+            for mi, m in enumerate(metrics):
+                vals = df[m].astype(float).to_numpy()
+                bars = ax.bar(
+                    x + mi * bar_w,
+                    vals,
+                    width=bar_w,
+                    color=colors.get(m, f"C{mi}"),
+                    label=m,
+                )
+                for bar, v in zip(bars, vals):
+                    if np.isfinite(v):
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2,
+                            v + 0.01,
+                            f"{v:.2f}",
+                            ha="center",
+                            va="bottom",
+                            fontsize=6,
+                        )
+
+            ax.set_xticks(x + bar_w * (n_metrics - 1) / 2)
+            ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=8)
+            ax.set_ylim(0, 1.15)
+            ax.set_ylabel("Score")
+            ax.legend(fontsize=8)
+            title = grp if grp else "all samples"
+            ax.set_title(title, fontsize=11, fontweight="bold")
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi)
+            plt.close(fig)
