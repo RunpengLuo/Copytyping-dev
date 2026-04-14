@@ -559,15 +559,8 @@ def plot_rdr_baf_1d_pseudobulk(
             loc="left",
         )
         plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
-        # chrnames on top of the first RDR row only
-        if ci == 0:
-            ax_rdr.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
-            ax_rdr.tick_params(
-                axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
-            )
-        else:
-            ax_rdr.set_xticklabels([])
-            ax_rdr.tick_params(axis="x", bottom=False)
+        ax_rdr.set_xticklabels([])
+        ax_rdr.tick_params(axis="x", bottom=False)
         ax_rdr.grid(False)
 
         # ── BAF panel ──
@@ -618,7 +611,11 @@ def plot_rdr_baf_1d_pseudobulk(
         ax_baf.set_ylim([-0.05, 1.05])
         ax_baf.set_ylabel("BAF", fontsize=8)
         plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
-        ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
+        if ci == n_clones - 1:
+            ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
+        else:
+            ax_baf.set_xticklabels([])
+            ax_baf.tick_params(axis="x", bottom=False)
         ax_baf.grid(False)
 
     # ── Bottom rows: CNP profile + legend ──
