@@ -494,7 +494,6 @@ def run(args=None):
                 dpi=dpi,
             )
 
-    # Remove per-run file handler to avoid log leaking across pipeline runs
     logging.root.removeHandler(_file_handler)
     _file_handler.close()
 
