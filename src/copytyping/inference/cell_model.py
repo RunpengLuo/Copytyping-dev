@@ -127,7 +127,7 @@ class Cell_Model(Base_Model):
                 contrib[~mask_n, :] = 0.0
                 global_lls += contrib
 
-        global_lls += np.log(np.clip(params["pi"], 1e-300, None))[None, :]
+        global_lls += np.log(np.maximum(params["pi"], 1e-30))[None, :]
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
