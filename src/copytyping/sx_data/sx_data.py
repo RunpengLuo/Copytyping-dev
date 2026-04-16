@@ -192,11 +192,13 @@ def get_cnp_mask(A, B, C, and_mask=None):
     subclonal_loh_mask = np.any(B[:, 1:] == 0, axis=1) & np.all(A[:, 1:] > 0, axis=1)
     subclonal_loh_mask |= np.any(A[:, 1:] == 0, axis=1) & np.all(B[:, 1:] > 0, axis=1)
 
-    subclonal_mask = np.copy(tumor_mask)
     if A.shape[1] > 2:
         subclonal_mask = np.any(A[:, 2:] != A[:, 1][:, None], axis=1) | np.any(
             B[:, 2:] != B[:, 1][:, None], axis=1
         )
+    else:
+        # single tumor clone: nothing is subclonal
+        subclonal_mask = np.zeros(A.shape[0], dtype=bool)
     if and_mask is not None:
         tumor_mask &= and_mask
         clonal_loh_mask &= and_mask
