@@ -40,7 +40,6 @@ from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
-    is_tumor_label,
     read_whitelist_segments,
     save_cnp_profile,
     setup_logging,
@@ -240,16 +239,15 @@ def run(args=None):
                 logging.info(f"  {lab:8s}: {z:.4f}")
                 metric[f"JC_{lab}"] = z
 
-            if ref_label in anns_indexed.columns:
-                gt_tumor = anns_indexed[ref_label].apply(is_tumor_label).to_numpy()
-                if gt_tumor.any():
-                    jc_tumor = joincount_zscore(
-                        clone_labels[gt_tumor], coords[gt_tumor]
-                    )
-                    logging.info("joincount z-score (GT-tumor only):")
-                    for lab, z in sorted(jc_tumor.items()):
-                        logging.info(f"  {lab:8s}: {z:.4f}")
-                        metric[f"JC_tumor_{lab}"] = z
+            pred_tumor = anns_indexed[hard_label] != "normal"
+            if pred_tumor.any():
+                jc_tumor = joincount_zscore(
+                    clone_labels[pred_tumor], coords[pred_tumor]
+                )
+                logging.info("joincount z-score (pred-tumor only):")
+                for lab, z in sorted(jc_tumor.items()):
+                    logging.info(f"  {lab:8s}: {z:.4f}")
+                    metric[f"JC_tumor_{lab}"] = z
 
     if metric:
         eval_df = pd.DataFrame([{"SAMPLE": sample, "PLATFORM": platform, **metric}])
