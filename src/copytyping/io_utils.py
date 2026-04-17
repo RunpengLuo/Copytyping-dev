@@ -29,7 +29,8 @@ def load_modality_data(
         barcodes_df: DataFrame with BARCODE, REP_ID columns.
         seg_df: Segment-level DataFrame with CNP, PROPS columns.
         X_seg, Y_seg, D_seg: Dense int32 count matrices (G_seg, N).
-        bbc_data: dict with keys 'bbc_df', 'X', 'Y', 'D' (sparse, G_bbc × N).
+        bbc_df: BBC-level DataFrame with seg_id and CNP columns.
+        X_bbc, Y_bbc, D_bbc: Sparse count matrices (G_bbc, N).
     """
     barcodes_df = pd.read_table(
         bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
@@ -81,35 +82,40 @@ def load_modality_data(
     Y_seg = Y_sp.toarray().astype(np.int32)
     D_seg = D_sp.toarray().astype(np.int32)
 
-    bbc_data = {"bbc_df": bbc_df, "X": X_bbc, "Y": Y_bbc, "D": D_bbc}
-    return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_data
+    return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc
 
 
-def build_bbc_sx(bbc_data, seg_sx, rep_mask=None):
+def build_bbc_sx(bbc_df, X_bbc, Y_bbc, D_bbc, seg_sx, rep_mask=None):
     """Build a BBC-level SX_Data-like namespace with segment CN profiles.
 
-    Maps each BBC bin to its parent segment via coordinate containment,
-    then propagates A/B/C/BAF/clones from the segment level.
+    Uses the seg_id column on bbc_df (set by aggregate_bbc_to_seg) to
+    propagate A/B/C/BAF/clones from the segment level.
 
     Args:
-        bbc_data: dict with 'bbc_df', 'X', 'Y', 'D' (sparse, G_bbc x N).
-        seg_sx: segment-level SX_Data with cnv_blocks, C, BAF, clones.
+        bbc_df: BBC-level DataFrame with seg_id column.
+        X_bbc, Y_bbc, D_bbc: (G_bbc, N) sparse or dense count matrices.
+        seg_sx: segment-level SX_Data with cnv_blocks, A, B, C, BAF, clones.
         rep_mask: optional boolean mask (N,) to subset barcodes.
 
     Returns:
-        SimpleNamespace with cnv_blocks, X, Y, D, T, C, BAF, clones.
+        SimpleNamespace with cnv_blocks, X, Y, D, T, A, B, C, BAF, clones.
     """
     from types import SimpleNamespace
 
-    bbc_df = bbc_data["bbc_df"]
+    def _to_dense(m):
+        return (
+            m.toarray().astype(np.int32)
+            if sparse.issparse(m)
+            else np.asarray(m, dtype=np.int32)
+        )
+
+    X = _to_dense(X_bbc)
+    Y = _to_dense(Y_bbc)
+    D = _to_dense(D_bbc)
     if rep_mask is not None:
-        X = bbc_data["X"].toarray().astype(np.int32)[:, rep_mask]
-        Y = bbc_data["Y"].toarray().astype(np.int32)[:, rep_mask]
-        D = bbc_data["D"].toarray().astype(np.int32)[:, rep_mask]
-    else:
-        X = bbc_data["X"].toarray().astype(np.int32)
-        Y = bbc_data["Y"].toarray().astype(np.int32)
-        D = bbc_data["D"].toarray().astype(np.int32)
+        X = X[:, rep_mask]
+        Y = Y[:, rep_mask]
+        D = D[:, rep_mask]
 
     bbc_sx = SimpleNamespace(
         cnv_blocks=bbc_df,
@@ -120,32 +126,15 @@ def build_bbc_sx(bbc_data, seg_sx, rep_mask=None):
         clones=seg_sx.clones,
     )
 
-    seg_blocks = seg_sx.cnv_blocks
-    bbc_mid = ((bbc_df["START"] + bbc_df["END"]) / 2).astype(int)
-    seg_idx = np.full(len(bbc_df), -1, dtype=int)
-    for chrom in seg_blocks["#CHR"].unique():
-        bm = (bbc_df["#CHR"] == chrom).to_numpy()
-        seg_ch = seg_blocks[seg_blocks["#CHR"] == chrom].sort_values("START")
-        if len(seg_ch) == 0 or not bm.any():
-            continue
-        starts = seg_ch["START"].to_numpy()
-        ends = seg_ch["END"].to_numpy()
-        sids = np.arange(len(seg_blocks))[seg_blocks["#CHR"] == chrom]
-        idx = np.searchsorted(starts, bbc_mid[bm].to_numpy(), side="right") - 1
-        safe = idx.clip(min=0)
-        ok = (idx >= 0) & (bbc_mid[bm].to_numpy() < ends[safe])
-        seg_idx[np.where(bm)[0][ok]] = sids[idx[ok]]
-
+    seg_idx = bbc_df["seg_id"].to_numpy().astype(int)
     mapped = seg_idx >= 0
     K = seg_sx.C.shape[1]
-    bbc_sx.A = np.full((len(bbc_df), K), 1, dtype=seg_sx.A.dtype)
-    bbc_sx.A[mapped] = seg_sx.A[seg_idx[mapped]]
-    bbc_sx.B = np.full((len(bbc_df), K), 1, dtype=seg_sx.B.dtype)
-    bbc_sx.B[mapped] = seg_sx.B[seg_idx[mapped]]
-    bbc_sx.C = np.full((len(bbc_df), K), 2, dtype=seg_sx.C.dtype)
-    bbc_sx.C[mapped] = seg_sx.C[seg_idx[mapped]]
-    bbc_sx.BAF = np.full((len(bbc_df), K), 0.5, dtype=seg_sx.BAF.dtype)
-    bbc_sx.BAF[mapped] = seg_sx.BAF[seg_idx[mapped]]
+    for attr in ("A", "B", "C", "BAF"):
+        src = getattr(seg_sx, attr)
+        default = {"A": 1, "B": 1, "C": 2, "BAF": 0.5}[attr]
+        arr = np.full((len(bbc_df), K), default, dtype=src.dtype)
+        arr[mapped] = src[seg_idx[mapped]]
+        setattr(bbc_sx, attr, arr)
 
     return bbc_sx
 
@@ -405,6 +394,11 @@ def aggregate_bbc_to_seg(
 
     mapped = seg_ids >= 0
     logging.info(f"{tag}mapped {mapped.sum()}/{n_bbc} bbc bins to {n_seg} segments")
+
+    # Store segment mapping and CNP on bbc_df for downstream use
+    bbc_df["seg_id"] = seg_ids
+    cnp_map = dict(zip(seg_df["seg_id"], seg_df["CNP"]))
+    bbc_df["CNP"] = bbc_df["seg_id"].map(cnp_map).fillna("")
 
     # aggregate counts using one-hot matrix multiplication
     mapped_idx = np.where(mapped)[0]

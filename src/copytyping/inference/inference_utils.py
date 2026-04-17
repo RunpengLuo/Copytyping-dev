@@ -44,71 +44,61 @@ def annotate_adata_celltype(adata, cell_type_df, ref_label, data_type):
     )
 
 
-def adaptive_bin_bbc(bbc_data, seg_blocks, min_snp_count=300, max_bin_length=5_000_000):
+def adaptive_bin_bbc(
+    bbc_df, X_bbc, Y_bbc, D_bbc, min_snp_count=300, max_bin_length=5_000_000
+):
     """Merge adjacent BBC bins within the same segment to reduce sparsity.
 
     Walks BBC bins in genomic order per chromosome, grouping consecutive bins
-    that map to the same segment until the pseudobulk SNP count reaches
+    that share the same seg_id until the pseudobulk SNP count reaches
     min_snp_count or the combined length exceeds max_bin_length.
 
     Args:
-        bbc_data: dict with 'bbc_df', 'X', 'Y', 'D' (sparse or dense).
-        seg_blocks: segment-level DataFrame with #CHR, START, END columns.
+        bbc_df: BBC-level DataFrame with #CHR, START, END, seg_id, CNP columns.
+        X_bbc, Y_bbc, D_bbc: (G_bbc, N) sparse or dense count matrices.
         min_snp_count: minimum pseudobulk D sum per merged bin.
         max_bin_length: maximum merged bin length in bp.
 
     Returns:
-        dict with same keys as bbc_data but fewer, larger bins (dense arrays).
+        agg_df, X_agg, Y_agg, D_agg: aggregated BBC DataFrame and dense arrays.
     """
-    bbc_df = bbc_data["bbc_df"].reset_index(drop=True)
-    X = bbc_data["X"].toarray() if sparse.issparse(bbc_data["X"]) else bbc_data["X"]
-    Y = bbc_data["Y"].toarray() if sparse.issparse(bbc_data["Y"]) else bbc_data["Y"]
-    D = bbc_data["D"].toarray() if sparse.issparse(bbc_data["D"]) else bbc_data["D"]
-    X = X.astype(np.int32)
-    Y = Y.astype(np.int32)
-    D = D.astype(np.int32)
+    bbc_df = bbc_df.reset_index(drop=True)
 
-    # pseudobulk D for threshold check
+    def _to_dense(m):
+        return (
+            m.toarray().astype(np.int32)
+            if sparse.issparse(m)
+            else np.asarray(m, dtype=np.int32)
+        )
+
+    X = _to_dense(X_bbc)
+    Y = _to_dense(Y_bbc)
+    D = _to_dense(D_bbc)
+
     D_total = D.sum(axis=1)
-
-    # map BBC bins to segments via midpoint containment
-    bbc_mid = ((bbc_df["START"] + bbc_df["END"]) / 2).astype(np.int64).to_numpy()
     bbc_chr = bbc_df["#CHR"].to_numpy()
-    seg_id = np.full(len(bbc_df), -1, dtype=np.int64)
-
-    for chrom in seg_blocks["#CHR"].unique():
-        bm = bbc_chr == chrom
-        if not bm.any():
-            continue
-        seg_ch = seg_blocks[seg_blocks["#CHR"] == chrom].sort_values("START")
-        starts = seg_ch["START"].to_numpy()
-        ends = seg_ch["END"].to_numpy()
-        sids = seg_ch.index.to_numpy()
-        idx = np.searchsorted(starts, bbc_mid[bm], side="right") - 1
-        safe = idx.clip(min=0)
-        ok = (idx >= 0) & (bbc_mid[bm] < ends[safe])
-        seg_id[np.where(bm)[0][ok]] = sids[idx[ok]]
+    seg_ids = bbc_df["seg_id"].to_numpy()
 
     # walk and merge
-    groups = []  # list of (chr, start, end, [bbc_indices])
+    groups = []  # list of (chr, start, end, seg_id, cnp, [bbc_indices])
     chroms = bbc_df["#CHR"].unique()
     for chrom in chroms:
         chr_mask = bbc_chr == chrom
         chr_idx = np.where(chr_mask)[0]
         if len(chr_idx) == 0:
             continue
-        # sort by START within chromosome
         order = chr_idx[np.argsort(bbc_df["START"].to_numpy()[chr_idx])]
 
-        cur_seg = seg_id[order[0]]
+        cur_seg = seg_ids[order[0]]
         cur_start = bbc_df["START"].iloc[order[0]]
         cur_end = bbc_df["END"].iloc[order[0]]
+        cur_cnp = bbc_df["CNP"].iloc[order[0]]
         cur_indices = [order[0]]
         cur_d = D_total[order[0]]
 
         for i in range(1, len(order)):
             bi = order[i]
-            bi_seg = seg_id[bi]
+            bi_seg = seg_ids[bi]
             bi_start = bbc_df["START"].iloc[bi]
             bi_end = bbc_df["END"].iloc[bi]
             bi_length = bi_end - cur_start
@@ -122,14 +112,17 @@ def adaptive_bin_bbc(bbc_data, seg_blocks, min_snp_count=300, max_bin_length=5_0
                 cur_end = bi_end
                 cur_d += D_total[bi]
             else:
-                groups.append((chrom, cur_start, cur_end, cur_indices))
+                groups.append(
+                    (chrom, cur_start, cur_end, cur_seg, cur_cnp, cur_indices)
+                )
                 cur_seg = bi_seg
                 cur_start = bi_start
                 cur_end = bi_end
+                cur_cnp = bbc_df["CNP"].iloc[bi]
                 cur_indices = [bi]
                 cur_d = D_total[bi]
 
-        groups.append((chrom, cur_start, cur_end, cur_indices))
+        groups.append((chrom, cur_start, cur_end, cur_seg, cur_cnp, cur_indices))
 
     # build aggregated arrays
     n_agg = len(groups)
@@ -139,16 +132,17 @@ def adaptive_bin_bbc(bbc_data, seg_blocks, min_snp_count=300, max_bin_length=5_0
     D_agg = np.zeros((n_agg, N), dtype=np.int32)
     rows = []
 
-    for gi, (chrom, start, end, indices) in enumerate(groups):
+    for gi, (chrom, start, end, sid, cnp, indices) in enumerate(groups):
         idx = np.array(indices)
         X_agg[gi] = X[idx].sum(axis=0)
         Y_agg[gi] = Y[idx].sum(axis=0)
         D_agg[gi] = D[idx].sum(axis=0)
-        rows.append({"#CHR": chrom, "START": start, "END": end})
+        rows.append(
+            {"#CHR": chrom, "START": start, "END": end, "seg_id": sid, "CNP": cnp}
+        )
 
     agg_df = pd.DataFrame(rows)
 
-    # log stats
     lengths = (agg_df["END"] - agg_df["START"]).to_numpy()
     d_sums = D_agg.sum(axis=1)
     x_sums = X_agg.sum(axis=1)
@@ -159,4 +153,4 @@ def adaptive_bin_bbc(bbc_data, seg_blocks, min_snp_count=300, max_bin_length=5_0
         f"total_count median={np.median(x_sums):.0f} mean={np.mean(x_sums):.0f}"
     )
 
-    return {"bbc_df": agg_df, "X": X_agg, "Y": Y_agg, "D": D_agg}
+    return agg_df, X_agg, Y_agg, D_agg

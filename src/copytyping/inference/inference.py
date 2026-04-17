@@ -93,20 +93,21 @@ def run(args=None):
     aggr_mode = args.get("aggr_mode", "clust")
     data_sources = {}  # used by EM (seg or clust level)
     seg_data_sources = {}
-    bbc_data_sources = {}
     agg_bbc_data = {}
     adatas = {}
     for data_type in data_types:
-        barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_data = load_modality_data(
-            args[f"{data_type}_barcodes"],
-            args[f"{data_type}_cnv_segments"],
-            args[f"{data_type}_X_count"],
-            args[f"{data_type}_A_allele"],
-            args[f"{data_type}_B_allele"],
-            args["bbc_phases"],
-            data_type,
-            args["seg_ucn"],
-            solfile=args.get("solfile"),
+        barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc = (
+            load_modality_data(
+                args[f"{data_type}_barcodes"],
+                args[f"{data_type}_cnv_segments"],
+                args[f"{data_type}_X_count"],
+                args[f"{data_type}_A_allele"],
+                args[f"{data_type}_B_allele"],
+                args["bbc_phases"],
+                data_type,
+                args["seg_ucn"],
+                solfile=args.get("solfile"),
+            )
         )
 
         if cell_type_df is not None:
@@ -116,10 +117,11 @@ def run(args=None):
 
         seg_sx = SX_Data(barcodes_df, seg_df, X_seg, Y_seg, D_seg)
         seg_data_sources[data_type] = seg_sx
-        bbc_data_sources[data_type] = bbc_data
         agg_bbc_data[data_type] = adaptive_bin_bbc(
-            bbc_data,
-            seg_sx.cnv_blocks,
+            bbc_df,
+            X_bbc,
+            Y_bbc,
+            D_bbc,
             args["min_snp_count"],
             args["max_bin_length"],
         )
@@ -387,8 +389,12 @@ def run(args=None):
             )
 
             if data_type in agg_bbc_data:
+                agg_df, X_agg, Y_agg, D_agg = agg_bbc_data[data_type]
                 agg_sx = build_bbc_sx(
-                    agg_bbc_data[data_type],
+                    agg_df,
+                    X_agg,
+                    Y_agg,
+                    D_agg,
                     seg_data_sources[data_type],
                     rep_mask=rep_mask,
                 )
