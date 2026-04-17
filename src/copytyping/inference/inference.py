@@ -59,9 +59,7 @@ def run(args=None):
     data_types = args["data_types"]
     ref_label = args["ref_label"]
     out_dir = args["out_dir"]
-    out_prefix = args["out_prefix"]
-    if out_prefix == "":
-        out_prefix = str(sample)
+    out_prefix = args["out_prefix"] or str(sample)
     os.makedirs(out_dir, exist_ok=True)
     _file_handler = add_file_logging(out_dir)
     dirs = {
@@ -131,7 +129,7 @@ def run(args=None):
 
         if args.get(f"{data_type}_h5ad") is not None:
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
-            if cell_type_df is not None and ref_label in cell_type_df.columns:
+            if cell_type_df is not None:
                 annotate_adata_celltype(
                     adatas[data_type], cell_type_df, ref_label, data_type
                 )
@@ -151,14 +149,7 @@ def run(args=None):
         args, cnv_blocks, platform, data_types, SPATIAL_PLATFORMS
     )
 
-    if platform == "single_cell":
-        model = Cell_Model
-    elif platform == "spatial":
-        model = Spot_Model
-    else:
-        raise ValueError(f"unknown platform={platform}")
-
-    instance = model(
+    instance = {"single_cell": Cell_Model, "spatial": Spot_Model}[platform](
         barcodes,
         platform,
         data_types,
@@ -190,8 +181,8 @@ def run(args=None):
     )
 
     is_spot = platform in SPATIAL_PLATFORMS
-    plot_label = f"{label}-purity_cutoff" if is_spot else label
-    is_normal = (anns[plot_label] == "normal").to_numpy()
+    hard_label = f"{label}-purity_cutoff" if is_spot else label
+    is_normal = (anns[hard_label] == "normal").to_numpy()
     if is_normal.sum() == 0:
         is_normal = None
     if aggr_mode == "clust":
@@ -236,7 +227,7 @@ def run(args=None):
     if ref_label in barcodes.columns:
         metric = evaluate_malignant_accuracy(
             anns,
-            qry_label=plot_label,
+            qry_label=hard_label,
             ref_label=ref_label,
             tumor_post="tumor_purity" if is_spot else "tumor",
         )
@@ -296,7 +287,7 @@ def run(args=None):
     # Posterior statistics
     if "max_posterior" in anns.columns:
         logging.info("posterior statistics:")
-        for grp, sub in anns.groupby(plot_label, sort=True):
+        for grp, sub in anns.groupby(hard_label, sort=True):
             mp = sub["max_posterior"].to_numpy()
             md = sub["margin_delta"].to_numpy()
             logging.info(
@@ -316,7 +307,7 @@ def run(args=None):
                 f"{out_prefix}.{platform}.crosstab.png",
             ),
             metric=metric,
-            acol=plot_label,
+            acol=hard_label,
             bcol=ref_label,
         )
 
@@ -326,7 +317,7 @@ def run(args=None):
         for val in ["BAF", "log2RDR"]:
             if val == "log2RDR" and f"{data_type}-lambda" not in model_params:
                 continue
-            for my_label in [plot_label, ref_label]:
+            for my_label in [hard_label, ref_label]:
                 if my_label not in anns:
                     continue
                 agg_levels = [
@@ -368,10 +359,10 @@ def run(args=None):
             haplo_blocks=cnv_blocks,
             wl_segments=wl_segments,
             mask_cnp=False,
-            lab_type=plot_label,
+            lab_type=hard_label,
             filename=os.path.join(
                 dirs["scatter"],
-                f"{out_prefix}.{platform}.1d_scatter.{data_type}.{plot_label}.pdf",
+                f"{out_prefix}.{platform}.1d_scatter.{data_type}.{hard_label}.pdf",
             ),
         )
 
@@ -387,11 +378,11 @@ def run(args=None):
                 wl_segments=wl_segments,
                 resolution="agg-bbc",
                 mask_cnp=False,
-                lab_type=plot_label,
+                lab_type=hard_label,
                 filename=os.path.join(
                     dirs["scatter"],
                     f"{out_prefix}.{platform}"
-                    f".1d_scatter_agg_bbc.{data_type}.{plot_label}.pdf",
+                    f".1d_scatter_agg_bbc.{data_type}.{hard_label}.pdf",
                 ),
             )
 
