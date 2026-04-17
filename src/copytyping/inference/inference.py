@@ -15,7 +15,10 @@ from copytyping.inference.inference_utils import (
     annotate_adata_celltype,
     merge_celltype_into_barcodes,
 )
-from copytyping.inference.model_utils import compute_baseline_proportions
+from copytyping.inference.model_utils import (
+    compute_baseline_proportions,
+    prepare_params,
+)
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
     evaluate_malignant_accuracy,
@@ -158,33 +161,9 @@ def run(args=None):
     posterior_thres = args["posterior_thres"]
     margin_thres = args["margin_thres"]
 
-    bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
-    if platform in SPATIAL_PLATFORMS:
-        pi_init = bulk_props[1:]
-        pi_init = pi_init / pi_init.sum()
-    else:
-        pi_init = bulk_props
-    tau_prior_a = args["tau_prior_a"]
-    tau_prior_b = args["tau_prior_b"]
-    invphi_prior_a = args["invphi_prior_a"]
-    invphi_prior_b = args["invphi_prior_b"]
-    init_params = {
-        "pi": pi_init,
-        "tau0": tau_prior_a / tau_prior_b,  # prior mean
-        "phi0": 1.0 / (invphi_prior_a / invphi_prior_b),  # 1/prior mean of invphi
-        "pi_alpha": args["pi_alpha"],
-        "tau_prior_a": tau_prior_a,
-        "tau_prior_b": tau_prior_b,
-        "invphi_prior_a": invphi_prior_a,
-        "invphi_prior_b": invphi_prior_b,
-        "theta_prior_a": args["theta_prior_a"],
-        "theta_prior_b": args["theta_prior_b"],
-    }
-    fix_params = {"pi": False}
-    for data_type in data_types:
-        fix_params[f"{data_type}-inv_phi"] = not args["update_NB_dispersion"]
-        fix_params[f"{data_type}-tau"] = not args["update_BB_dispersion"]
-        fix_params[f"{data_type}-theta"] = not args["update_purity"]
+    init_params, fix_params = prepare_params(
+        args, cnv_blocks, platform, data_types, SPATIAL_PLATFORMS
+    )
 
     if platform == "single_cell":
         model = Cell_Model
