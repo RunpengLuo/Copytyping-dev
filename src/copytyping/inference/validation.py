@@ -13,19 +13,19 @@ from sklearn.metrics import (
 from copytyping.utils import NA_CELLTYPE, is_tumor_label
 
 
-def _eval_subset(anns_sub, cell_label, cell_type, tumor_post, skip_binary=False):
+def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
     """Compute metrics for a subset of annotations."""
-    known_mask = ~anns_sub[cell_type].isin(NA_CELLTYPE)
+    known_mask = ~anns_sub[ref_label].isin(NA_CELLTYPE)
     anns_known = anns_sub[known_mask]
-    na_count = int((anns_sub[cell_label] == "NA").sum())
+    na_count = int((anns_sub[qry_label] == "NA").sum())
     total = len(anns_sub)
 
-    y_true = anns_known[cell_type].apply(is_tumor_label).to_numpy(dtype=int)
+    y_true = anns_known[ref_label].apply(is_tumor_label).to_numpy(dtype=int)
     has_both = len(y_true) > 0 and 0 < y_true.sum() < len(y_true)
 
     precision = recall = f1 = accuracy = auc_hard = np.nan
-    if not skip_binary and has_both:
-        y_pred = anns_known[cell_label].apply(is_tumor_label).to_numpy(dtype=int)
+    if has_both:
+        y_pred = anns_known[qry_label].apply(is_tumor_label).to_numpy(dtype=int)
         precision, recall, f1, _ = precision_recall_fscore_support(
             y_true, y_pred, average="binary", zero_division=0.0
         )
@@ -37,12 +37,12 @@ def _eval_subset(anns_sub, cell_label, cell_type, tumor_post, skip_binary=False)
         auc_soft = roc_auc_score(y_true, anns_known[tumor_post])
 
     ari = np.nan
-    tumor_mask = anns_known[cell_type].apply(is_tumor_label)
+    tumor_mask = anns_known[ref_label].apply(is_tumor_label)
     gt_tumor = anns_known[tumor_mask]
-    if gt_tumor[cell_type].nunique() > 1:
-        ari = adjusted_rand_score(gt_tumor[cell_type], gt_tumor[cell_label])
+    if gt_tumor[ref_label].nunique() > 1:
+        ari = adjusted_rand_score(gt_tumor[ref_label], gt_tumor[qry_label])
 
-    label_counts = anns_sub[cell_label].value_counts()
+    label_counts = anns_sub[qry_label].value_counts()
     clone_cols = sorted([c for c in label_counts.index if c.startswith("clone")])
     metric = {
         "total": total,
@@ -62,26 +62,19 @@ def _eval_subset(anns_sub, cell_label, cell_type, tumor_post, skip_binary=False)
 
 
 def evaluate_malignant_accuracy(
-    anns,
-    cell_label="cell_label",
-    cell_type="cell_type",
-    tumor_post="tumor",
-    skip_binary=False,
+    anns: pd.DataFrame,
+    qry_label: str,
+    ref_label: str,
+    tumor_post: str,
 ):
-    """Evaluate classification accuracy. Returns metric dict.
+    """Evaluate classification accuracy. Returns metric dict."""
+    metric = _eval_subset(anns, qry_label, ref_label, tumor_post)
 
-    skip_binary: skip precision/recall/f1/accuracy/AUC_hard
-        (degenerate for spot model which never predicts normal).
-    """
-    metric = _eval_subset(
-        anns, cell_label, cell_type, tumor_post, skip_binary=skip_binary
-    )
-
-    known_mask = ~anns[cell_type].isin(NA_CELLTYPE)
+    known_mask = ~anns[ref_label].isin(NA_CELLTYPE)
     anns_known = anns[known_mask]
     ct = pd.crosstab(
-        anns_known[cell_type],
-        anns_known[cell_label],
+        anns_known[ref_label],
+        anns_known[qry_label],
         margins=True,
         margins_name="total",
     )
@@ -92,16 +85,15 @@ def evaluate_malignant_accuracy(
         return f"{v:.4f}"
 
     logging.info("evaluation:")
-    if not skip_binary:
-        logging.info(f"  precision = {_fmt(metric['precision'])}")
-        logging.info(f"  recall    = {_fmt(metric['recall'])}")
-        logging.info(f"  f1        = {_fmt(metric['f1'])}")
-        logging.info(f"  accuracy  = {_fmt(metric['accuracy'])}")
-        logging.info(f"  AUC_hard  = {_fmt(metric['AUC_hard'])}")
+    logging.info(f"  precision = {_fmt(metric['precision'])}")
+    logging.info(f"  recall    = {_fmt(metric['recall'])}")
+    logging.info(f"  f1        = {_fmt(metric['f1'])}")
+    logging.info(f"  accuracy  = {_fmt(metric['accuracy'])}")
+    logging.info(f"  AUC_hard  = {_fmt(metric['AUC_hard'])}")
     logging.info(f"  AUC_soft  = {_fmt(metric['AUC_soft'])}")
     logging.info(f"  ARI       = {_fmt(metric['ARI'])}")
     logging.info(f"  #NA       = {metric['#NA']}/{metric['total']}")
-    logging.info(f"  crosstab (rows=ref {cell_type}, cols=pred {cell_label}):")
+    logging.info(f"  crosstab (rows=ref {ref_label}, cols=pred {qry_label}):")
     for line in ct.to_string().splitlines():
         logging.info(f"    {line}")
 

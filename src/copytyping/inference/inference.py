@@ -147,8 +147,6 @@ def run(args=None):
         os.path.join(out_dir, f"{out_prefix}.cnp_profile.tsv"),
     )
 
-    label = f'{args["method"]}-label'
-
     init_params, fix_params = prepare_params(
         args, cnv_blocks, platform, data_types, SPATIAL_PLATFORMS
     )
@@ -177,6 +175,8 @@ def run(args=None):
         init_params=init_params,
         max_iter=args["niters"],
     )
+
+    label = f"{args['method']}-label"
     anns, clone_props = instance.predict(
         args["fit_mode"],
         model_params,
@@ -189,7 +189,6 @@ def run(args=None):
         "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
     )
 
-    # Use predicted labels for normal identification (not initial EM estimate)
     is_spot = platform in SPATIAL_PLATFORMS
     plot_label = f"{label}-purity_cutoff" if is_spot else label
     is_normal = (anns[plot_label] == "normal").to_numpy()
@@ -236,10 +235,9 @@ def run(args=None):
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
         metric = evaluate_malignant_accuracy(
             anns,
-            cell_label=plot_label,
-            cell_type=ref_label,
+            qry_label=plot_label,
+            ref_label=ref_label,
             tumor_post="tumor_purity" if is_spot else "tumor",
-            skip_binary=is_spot,
         )
 
     if is_spot:
@@ -307,7 +305,7 @@ def run(args=None):
             )
 
     # Crosstab (all spots/cells)
-    if ref_label in anns.columns and not is_spot:
+    if ref_label in anns.columns:
         plot_crosstab(
             anns,
             sample,
