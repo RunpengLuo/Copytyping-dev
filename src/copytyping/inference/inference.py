@@ -231,23 +231,13 @@ def run(args=None):
             adata_sub = gex_adata[gex_adata.obs_names.isin(common)]
             anns_indexed = anns.set_index("BARCODE").loc[adata_sub.obs_names]
             coords = adata_sub.obsm["spatial"]
-            clone_labels = anns_indexed[label].to_numpy()
+            clone_labels = anns_indexed[hard_label].to_numpy()
 
-            jc_all = joincount_zscore(clone_labels, coords)
-            logging.info("joincount z-score (all spots):")
-            for lab, z in sorted(jc_all.items()):
+            jc = joincount_zscore(clone_labels, coords)
+            logging.info("joincount z-score:")
+            for lab, z in sorted(jc.items()):
                 logging.info(f"  {lab:8s}: {z:.4f}")
                 metric[f"JC_{lab}"] = z
-
-            pred_tumor = anns_indexed[hard_label] != "normal"
-            if pred_tumor.any():
-                jc_tumor = joincount_zscore(
-                    clone_labels[pred_tumor], coords[pred_tumor]
-                )
-                logging.info("joincount z-score (pred-tumor only):")
-                for lab, z in sorted(jc_tumor.items()):
-                    logging.info(f"  {lab:8s}: {z:.4f}")
-                    metric[f"JC_tumor_{lab}"] = z
 
     if metric:
         eval_df = pd.DataFrame([{"SAMPLE": sample, "PLATFORM": platform, **metric}])
