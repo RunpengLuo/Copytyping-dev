@@ -13,7 +13,6 @@ from copytyping.inference.likelihood_funcs import (
 )
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
-    compute_baseline_proportions,
     estimate_tumor_proportion,
 )
 
@@ -69,11 +68,13 @@ class Spot_Model(Base_Model):
             "pi": init_params.get("pi", np.ones(self.K_tumor) / self.K_tumor),
         }
 
+        self._init_lambda(params, is_normal)
+
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
-            lambda_g = compute_baseline_proportions(sx_data.X, sx_data.T, is_normal)
-            params[f"{data_type}-lambda"] = lambda_g
-            params[f"{data_type}-theta"] = estimate_tumor_proportion(sx_data, lambda_g)
+            params[f"{data_type}-theta"] = estimate_tumor_proportion(
+                sx_data, params[f"{data_type}-lambda"]
+            )
 
             if fit_mode in {"allele_only", "hybrid"}:
                 n_allele = int(sx_data.MASK[self.allele_mask_id].sum())
