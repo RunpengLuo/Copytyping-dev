@@ -134,10 +134,7 @@ def run(args=None):
                     adatas[data_type], cell_type_df, ref_label, data_type
                 )
 
-    barcodes, modality_masks = union_align_barcodes(seg_data_sources, data_types)
-    clust_masks = modality_masks
-    if aggr_mode == "clust":
-        _, clust_masks = union_align_barcodes(data_sources, data_types)
+    barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
 
     cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
     save_cnp_profile(
@@ -157,7 +154,7 @@ def run(args=None):
         dirs["work"],
         out_prefix,
         verbosity,
-        modality_masks=clust_masks,
+        modality_masks=modality_masks,
         hard_em=args.get("hard_em", False),
     )
     model_params = instance.fit(
