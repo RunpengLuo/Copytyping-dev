@@ -232,13 +232,13 @@ def run(args=None):
 
     metric = {}
     if ref_label in barcodes.columns:
-        anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
         metric = evaluate_malignant_accuracy(
             anns,
             qry_label=plot_label,
             ref_label=ref_label,
             tumor_post="tumor_purity" if is_spot else "tumor",
         )
+        anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
 
     if is_spot:
         gex_adata = adatas.get("gex")
