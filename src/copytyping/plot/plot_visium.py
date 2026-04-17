@@ -97,7 +97,6 @@ def plot_visium_panel(
         purity_label = f"tumor purity\n{title_info}" if title_info else "tumor purity"
         row_labels.append(purity_label)
     row_labels.append("copytyping")
-    row_labels.append("max posterior")
     nrows = len(row_labels)
     ncols = len(slices)
 
@@ -116,7 +115,6 @@ def plot_visium_panel(
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
         if has_purity:
             vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
-        vis_adata.obs["max_posterior"] = anns_vis["max_posterior"].values
         set_clone_colors(vis_adata, spot_label)
         if has_path:
             set_clone_colors(vis_adata, path_label)
@@ -195,19 +193,6 @@ def plot_visium_panel(
                 framealpha=0.8,
             )
 
-        ri += 1
-        sq.pl.spatial_scatter(
-            vis_adata,
-            color="max_posterior",
-            size=size,
-            library_id=rep_id,
-            cmap="magma_r",
-            vmin=0,
-            vmax=1,
-            ax=axes[ri, ci],
-            edgecolors="none",
-        )
-
     # only show legend on the last column, positioned outside the plot
     for ri in range(nrows):
         for ci in range(ncols):
@@ -251,7 +236,7 @@ def plot_visium_panel(
     logging.info(f"saved visium panel to {out_file}")
 
 
-def plot_visium_debug(
+def plot_visium_iters(
     sample: str,
     slices: list,
     param_trace: list,
