@@ -211,7 +211,12 @@ def run(args=None):
         "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
     )
 
-    is_normal = getattr(instance, "_init_is_normal", None)
+    # Use predicted labels for normal identification (not initial EM estimate)
+    is_spot = platform in SPATIAL_PLATFORMS
+    plot_label = f"{label}-purity_cutoff" if is_spot else label
+    is_normal = (anns[plot_label] == "normal").to_numpy()
+    if is_normal.sum() == 0:
+        is_normal = None
     if aggr_mode == "clust":
         for data_type in data_types:
             clust_obj = data_sources[data_type]
@@ -249,8 +254,6 @@ def run(args=None):
             )
 
     metric = {}
-    is_spot = platform in SPATIAL_PLATFORMS
-    plot_label = f"{label}-purity_cutoff" if is_spot else label
     if ref_label in barcodes.columns:
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
         metric = evaluate_malignant_accuracy(
