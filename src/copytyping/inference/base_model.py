@@ -104,9 +104,7 @@ class Base_Model:
                 sx = self.data_sources[dt]
                 n_clonal = int(sx.MASK["CLONAL_IMBALANCED"].sum())
                 n_all = int(sx.MASK["IMBALANCED"].sum())
-                logging.info(
-                    f"  [{dt}] clonal imbalanced: {n_clonal}/{n_all}"
-                )
+                logging.info(f"  [{dt}] clonal imbalanced: {n_clonal}/{n_all}")
             pure_model = Cell_Model(
                 self.barcodes,
                 self.platform,
@@ -241,12 +239,10 @@ class Base_Model:
         assert fit_mode in allowed_fit_mode
 
         n_allele_bins = sum(
-            int(sx.MASK[self.allele_mask_id].sum())
-            for sx in self.data_sources.values()
+            int(sx.MASK[self.allele_mask_id].sum()) for sx in self.data_sources.values()
         )
         n_total_bins = sum(
-            int(sx.MASK[self.total_mask_id].sum())
-            for sx in self.data_sources.values()
+            int(sx.MASK[self.total_mask_id].sum()) for sx in self.data_sources.values()
         )
         if fit_mode == "allele_only":
             assert n_allele_bins > 0, f"no {self.allele_mask_id} bins for allele_only"
@@ -317,6 +313,7 @@ class Base_Model:
         label: str,
         posterior_thres: float = 0.5,
         margin_thres: float = 0.1,
+        **kwargs,
     ):
         """Cell-model predict: posteriors over all K clones including normal."""
         logging.info("Decode labels with MAP estimation")

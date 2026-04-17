@@ -235,6 +235,7 @@ def run(args=None):
         label=label,
         posterior_thres=posterior_thres,
         margin_thres=margin_thres,
+        purity_threshold=args["purity_threshold"],
     )
     logging.info(
         "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
@@ -399,8 +400,7 @@ def run(args=None):
                         )
 
             # Segment-level 1D scatter
-            pt = args.get("purity_threshold")
-            spot_purity = pt if is_spot and pt and pt > 0 else None
+            scatter_label = f"{label}-purity_cutoff" if is_spot else label
             plot_rdr_baf_1d_pseudobulk(
                 sx_rep,
                 anns_rep,
@@ -410,13 +410,12 @@ def run(args=None):
                 genome_size,
                 haplo_blocks=cnv_blocks,
                 wl_segments=wl_segments,
-                purity_threshold=spot_purity,
                 mask_cnp=False,
-                lab_type=label,
+                lab_type=scatter_label,
                 filename=os.path.join(
                     dirs["scatter"],
                     f"{out_prefix}.{platform}{rep_tag}"
-                    f".1d_scatter.{data_type}.{label}.pdf",
+                    f".1d_scatter.{data_type}.{scatter_label}.pdf",
                 ),
             )
 
@@ -441,14 +440,13 @@ def run(args=None):
                     haplo_blocks=cnv_blocks,
                     wl_segments=wl_segments,
                     resolution="bbc",
-                    purity_threshold=spot_purity,
                     mask_cnp=False,
-                    lab_type=label,
+                    lab_type=scatter_label,
                     markersize=2,
                     filename=os.path.join(
                         dirs["scatter"],
                         f"{out_prefix}.{platform}{rep_tag}"
-                        f".1d_scatter_bbc.{data_type}.{label}.pdf",
+                        f".1d_scatter_bbc.{data_type}.{scatter_label}.pdf",
                     ),
                 )
 

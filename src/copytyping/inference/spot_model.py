@@ -300,14 +300,10 @@ class Spot_Model(Base_Model):
 
                 # Beta(a, b) log-prior: (a-1)*log(θ) + (b-1)*log(1-θ)
                 tv = float(theta_val[0])
-                Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(
-                    1.0 - tv
-                )
+                Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(1.0 - tv)
                 return -Q
 
-            res = minimize_scalar(
-                neg_Q_theta, bounds=purity_bounds, method="bounded"
-            )
+            res = minimize_scalar(neg_Q_theta, bounds=purity_bounds, method="bounded")
             theta_arr[n] = np.clip(res.x, 1e-4, 1.0 - 1e-4)
 
         for data_type in self.data_types:
@@ -324,6 +320,7 @@ class Spot_Model(Base_Model):
         label,
         posterior_thres=0.5,
         margin_thres=0.1,
+        purity_threshold=0.5,
     ):
         logging.info("Decode labels with MAP estimation")
         posteriors = self._e_step(fit_mode, params)
@@ -355,5 +352,12 @@ class Spot_Model(Base_Model):
         anns[label] = anns[tumor_clones].idxmax(axis=1)
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in tumor_clones}
+
+        # Purity-based label: low purity spots → "normal", rest → MAP clone
+        purity_label = f"{label}-purity_cutoff"
+        anns[purity_label] = anns[label]
+        if purity_threshold is not None and purity_threshold > 0:
+            low_purity = anns["tumor_purity"] < purity_threshold
+            anns.loc[low_purity, purity_label] = "normal"
 
         return anns, clone_props
