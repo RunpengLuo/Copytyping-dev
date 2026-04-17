@@ -27,7 +27,6 @@ from copytyping.inference.validation import (
     refine_labels_by_reference,
 )
 from copytyping.io_utils import (
-    build_bbc_sx,
     load_modality_data,
     union_align_barcodes,
 )
@@ -89,7 +88,7 @@ def run(args=None):
     aggr_mode = args.get("aggr_mode", "clust")
     data_sources = {}  # used by EM (seg or clust level)
     seg_data_sources = {}
-    agg_bbc_data = {}
+    agg_bbc_data_sources = {}
     adatas = {}
     for data_type in data_types:
         barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc = (
@@ -113,11 +112,12 @@ def run(args=None):
 
         seg_sx = SX_Data(barcodes_df, seg_df, X_seg, Y_seg, D_seg)
         seg_data_sources[data_type] = seg_sx
-        agg_bbc_data[data_type] = adaptive_bin_bbc(
+        agg_bbc_data_sources[data_type] = adaptive_bin_bbc(
             bbc_df,
             X_bbc,
             Y_bbc,
             D_bbc,
+            seg_sx,
             args["min_snp_count"],
             args["max_bin_length"],
         )
@@ -134,14 +134,14 @@ def run(args=None):
                     adatas[data_type], cell_type_df, ref_label, data_type
                 )
 
-    barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
-
-    cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
     save_cnp_profile(
         seg_data_sources[data_types[0]],
         os.path.join(out_dir, f"{out_prefix}.cnp_profile.tsv"),
     )
 
+    barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
+
+    cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
     init_params, fix_params = prepare_params(
         args, cnv_blocks, platform, data_types, SPATIAL_PLATFORMS
     )
@@ -206,19 +206,14 @@ def run(args=None):
                     )
                     model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
 
-    # Build agg-bbc SX and compute baseline proportions
-    agg_bbc_sx = {}
+    # Compute agg-bbc baseline proportions
     agg_bbc_lambda = {}
     for data_type in data_types:
-        if data_type in agg_bbc_data:
-            agg_df, X_agg, Y_agg, D_agg = agg_bbc_data[data_type]
-            agg_bbc_sx[data_type] = build_bbc_sx(
-                agg_df, X_agg, Y_agg, D_agg, seg_data_sources[data_type]
+        if data_type in agg_bbc_data_sources and is_normal is not None:
+            agg_sx = agg_bbc_data_sources[data_type]
+            agg_bbc_lambda[data_type] = compute_baseline_proportions(
+                agg_sx.X, agg_sx.T, is_normal
             )
-            if is_normal is not None:
-                agg_bbc_lambda[data_type] = compute_baseline_proportions(
-                    agg_bbc_sx[data_type].X, agg_bbc_sx[data_type].T, is_normal
-                )
 
     metric = {}
     if ref_label in barcodes.columns:
@@ -363,9 +358,9 @@ def run(args=None):
             ),
         )
 
-        if data_type in agg_bbc_sx:
+        if data_type in agg_bbc_data_sources:
             plot_rdr_baf_1d_pseudobulk(
-                agg_bbc_sx[data_type],
+                agg_bbc_data_sources[data_type],
                 anns,
                 agg_bbc_lambda.get(data_type),
                 sample,

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import NA_CELLTYPE
 
 
@@ -45,7 +46,13 @@ def annotate_adata_celltype(adata, cell_type_df, ref_label, data_type):
 
 
 def adaptive_bin_bbc(
-    bbc_df, X_bbc, Y_bbc, D_bbc, min_snp_count=300, max_bin_length=5_000_000
+    bbc_df,
+    X_bbc,
+    Y_bbc,
+    D_bbc,
+    seg_sx,
+    min_snp_count=300,
+    max_bin_length=5_000_000,
 ):
     """Merge adjacent BBC bins within the same segment to reduce sparsity.
 
@@ -56,11 +63,12 @@ def adaptive_bin_bbc(
     Args:
         bbc_df: BBC-level DataFrame with #CHR, START, END, seg_id, CNP columns.
         X_bbc, Y_bbc, D_bbc: (G_bbc, N) sparse or dense count matrices.
+        seg_sx: segment-level SX_Data (for barcodes).
         min_snp_count: minimum pseudobulk D sum per merged bin.
         max_bin_length: maximum merged bin length in bp.
 
     Returns:
-        agg_df, X_agg, Y_agg, D_agg: aggregated BBC DataFrame and dense arrays.
+        SX_Data with aggregated bins.
     """
     bbc_df = bbc_df.reset_index(drop=True)
 
@@ -153,4 +161,4 @@ def adaptive_bin_bbc(
         f"total_count median={np.median(x_sums):.0f} mean={np.mean(x_sums):.0f}"
     )
 
-    return agg_df, X_agg, Y_agg, D_agg
+    return SX_Data(seg_sx.barcodes, agg_df, X_agg, Y_agg, D_agg)
