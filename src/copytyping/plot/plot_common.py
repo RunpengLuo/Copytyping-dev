@@ -651,29 +651,6 @@ def plot_dispersions(params: dict, out_file: str, data_type: str, name="tau"):
     return
 
 
-def plot_posteriors(
-    anns: pd.DataFrame,
-    out_file: str,
-    lab_type="cell_label",
-):
-    fig, ax = plt.subplots(1, 1)
-    x_col = "max_posterior"
-    title = "max posterior"
-    sns.histplot(
-        data=anns,
-        x=x_col,
-        hue=lab_type,
-        multiple="stack",
-        ax=ax,
-        binrange=[0, 1],
-        bins=20,
-    )
-
-    ax.set_title(title)
-    fig.tight_layout()
-    fig.savefig(out_file, dpi=150)
-
-
 def plot_params(
     params: dict, out_file: str, data_type: str, names=["tau", "lambda", "inv_phi"]
 ):
