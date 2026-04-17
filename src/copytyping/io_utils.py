@@ -204,25 +204,18 @@ def union_align_barcodes(data_dict, data_types):
         union_barcodes_df: DataFrame with BARCODE, REP_ID for union.
         modality_masks: dict[str, ndarray bool (N_union,)].
     """
-    # 1. Compute ordered union of barcodes
+    # 1. Compute ordered union of barcodes, carrying all columns
     seen = {}
-    union_list = []
-    rep_map = {}
+    union_rows = []
     for dt in data_types:
         obj = data_dict[dt]
         for _, row in obj.barcodes.iterrows():
             bc = row["BARCODE"]
             if bc not in seen:
-                seen[bc] = len(union_list)
-                union_list.append(bc)
-                rep_map[bc] = row.get("REP_ID", "")
-    N_union = len(union_list)
-    union_barcodes_df = pd.DataFrame(
-        {
-            "BARCODE": union_list,
-            "REP_ID": [rep_map[bc] for bc in union_list],
-        }
-    )
+                seen[bc] = len(union_rows)
+                union_rows.append(row.to_dict())
+    N_union = len(union_rows)
+    union_barcodes_df = pd.DataFrame(union_rows)
 
     # 2. Realign each modality and build masks
     modality_masks = {}

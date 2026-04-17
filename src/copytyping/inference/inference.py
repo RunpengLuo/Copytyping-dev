@@ -36,7 +36,7 @@ from copytyping.plot.plot_common import (
     plot_crosstab,
     plot_rdr_baf_1d_pseudobulk,
 )
-from copytyping.plot.plot_visium import plot_visium_debug, plot_visium_panel
+from copytyping.plot.plot_visium import plot_visium_iters, plot_visium_panel
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
@@ -136,27 +136,12 @@ def run(args=None):
                     adatas[data_type], cell_type_df, ref_label, data_type
                 )
 
-    # Union barcodes across modalities and realign matrices
     barcodes, modality_masks = union_align_barcodes(seg_data_sources, data_types)
+    clust_masks = modality_masks
     if aggr_mode == "clust":
         _, clust_masks = union_align_barcodes(data_sources, data_types)
-    else:
-        clust_masks = modality_masks
-
-    # Merge cell_type info into union barcodes
-    if cell_type_df is not None and ref_label in cell_type_df.columns:
-        barcodes = pd.merge(
-            left=barcodes,
-            right=cell_type_df[["BARCODE", ref_label]],
-            on="BARCODE",
-            how="left",
-            sort=False,
-        )
-        barcodes[ref_label] = barcodes[ref_label].fillna("Unknown").astype(str)
 
     cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
-
-    # Save input CNP profile
     save_cnp_profile(
         seg_data_sources[data_types[0]],
         os.path.join(out_dir, f"{out_prefix}.cnp_profile.tsv"),
@@ -454,7 +439,7 @@ def run(args=None):
             title_info=visium_title,
         )
         if hasattr(instance, "param_trace") and instance.param_trace:
-            plot_visium_debug(
+            plot_visium_iters(
                 sample,
                 visium_slices,
                 instance.param_trace,
