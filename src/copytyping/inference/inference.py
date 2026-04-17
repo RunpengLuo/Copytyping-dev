@@ -218,17 +218,19 @@ def run(args=None):
                     )
                     model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
 
-    # Precompute agg-bbc baseline proportions (all barcodes, not per-rep)
+    # Build agg-bbc SX and compute baseline proportions
+    agg_bbc_sx = {}
     agg_bbc_lambda = {}
     for data_type in data_types:
-        if data_type in agg_bbc_data and is_normal is not None:
+        if data_type in agg_bbc_data:
             agg_df, X_agg, Y_agg, D_agg = agg_bbc_data[data_type]
-            agg_sx = build_bbc_sx(
+            agg_bbc_sx[data_type] = build_bbc_sx(
                 agg_df, X_agg, Y_agg, D_agg, seg_data_sources[data_type]
             )
-            agg_bbc_lambda[data_type] = compute_baseline_proportions(
-                agg_sx.X, agg_sx.T, is_normal
-            )
+            if is_normal is not None:
+                agg_bbc_lambda[data_type] = compute_baseline_proportions(
+                    agg_bbc_sx[data_type].X, agg_bbc_sx[data_type].T, is_normal
+                )
 
     metric = {}
     if ref_label in barcodes.columns:
@@ -373,17 +375,9 @@ def run(args=None):
             ),
         )
 
-        if data_type in agg_bbc_data:
-            agg_df, X_agg, Y_agg, D_agg = agg_bbc_data[data_type]
-            agg_sx = build_bbc_sx(
-                agg_df,
-                X_agg,
-                Y_agg,
-                D_agg,
-                seg_sx,
-            )
+        if data_type in agg_bbc_sx:
             plot_rdr_baf_1d_pseudobulk(
-                agg_sx,
+                agg_bbc_sx[data_type],
                 anns,
                 agg_bbc_lambda.get(data_type),
                 sample,
