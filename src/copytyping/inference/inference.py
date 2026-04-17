@@ -29,8 +29,6 @@ from copytyping.inference.validation import (
 from copytyping.io_utils import (
     build_bbc_sx,
     load_modality_data,
-    subset_model_params,
-    subset_sx_data,
     union_align_barcodes,
 )
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
@@ -307,135 +305,129 @@ def run(args=None):
         index=False,
     )
 
-    # ---- Per-rep plotting ----
+    # ---- Plotting (all reps combined per data_type) ----
     wl_segments = read_whitelist_segments(args["region_bed"])
     genome_size = args["genome_size"]
     agg_size = args["heatmap_agg"]
     img_type = args["img_type"]
     dpi = args["dpi"]
     transparent = args["transparent"]
-    rep_ids = anns["REP_ID"].unique()
 
-    for rep_id in rep_ids:
-        rep_mask = (anns["REP_ID"] == rep_id).to_numpy()
-        anns_rep = anns.loc[rep_mask].reset_index(drop=True)
-        params_rep = subset_model_params(model_params, rep_mask, data_types)
-        rep_tag = f".{rep_id}" if len(rep_ids) > 1 else ""
-
-        if "max_posterior" in anns_rep.columns:
-            logging.info(f"posterior statistics{rep_tag}:")
-            for grp, sub in anns_rep.groupby(plot_label, sort=True):
-                mp = sub["max_posterior"].to_numpy()
-                md = sub["margin_delta"].to_numpy()
-                logging.info(
-                    f"  {grp:8s} (n={len(sub):4d}): "
-                    f"max_post min={mp.min():.3f} mean={mp.mean():.3f} "
-                    f"median={np.median(mp):.3f} max={mp.max():.3f}  "
-                    f"margin min={md.min():.3f} mean={md.mean():.3f}"
-                )
-
-        if ref_label in anns_rep.columns and not is_spot:
-            plot_crosstab(
-                anns_rep,
-                sample,
-                os.path.join(
-                    dirs["validation"],
-                    f"{out_prefix}.{platform}{rep_tag}.crosstab.png",
-                ),
-                metric=metric,
-                acol=plot_label,
-                bcol=ref_label,
+    # Posterior statistics
+    if "max_posterior" in anns.columns:
+        logging.info("posterior statistics:")
+        for grp, sub in anns.groupby(plot_label, sort=True):
+            mp = sub["max_posterior"].to_numpy()
+            md = sub["margin_delta"].to_numpy()
+            logging.info(
+                f"  {grp:8s} (n={len(sub):4d}): "
+                f"max_post min={mp.min():.3f} mean={mp.mean():.3f} "
+                f"median={np.median(mp):.3f} max={mp.max():.3f}  "
+                f"margin min={md.min():.3f} mean={md.mean():.3f}"
             )
 
-        # per-data_type plots
-        for data_type in data_types:
-            sx_rep = subset_sx_data(seg_data_sources[data_type], rep_mask)
-            for val in ["BAF", "log2RDR"]:
-                if val == "log2RDR" and f"{data_type}-lambda" not in params_rep:
-                    continue
-                for my_label in [plot_label, ref_label]:
-                    if my_label not in anns_rep:
-                        continue
-                    agg_levels = [
-                        (1, dirs["heatmap_agg1"]),
-                        (agg_size, dirs["heatmap_aggx"]),
-                    ]
-                    for agg, agg_dir in agg_levels:
-                        plot_cnv_heatmap(
-                            sample,
-                            data_type,
-                            cnv_blocks,
-                            sx_rep,
-                            anns_rep,
-                            wl_segments,
-                            proportions=params_rep.get(f"{data_type}-theta", None),
-                            val=val,
-                            base_props=params_rep.get(f"{data_type}-lambda", None),
-                            agg_size=agg,
-                            lab_type=my_label,
-                            filename=os.path.join(
-                                agg_dir,
-                                f"{out_prefix}.{platform}{rep_tag}"
-                                f".{val}_heatmap.{data_type}"
-                                f".{my_label}.{img_type}",
-                            ),
-                            dpi=dpi,
-                            figsize=(20, 6 if agg > 1 else 15),
-                            transparent=transparent,
-                        )
+    # Crosstab (all spots/cells)
+    if ref_label in anns.columns and not is_spot:
+        plot_crosstab(
+            anns,
+            sample,
+            os.path.join(
+                dirs["validation"],
+                f"{out_prefix}.{platform}.crosstab.png",
+            ),
+            metric=metric,
+            acol=plot_label,
+            bcol=ref_label,
+        )
 
-            # Segment-level 1D scatter
+    # Per-data_type plots (all reps combined)
+    for data_type in data_types:
+        seg_sx = seg_data_sources[data_type]
+        for val in ["BAF", "log2RDR"]:
+            if val == "log2RDR" and f"{data_type}-lambda" not in model_params:
+                continue
+            for my_label in [plot_label, ref_label]:
+                if my_label not in anns:
+                    continue
+                agg_levels = [
+                    (1, dirs["heatmap_agg1"]),
+                    (agg_size, dirs["heatmap_aggx"]),
+                ]
+                for agg, agg_dir in agg_levels:
+                    plot_cnv_heatmap(
+                        sample,
+                        data_type,
+                        cnv_blocks,
+                        seg_sx,
+                        anns,
+                        wl_segments,
+                        proportions=model_params.get(f"{data_type}-theta", None),
+                        val=val,
+                        base_props=model_params.get(f"{data_type}-lambda", None),
+                        agg_size=agg,
+                        lab_type=my_label,
+                        filename=os.path.join(
+                            agg_dir,
+                            f"{out_prefix}.{platform}"
+                            f".{val}_heatmap.{data_type}"
+                            f".{my_label}.{img_type}",
+                        ),
+                        dpi=dpi,
+                        figsize=(20, 6 if agg > 1 else 15),
+                        transparent=transparent,
+                    )
+
+        # Segment-level 1D scatter
+        plot_rdr_baf_1d_pseudobulk(
+            seg_sx,
+            anns,
+            model_params.get(f"{data_type}-lambda", None),
+            sample,
+            data_type,
+            genome_size,
+            haplo_blocks=cnv_blocks,
+            wl_segments=wl_segments,
+            mask_cnp=False,
+            lab_type=plot_label,
+            filename=os.path.join(
+                dirs["scatter"],
+                f"{out_prefix}.{platform}.1d_scatter.{data_type}.{plot_label}.pdf",
+            ),
+        )
+
+        if data_type in agg_bbc_data:
+            agg_df, X_agg, Y_agg, D_agg = agg_bbc_data[data_type]
+            agg_sx = build_bbc_sx(
+                agg_df,
+                X_agg,
+                Y_agg,
+                D_agg,
+                seg_sx,
+            )
             plot_rdr_baf_1d_pseudobulk(
-                sx_rep,
-                anns_rep,
-                params_rep.get(f"{data_type}-lambda", None),
+                agg_sx,
+                anns,
+                agg_bbc_lambda.get(data_type),
                 sample,
                 data_type,
                 genome_size,
                 haplo_blocks=cnv_blocks,
                 wl_segments=wl_segments,
+                resolution="agg-bbc",
                 mask_cnp=False,
                 lab_type=plot_label,
                 filename=os.path.join(
                     dirs["scatter"],
-                    f"{out_prefix}.{platform}{rep_tag}"
-                    f".1d_scatter.{data_type}.{plot_label}.pdf",
+                    f"{out_prefix}.{platform}"
+                    f".1d_scatter_agg_bbc.{data_type}.{plot_label}.pdf",
                 ),
             )
-
-            if data_type in agg_bbc_data:
-                agg_df, X_agg, Y_agg, D_agg = agg_bbc_data[data_type]
-                agg_sx = build_bbc_sx(
-                    agg_df,
-                    X_agg,
-                    Y_agg,
-                    D_agg,
-                    seg_data_sources[data_type],
-                    rep_mask=rep_mask,
-                )
-                plot_rdr_baf_1d_pseudobulk(
-                    agg_sx,
-                    anns_rep,
-                    agg_bbc_lambda.get(data_type),
-                    sample,
-                    data_type,
-                    genome_size,
-                    haplo_blocks=cnv_blocks,
-                    wl_segments=wl_segments,
-                    resolution="agg-bbc",
-                    mask_cnp=False,
-                    lab_type=plot_label,
-                    filename=os.path.join(
-                        dirs["scatter"],
-                        f"{out_prefix}.{platform}{rep_tag}"
-                        f".1d_scatter_agg_bbc.{data_type}.{plot_label}.pdf",
-                    ),
-                )
 
     if args["umap"]:
         pass  # not yet implemented
 
-    # ---- Visium spatial plots (already per-rep) ----
+    # ---- Visium spatial plots (per-rep for spatial images) ----
+    rep_ids = anns["REP_ID"].unique()
     if platform in SPATIAL_PLATFORMS:
         gex_adata = adatas.get("gex", adatas[data_types[0]])
         anns_indexed = anns.set_index("BARCODE")
