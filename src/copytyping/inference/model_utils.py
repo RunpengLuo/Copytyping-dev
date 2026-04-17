@@ -1,18 +1,11 @@
 import logging
 
 import numpy as np
-
-from scipy.stats import (
-    zscore,
-    binom,
-)
-
 from scipy.optimize import minimize_scalar
+from scipy.special import betaln, gammaln
+from scipy.stats import binom, zscore
+
 from copytyping.sx_data.sx_data import SX_Data
-from copytyping.inference.likelihood_funcs import (
-    cond_betabin_logpmf_theta,
-    cond_negbin_logpmf_theta,
-)
 
 
 def compute_baseline_proportions(
@@ -281,3 +274,221 @@ def estimate_tumor_proportion_full(
 
     logging.info(f"  fitted {n_fitted}/{sx_data.N} spots")
     return theta_arr
+
+
+##################################################
+# Likelihood functions
+
+
+def cond_betabin_logpmf(
+    Y: np.ndarray,
+    D: np.ndarray,
+    tau: np.ndarray,
+    p: np.ndarray,
+) -> np.ndarray:
+    """Conditional BetaBinomial log-PMF: bb_ll_{g,n,k} = logP(Y_{g,n}|l_n=k;param).
+
+    Args:
+        Y: b-allele counts (G, N)
+        D: total-allele counts (G, N)
+        tau: dispersion (G,)
+        p: BAF (G, K)
+
+    Returns:
+        (G, N, K) log-likelihood array.
+    """
+    (G, N) = Y.shape
+    Y_gnk = Y[:, :, None]
+    D_gnk = D[:, :, None]
+    X_gnk = D_gnk - Y_gnk
+    tau_gnk = np.broadcast_to(np.atleast_1d(tau)[:, None, None], (G, 1, 1))
+    p_gnk = p[:, None, :]
+
+    a = tau_gnk * p_gnk
+    b = tau_gnk * (1.0 - p_gnk)
+
+    ll = (
+        gammaln(D_gnk + 1)
+        - gammaln(Y_gnk + 1)
+        - gammaln(X_gnk + 1)
+        + betaln(Y_gnk + a, X_gnk + b)
+        - betaln(a, b)
+    )
+    return ll
+
+
+def cond_negbin_logpmf(
+    X: np.ndarray,
+    T: np.ndarray,
+    pi_gk: np.ndarray,
+    inv_phi: np.ndarray,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    """Conditional NegBinomial log-PMF: nb_ll_{g,n,k} = logP(X_{g,n}|l_n=k;param).
+
+    Args:
+        X: (G, N) observed counts
+        T: (N,) library size
+        pi_gk: (G, K)
+        inv_phi: (G,)
+
+    Returns:
+        (G, N, K) log-likelihood array.
+    """
+    (G, N) = X.shape
+    K = pi_gk.shape[1]
+    mu_gnk = pi_gk[:, None, :] * T[None, :, None]
+    mu_gnk = np.clip(mu_gnk, eps, None)
+    X_gnk = X[:, :, None]
+
+    inv_phi = np.broadcast_to(np.atleast_1d(inv_phi)[:, None, None], (G, N, K))
+
+    ll = gammaln(X_gnk + inv_phi) - gammaln(inv_phi) - gammaln(X_gnk + 1.0)
+    ll += inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
+    ll += X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+    return ll
+
+
+def cond_betabin_logpmf_theta(
+    Y: np.ndarray,
+    D: np.ndarray,
+    tau: np.ndarray,
+    p: np.ndarray,
+    rdrs_gk: np.ndarray,
+    theta: np.ndarray,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    """Spot-level conditional BetaBinomial log-PMF with tumor purity.
+
+    p_hat = (theta * mu * p + 0.5*(1-theta)) / (theta*mu + 1 - theta)
+
+    Returns:
+        (G, N, K) log-likelihood array.
+    """
+    (G, N) = Y.shape
+    Y_gnk = Y[:, :, None]
+    D_gnk = D[:, :, None]
+    X_gnk = D_gnk - Y_gnk
+    tau_gnk = np.broadcast_to(np.atleast_1d(tau)[:, None, None], (G, 1, 1))
+    p_gnk = p[:, None, :]
+
+    rdrs_gnk = rdrs_gk[:, None, :]
+    theta_gnk = theta[None, :, None]
+
+    denom = rdrs_gnk * theta_gnk + (1.0 - theta_gnk)
+    num = p_gnk * rdrs_gnk * theta_gnk + 0.5 * (1.0 - theta_gnk)
+
+    p_hat = num / np.clip(denom, eps, None)
+    p_hat = np.clip(p_hat, eps, 1.0 - eps)
+
+    a = tau_gnk * p_hat
+    b = tau_gnk * (1.0 - p_hat)
+
+    ll = (
+        gammaln(D_gnk + 1)
+        - gammaln(Y_gnk + 1)
+        - gammaln(X_gnk + 1)
+        + betaln(Y_gnk + a, X_gnk + b)
+        - betaln(a, b)
+    )
+    return ll
+
+
+def cond_negbin_logpmf_theta(
+    X: np.ndarray,
+    T: np.ndarray,
+    lam_g: np.ndarray,
+    inv_phi: np.ndarray,
+    rdrs_gk: np.ndarray,
+    theta: np.ndarray,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    """Spot-level conditional NegBinomial log-PMF with tumor purity.
+
+    Returns:
+        (G, N, K) log-likelihood array.
+    """
+    (G, N) = X.shape
+    K = rdrs_gk.shape[1]
+
+    X_gnk = X[:, :, None]
+    T_gnk = T[None, :, None]
+    lam_gnk = lam_g[:, None, None]
+    rdrs_gnk = rdrs_gk[:, None, :]
+    theta_gnk = theta[None, :, None]
+    inv_phi = np.broadcast_to(np.atleast_1d(inv_phi)[:, None, None], (G, N, K))
+
+    mu_gnk = T_gnk * lam_gnk * (theta_gnk * rdrs_gnk + (1.0 - theta_gnk))
+    mu_gnk = np.clip(mu_gnk, eps, None)
+
+    ll = gammaln(X_gnk + inv_phi) - gammaln(inv_phi) - gammaln(X_gnk + 1.0)
+    ll += inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
+    ll += X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+    return ll
+
+
+##################################################
+# MLE fit functions
+
+
+def mle_invphi(
+    X_gnk, mu_gnk, weights, invphi_bounds=(1e-4, 1e8), prior=None, eps=1e-12
+):
+    """MAP estimate of NB inv_phi with optional Gamma(a, b) prior."""
+    mu_gnk = np.clip(mu_gnk, eps, None)
+
+    def neg_Q_invphi(invphi):
+        if invphi <= 0.0:
+            return np.inf
+        log_pmf = (
+            gammaln(X_gnk + invphi)
+            - gammaln(invphi)
+            - gammaln(X_gnk + 1.0)
+            + invphi * np.log(invphi / (invphi + mu_gnk))
+            + X_gnk * np.log(mu_gnk / (invphi + mu_gnk))
+        )
+        obj = -np.sum(weights * log_pmf)
+        if prior is not None:
+            a, b = prior
+            obj += -(a - 1) * np.log(invphi) + b * invphi
+        return obj
+
+    res = minimize_scalar(
+        neg_Q_invphi,
+        bounds=invphi_bounds,
+        method="bounded",
+        options={"xatol": 1e-8},
+    )
+    return float(np.clip(res.x, invphi_bounds[0], invphi_bounds[1]))
+
+
+def mle_tau(
+    Y_gnk,
+    D_gnk,
+    p_gnk,
+    weights,
+    logtau_bounds=(np.log(1e-4), np.log(1e8)),
+    prior=None,
+):
+    """MAP estimate of BB tau with optional Gamma(a, b) prior."""
+    X_gnk = D_gnk - Y_gnk
+    const = gammaln(D_gnk + 1.0) - gammaln(Y_gnk + 1.0) - gammaln(X_gnk + 1.0)
+
+    def neg_Q_logtau(logtau):
+        tau = np.exp(logtau)
+        alpha = tau * p_gnk
+        beta = tau * (1.0 - p_gnk)
+        log_pmf = const + betaln(Y_gnk + alpha, X_gnk + beta) - betaln(alpha, beta)
+        obj = -np.sum(weights * log_pmf)
+        if prior is not None:
+            a, b = prior
+            obj += -(a - 1) * logtau + b * tau
+        return obj
+
+    res = minimize_scalar(
+        neg_Q_logtau,
+        bounds=logtau_bounds,
+        method="bounded",
+        options={"xatol": 1e-6},
+    )
+    return float(np.exp(np.clip(res.x, logtau_bounds[0], logtau_bounds[1])))

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.special import gammaln
 
-from copytyping.inference.likelihood_funcs import (
+from copytyping.inference.model_utils import (
     cond_betabin_logpmf,
     cond_negbin_logpmf,
     cond_betabin_logpmf_theta,
@@ -17,6 +17,7 @@ from copytyping.inference.likelihood_funcs import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def bb_inputs(rng):
@@ -41,6 +42,7 @@ def nb_inputs(rng):
 # ---------------------------------------------------------------------------
 # cond_betabin_logpmf
 # ---------------------------------------------------------------------------
+
 
 def test_cond_betabin_logpmf_shape(bb_inputs):
     Y, D, tau, p = bb_inputs
@@ -73,6 +75,7 @@ def test_cond_betabin_logpmf_uniform_p(rng):
 # cond_negbin_logpmf
 # ---------------------------------------------------------------------------
 
+
 def test_cond_negbin_logpmf_shape(nb_inputs):
     X, T, pi_gk, inv_phi = nb_inputs
     G, N = X.shape
@@ -90,6 +93,7 @@ def test_cond_negbin_logpmf_values_not_nan(nb_inputs):
 # ---------------------------------------------------------------------------
 # theta variants
 # ---------------------------------------------------------------------------
+
 
 def test_cond_betabin_logpmf_theta_shape(rng):
     G, N, K = 6, 5, 3
@@ -118,6 +122,7 @@ def test_cond_negbin_logpmf_theta_shape(rng):
 # ---------------------------------------------------------------------------
 # mle_invphi
 # ---------------------------------------------------------------------------
+
 
 def test_mle_invphi_returns_scalar(rng):
     G, N, K = 5, 20, 3

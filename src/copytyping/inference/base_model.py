@@ -7,7 +7,7 @@ import pandas as pd
 
 from scipy.special import logsumexp
 
-from copytyping.inference.likelihood_funcs import mle_invphi, mle_tau
+from copytyping.inference.model_utils import mle_invphi, mle_tau
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.plot.plot_common import plot_loss
 from copytyping.sx_data.sx_data import SX_Data

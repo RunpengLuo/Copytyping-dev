@@ -5,15 +5,13 @@ from scipy.optimize import minimize_scalar
 from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
-from copytyping.inference.likelihood_funcs import (
-    cond_betabin_logpmf_theta,
-    cond_negbin_logpmf_theta,
-    mle_invphi,
-    mle_tau,
-)
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
+    cond_betabin_logpmf_theta,
+    cond_negbin_logpmf_theta,
     estimate_tumor_proportion,
+    mle_invphi,
+    mle_tau,
 )
 
 

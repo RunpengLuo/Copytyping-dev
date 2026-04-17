@@ -4,13 +4,13 @@ import numpy as np
 from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
-from copytyping.inference.likelihood_funcs import (
+from copytyping.inference.model_utils import (
+    clone_pi_gk,
     cond_betabin_logpmf,
     cond_negbin_logpmf,
     mle_invphi,
     mle_tau,
 )
-from copytyping.inference.model_utils import clone_pi_gk
 
 
 class Cell_Model(Base_Model):
