@@ -12,6 +12,7 @@ from copytyping.copytyping_parser import (
 )
 from copytyping.inference.cell_model import Cell_Model
 from copytyping.inference.inference_utils import (
+    adaptive_bin_bbc,
     annotate_adata_celltype,
     merge_celltype_into_barcodes,
 )
@@ -93,6 +94,7 @@ def run(args=None):
     data_sources = {}  # used by EM (seg or clust level)
     seg_data_sources = {}
     bbc_data_sources = {}
+    agg_bbc_data = {}
     adatas = {}
     for data_type in data_types:
         barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_data = load_modality_data(
@@ -115,6 +117,12 @@ def run(args=None):
         seg_sx = SX_Data(barcodes_df, seg_df, X_seg, Y_seg, D_seg)
         seg_data_sources[data_type] = seg_sx
         bbc_data_sources[data_type] = bbc_data
+        agg_bbc_data[data_type] = adaptive_bin_bbc(
+            bbc_data,
+            seg_sx.cnv_blocks,
+            args["min_snp_count"],
+            args["max_bin_length"],
+        )
 
         if aggr_mode == "clust":
             data_sources[data_type] = seg_sx.to_cluster_level()
@@ -378,34 +386,33 @@ def run(args=None):
                 ),
             )
 
-            if data_type in bbc_data_sources:
-                bbc_sx = build_bbc_sx(
-                    bbc_data_sources[data_type],
+            if data_type in agg_bbc_data:
+                agg_sx = build_bbc_sx(
+                    agg_bbc_data[data_type],
                     seg_data_sources[data_type],
                     rep_mask=rep_mask,
                 )
-                bbc_lambda = None
+                agg_lambda = None
                 if is_normal is not None:
-                    bbc_lambda = compute_baseline_proportions(
-                        bbc_sx.X, bbc_sx.T, is_normal[rep_mask]
+                    agg_lambda = compute_baseline_proportions(
+                        agg_sx.X, agg_sx.T, is_normal[rep_mask]
                     )
                 plot_rdr_baf_1d_pseudobulk(
-                    bbc_sx,
+                    agg_sx,
                     anns_rep,
-                    bbc_lambda,
+                    agg_lambda,
                     sample,
                     data_type,
                     genome_size,
                     haplo_blocks=cnv_blocks,
                     wl_segments=wl_segments,
-                    resolution="bbc",
+                    resolution="agg-bbc",
                     mask_cnp=False,
                     lab_type=plot_label,
-                    markersize=2,
                     filename=os.path.join(
                         dirs["scatter"],
                         f"{out_prefix}.{platform}{rep_tag}"
-                        f".1d_scatter_bbc.{data_type}.{plot_label}.pdf",
+                        f".1d_scatter_agg_bbc.{data_type}.{plot_label}.pdf",
                     ),
                 )
 

@@ -268,6 +268,20 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default=0.5,
     )
     parser.add_argument(
+        "--min_snp_count",
+        required=False,
+        type=int,
+        help="min SNP count per adaptive BBC bin (default: 300)",
+        default=300,
+    )
+    parser.add_argument(
+        "--max_bin_length",
+        required=False,
+        type=int,
+        help="max bin length (bp) for adaptive BBC binning (default: 5000000)",
+        default=5_000_000,
+    )
+    parser.add_argument(
         "--heatmap_agg",
         required=False,
         type=int,
