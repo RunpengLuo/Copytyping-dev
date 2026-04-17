@@ -30,7 +30,7 @@ def test_get_cnp_mask_keys(rng):
     G, K = 10, 3
     A, B, C = _make_acb(G, K, rng)
     mask = get_cnp_mask(A, B, C)
-    expected_keys = {"CNP", "IMBALANCED", "ANEUPLOID", "SUBCLONAL", "CLONAL_LOH", "SUBCLONAL_LOH", "NEUTRAL"}
+    expected_keys = {"CNP", "IMBALANCED", "CLONAL_IMBALANCED", "ANEUPLOID", "SUBCLONAL", "CLONAL_LOH", "SUBCLONAL_LOH", "NEUTRAL"}
     assert set(mask.keys()) == expected_keys
 
 

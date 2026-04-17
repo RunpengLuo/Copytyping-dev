@@ -11,14 +11,14 @@ from copytyping.inference.cell_model import Cell_Model
 # Helper: build a Cell_Model from a mock SX_Data
 # ---------------------------------------------------------------------------
 
-def _build_cell_model(make_sx_data_mock, assay_type="scRNA"):
+def _build_cell_model(make_sx_data_mock, data_type="gex"):
     sx = make_sx_data_mock(G=10, N=8, K=3)
     barcodes = pd.DataFrame({"BARCODE": [f"bc{i}" for i in range(sx.N)]})
     model = Cell_Model(
         barcodes=barcodes,
-        assay_type=assay_type,
-        data_types=[assay_type],
-        data_sources={assay_type: sx},
+        platform="single_cell",
+        data_types=[data_type],
+        data_sources={data_type: sx},
         work_dir=None,
         verbose=0,
     )
@@ -29,7 +29,7 @@ def _allele_only_params(model, sx):
     """Return a minimal params dict for allele_only mode."""
     return {
         "pi": np.ones(model.K) / model.K,
-        f"{model.assay_type}-tau": np.full(sx.nrows_imbalanced, 50.0, dtype=np.float32),
+        f"{model.data_types[0]}-tau": np.full(sx.nrows_imbalanced, 50.0, dtype=np.float32),
     }
 
 
@@ -38,9 +38,9 @@ def _hybrid_params(model, sx):
     lambda_g = sx.X.sum(axis=1) / (sx.T.sum() + 1e-12)
     return {
         "pi": np.ones(model.K) / model.K,
-        f"{model.assay_type}-tau": np.full(sx.nrows_imbalanced, 50.0, dtype=np.float32),
-        f"{model.assay_type}-inv_phi": np.full(sx.nrows_aneuploid, 1 / 30.0, dtype=np.float32),
-        f"{model.assay_type}-lambda": lambda_g.astype(np.float32),
+        f"{model.data_types[0]}-tau": np.full(sx.nrows_imbalanced, 50.0, dtype=np.float32),
+        f"{model.data_types[0]}-inv_phi": np.full(sx.nrows_aneuploid, 1 / 30.0, dtype=np.float32),
+        f"{model.data_types[0]}-lambda": lambda_g.astype(np.float32),
     }
 
 
@@ -89,18 +89,27 @@ def test_cell_model_compute_log_likelihood_hybrid(make_sx_data_mock):
 
 def test_cell_model_fit_runs_allele_only(make_sx_data_mock):
     model, sx = _build_cell_model(make_sx_data_mock)
-    init_params = {"tau0": 50.0, "phi0": 30.0}
-    fix_params = {"pi": True}  # keep pi fixed to avoid updating
+    init_params = {
+        "tau0": 50.0,
+        "phi0": 30.0,
+        "pi_alpha": 1.0,
+        "tau_prior_a": 2.0,
+        "tau_prior_b": 0.01,
+        "invphi_prior_a": 2.0,
+        "invphi_prior_b": 0.01,
+        "theta_prior_a": 2.0,
+        "theta_prior_b": 2.0,
+    }
+    fix_params = {"pi": True}
     params = model.fit(
         fit_mode="allele_only",
         fix_params=fix_params,
         init_params=init_params,
-        share_params={},
         max_iter=5,
     )
     assert isinstance(params, dict)
     assert "pi" in params
-    assert f"{model.assay_type}-tau" in params
+    assert f"{model.data_types[0]}-tau" in params
 
 
 # ---------------------------------------------------------------------------
