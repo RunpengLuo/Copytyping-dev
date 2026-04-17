@@ -11,6 +11,10 @@ from copytyping.copytyping_parser import (
     check_arguments_inference,
 )
 from copytyping.inference.cell_model import Cell_Model
+from copytyping.inference.inference_utils import (
+    annotate_adata_celltype,
+    merge_celltype_into_barcodes,
+)
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
@@ -33,7 +37,6 @@ from copytyping.plot.plot_common import (
 from copytyping.plot.plot_visium import plot_visium_debug, plot_visium_panel
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
-    NA_CELLTYPE,
     SPATIAL_PLATFORMS,
     add_file_logging,
     is_tumor_label,
@@ -102,24 +105,9 @@ def run(args=None):
         )
 
         if cell_type_df is not None:
-            barcodes_df = pd.merge(
-                left=barcodes_df,
-                right=cell_type_df[["BARCODE", ref_label]],
-                on="BARCODE",
-                how="left",
-                validate="1:1",
-                sort=False,
+            barcodes_df = merge_celltype_into_barcodes(
+                barcodes_df, cell_type_df, ref_label, data_type
             )
-            barcodes_df[ref_label] = (
-                barcodes_df[ref_label].fillna("Unknown").astype(str)
-            )
-            if barcodes_df[ref_label].isin(NA_CELLTYPE).all():
-                logging.warning(
-                    f"all {data_type} barcodes have "
-                    f"uninformative {ref_label} labels "
-                    f"(all in NA_CELLTYPE={NA_CELLTYPE})"
-                )
-                barcodes_df = barcodes_df.drop(columns=[ref_label])
 
         seg_sx = SX_Data(barcodes_df, seg_df, X_seg, Y_seg, D_seg)
         seg_data_sources[data_type] = seg_sx
@@ -133,15 +121,8 @@ def run(args=None):
         if args.get(f"{data_type}_h5ad") is not None:
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
             if cell_type_df is not None and ref_label in cell_type_df.columns:
-                ct_map = cell_type_df.set_index("BARCODE")[ref_label]
-                adata = adatas[data_type]
-                if ref_label in adata.obs.columns:
-                    logging.warning(
-                        f"overwriting existing '{ref_label}' column "
-                        f"in {data_type} h5ad obs with cell_type_df"
-                    )
-                adata.obs[ref_label] = (
-                    adata.obs_names.to_series().map(ct_map).fillna("Unknown").values
+                annotate_adata_celltype(
+                    adatas[data_type], cell_type_df, ref_label, data_type
                 )
 
     # Union barcodes across modalities and realign matrices
