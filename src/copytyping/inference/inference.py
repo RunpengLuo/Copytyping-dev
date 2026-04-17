@@ -236,6 +236,18 @@ def run(args=None):
                     )
                     model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
 
+    # Precompute agg-bbc baseline proportions (all barcodes, not per-rep)
+    agg_bbc_lambda = {}
+    for data_type in data_types:
+        if data_type in agg_bbc_data and is_normal is not None:
+            agg_df, X_agg, Y_agg, D_agg = agg_bbc_data[data_type]
+            agg_sx = build_bbc_sx(
+                agg_df, X_agg, Y_agg, D_agg, seg_data_sources[data_type]
+            )
+            agg_bbc_lambda[data_type] = compute_baseline_proportions(
+                agg_sx.X, agg_sx.T, is_normal
+            )
+
     metric = {}
     is_spot = platform in SPATIAL_PLATFORMS
     plot_label = f"{label}-purity_cutoff" if is_spot else label
@@ -398,15 +410,10 @@ def run(args=None):
                     seg_data_sources[data_type],
                     rep_mask=rep_mask,
                 )
-                agg_lambda = None
-                if is_normal is not None:
-                    agg_lambda = compute_baseline_proportions(
-                        agg_sx.X, agg_sx.T, is_normal[rep_mask]
-                    )
                 plot_rdr_baf_1d_pseudobulk(
                     agg_sx,
                     anns_rep,
-                    agg_lambda,
+                    agg_bbc_lambda.get(data_type),
                     sample,
                     data_type,
                     genome_size,
