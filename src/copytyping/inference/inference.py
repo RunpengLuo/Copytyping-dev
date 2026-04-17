@@ -228,11 +228,12 @@ def run(args=None):
 
     metric = {}
     is_spot = platform in SPATIAL_PLATFORMS
+    plot_label = f"{label}-purity_cutoff" if is_spot else label
     if ref_label in barcodes.columns:
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
         metric = evaluate_malignant_accuracy(
             anns,
-            cell_label=label,
+            cell_label=plot_label,
             cell_type=ref_label,
             tumor_post="tumor_purity" if is_spot else "tumor",
             skip_binary=is_spot,
@@ -296,10 +297,9 @@ def run(args=None):
         params_rep = subset_model_params(model_params, rep_mask, data_types)
         rep_tag = f".{rep_id}" if len(rep_ids) > 1 else ""
 
-        post_label = label
         if "max_posterior" in anns_rep.columns:
             logging.info(f"posterior statistics{rep_tag}:")
-            for grp, sub in anns_rep.groupby(post_label, sort=True):
+            for grp, sub in anns_rep.groupby(plot_label, sort=True):
                 mp = sub["max_posterior"].to_numpy()
                 md = sub["margin_delta"].to_numpy()
                 logging.info(
@@ -318,7 +318,7 @@ def run(args=None):
                     f"{out_prefix}.{platform}{rep_tag}.crosstab.png",
                 ),
                 metric=metric,
-                acol=label,
+                acol=plot_label,
                 bcol=ref_label,
             )
 
@@ -328,7 +328,7 @@ def run(args=None):
             for val in ["BAF", "log2RDR"]:
                 if val == "log2RDR" and f"{data_type}-lambda" not in params_rep:
                     continue
-                for my_label in [label, ref_label]:
+                for my_label in [plot_label, ref_label]:
                     if my_label not in anns_rep:
                         continue
                     agg_levels = [
@@ -360,7 +360,6 @@ def run(args=None):
                         )
 
             # Segment-level 1D scatter
-            scatter_label = f"{label}-purity_cutoff" if is_spot else label
             plot_rdr_baf_1d_pseudobulk(
                 sx_rep,
                 anns_rep,
@@ -371,11 +370,11 @@ def run(args=None):
                 haplo_blocks=cnv_blocks,
                 wl_segments=wl_segments,
                 mask_cnp=False,
-                lab_type=scatter_label,
+                lab_type=plot_label,
                 filename=os.path.join(
                     dirs["scatter"],
                     f"{out_prefix}.{platform}{rep_tag}"
-                    f".1d_scatter.{data_type}.{scatter_label}.pdf",
+                    f".1d_scatter.{data_type}.{plot_label}.pdf",
                 ),
             )
 
@@ -401,12 +400,12 @@ def run(args=None):
                     wl_segments=wl_segments,
                     resolution="bbc",
                     mask_cnp=False,
-                    lab_type=scatter_label,
+                    lab_type=plot_label,
                     markersize=2,
                     filename=os.path.join(
                         dirs["scatter"],
                         f"{out_prefix}.{platform}{rep_tag}"
-                        f".1d_scatter_bbc.{data_type}.{scatter_label}.pdf",
+                        f".1d_scatter_bbc.{data_type}.{plot_label}.pdf",
                     ),
                 )
 
