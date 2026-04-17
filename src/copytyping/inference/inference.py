@@ -147,12 +147,7 @@ def run(args=None):
         os.path.join(out_dir, f"{out_prefix}.cnp_profile.tsv"),
     )
 
-    method = args["method"]
-    fit_mode = args.get("fit_mode", "hybrid")
-    label = f"{method}-label"
-    num_iters = args["niters"]
-    posterior_thres = args["posterior_thres"]
-    margin_thres = args["margin_thres"]
+    label = f'{args["method"]}-label'
 
     init_params, fix_params = prepare_params(
         args, cnv_blocks, platform, data_types, SPATIAL_PLATFORMS
@@ -177,17 +172,17 @@ def run(args=None):
         hard_em=args.get("hard_em", False),
     )
     model_params = instance.fit(
-        fit_mode,
+        fit_mode=args["fit_mode"],
         fix_params=fix_params,
         init_params=init_params,
-        max_iter=num_iters,
+        max_iter=args["niters"],
     )
     anns, clone_props = instance.predict(
-        fit_mode,
+        args["fit_mode"],
         model_params,
         label=label,
-        posterior_thres=posterior_thres,
-        margin_thres=margin_thres,
+        posterior_thres=args["posterior_thres"],
+        margin_thres=args["margin_thres"],
         purity_threshold=args["purity_threshold"],
     )
     logging.info(
