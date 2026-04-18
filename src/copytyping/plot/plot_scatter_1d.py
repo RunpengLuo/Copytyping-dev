@@ -354,7 +354,11 @@ def plot_rdr_baf_1d_pseudobulk(
             linewidth=0.5,
             colors="k",
         )
-        if exp_bafs is not None and cell_label != "NA" and hasattr(sx_data, "clones"):
+        if (
+            exp_bafs is not None
+            and hasattr(sx_data, "clones")
+            and cell_label in sx_data.clones
+        ):
             clone_idx = sx_data.clones.index(cell_label)
             clone_baf = exp_bafs[:, clone_idx]
             ax_baf.add_collection(
