@@ -164,9 +164,17 @@ def plot_rdr_baf_1d_pseudobulk(
 
     linecolor = (0, 0, 0, 1)
 
-    # Order labels: normal, clone1, clone2, ... (skip NA)
-    ordered_labels = [x for x in ["normal"] if x in uniq_cell_labels] + sorted(
-        [x for x in uniq_cell_labels if x.startswith("clone")]
+    # Order labels: normal first, then clone*, then other non-NA labels
+    ordered_labels = (
+        [x for x in ["normal"] if x in uniq_cell_labels]
+        + sorted([x for x in uniq_cell_labels if x.startswith("clone")])
+        + sorted(
+            [
+                x
+                for x in uniq_cell_labels
+                if x != "normal" and not x.startswith("clone") and x != "NA"
+            ]
+        )
     )
     rdr_label = "log2RDR" if log2 else "RDR"
     default_color = "grey"
