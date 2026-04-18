@@ -178,17 +178,16 @@ def run(args=None):
     is_normal = (anns[hard_label] == "normal").to_numpy()
     if is_normal.sum() == 0:
         is_normal = None
-    if aggr_mode == "clust":
-        for data_type in data_types:
-            clust_obj = data_sources[data_type]
-            if not hasattr(clust_obj, "cluster_ids"):
-                continue
-            seg_sx = seg_data_sources[data_type]
-            lam_key = f"{data_type}-lambda"
-            if lam_key in model_params and is_normal is not None:
-                model_params[lam_key] = compute_baseline_proportions(
-                    seg_sx.X, seg_sx.T, is_normal
-                )
+    # Compute segment-level baseline proportions from predicted normal labels
+    seg_lambda = {}
+    for data_type in data_types:
+        seg_sx = seg_data_sources[data_type]
+        if is_normal is not None:
+            seg_lambda[data_type] = compute_baseline_proportions(
+                seg_sx.X, seg_sx.T, is_normal
+            )
+        elif f"{data_type}-lambda" in model_params:
+            seg_lambda[data_type] = model_params[f"{data_type}-lambda"]
 
     # Compute agg-bbc baseline proportions
     agg_bbc_lambda = {}
@@ -280,7 +279,7 @@ def run(args=None):
     for data_type in data_types:
         seg_sx = seg_data_sources[data_type]
         for val in ["BAF", "log2RDR"]:
-            if val == "log2RDR" and f"{data_type}-lambda" not in model_params:
+            if val == "log2RDR" and data_type not in seg_lambda:
                 continue
             for my_label in [hard_label, ref_label]:
                 if my_label not in anns:
@@ -299,7 +298,7 @@ def run(args=None):
                         wl_segments,
                         proportions=model_params.get(f"{data_type}-theta", None),
                         val=val,
-                        base_props=model_params.get(f"{data_type}-lambda", None),
+                        base_props=seg_lambda.get(data_type),
                         agg_size=agg,
                         lab_type=my_label,
                         filename=os.path.join(
@@ -317,7 +316,7 @@ def run(args=None):
         plot_rdr_baf_1d_pseudobulk(
             seg_sx,
             anns,
-            model_params.get(f"{data_type}-lambda", None),
+            seg_lambda.get(data_type),
             sample,
             data_type,
             genome_size,
