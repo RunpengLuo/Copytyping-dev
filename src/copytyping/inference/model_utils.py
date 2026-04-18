@@ -31,6 +31,7 @@ def prepare_params(args, cnv_blocks, platform, data_types, spatial_platforms):
         "invphi_prior_b": invphi_prior_b,
         "theta_prior_a": args["theta_prior_a"],
         "theta_prior_b": args["theta_prior_b"],
+        "purity_min": args.get("purity_min", 0.1),
     }
     fix_params = {"pi": False}
     for data_type in data_types:

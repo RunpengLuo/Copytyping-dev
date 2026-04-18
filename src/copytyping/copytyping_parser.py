@@ -268,6 +268,13 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default=0.5,
     )
     parser.add_argument(
+        "--purity_min",
+        required=False,
+        type=float,
+        help="min purity for tumor-gated spots (default: 0.1)",
+        default=0.1,
+    )
+    parser.add_argument(
         "--min_snp_count",
         required=False,
         type=int,
