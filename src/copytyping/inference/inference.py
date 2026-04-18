@@ -263,7 +263,11 @@ def run(args=None):
             bcol=ref_label,
         )
 
-    scatter_subtitle = f"min_snp_count={min_snp_agg_bbc}  max_bin_length={max_len_agg_bbc / 1e6:.1f}Mbp"
+    purity_thres = args["purity_threshold"]
+    scatter_subtitle = (
+        f"min_snp_count={min_snp_agg_bbc}  max_bin_length={max_len_agg_bbc / 1e6:.1f}Mbp"
+        f"  purity_threshold={purity_thres}"
+    )
     plot_labels = [lb for lb in [hard_label, ref_label] if lb in anns]
 
     for data_type in data_types:
@@ -319,6 +323,7 @@ def run(args=None):
                     f".1d_scatter_agg_bbc.{data_type}.{my_label}.pdf",
                 ),
                 subtitle=scatter_subtitle,
+                platform=platform,
             )
 
     if args["umap"]:

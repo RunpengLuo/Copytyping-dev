@@ -388,8 +388,7 @@ def plot_rdr_baf_1d_pseudobulk(
     plot_cnv_legend(axes[-1])
 
     title = (
-        f"sample={sample}  data_type={data_type}"
-        f"  resolution={resolution}  label={lab_type}"
+        f"sample={sample}  platform={kwargs.get('platform', '')}  data_type={data_type}"
     )
     if kwargs.get("subtitle"):
         title += f"\n{kwargs['subtitle']}"
