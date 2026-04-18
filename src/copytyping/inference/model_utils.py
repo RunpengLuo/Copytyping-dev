@@ -8,14 +8,10 @@ from scipy.stats import binom, zscore
 from copytyping.sx_data.sx_data import SX_Data
 
 
-def prepare_params(args, cnv_blocks, platform, data_types, spatial_platforms):
+def prepare_params(args, cnv_blocks, platform, data_types):
     """Build init_params and fix_params dicts from CLI args and CNV profile."""
     bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
-    if platform in spatial_platforms:
-        pi_init = bulk_props[1:]
-        pi_init = pi_init / pi_init.sum()
-    else:
-        pi_init = bulk_props
+    pi_init = bulk_props
     tau_prior_a = args["tau_prior_a"]
     tau_prior_b = args["tau_prior_b"]
     invphi_prior_a = args["invphi_prior_a"]

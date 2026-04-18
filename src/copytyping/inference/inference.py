@@ -139,9 +139,7 @@ def run(args=None):
     barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
 
     cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
-    init_params, fix_params = prepare_params(
-        args, cnv_blocks, platform, data_types, SPATIAL_PLATFORMS
-    )
+    init_params, fix_params = prepare_params(args, cnv_blocks, platform, data_types)
 
     instance = {"single_cell": Cell_Model, "spatial": Spot_Model}[platform](
         barcodes,
