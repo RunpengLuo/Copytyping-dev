@@ -262,19 +262,22 @@ def run(args=None):
         )
 
     # Per-data_type plots (all reps combined)
+    min_snp = args["min_snp_count"]
+    max_len = args["max_bin_length"]
+    scatter_subtitle = f"min_snp_count={min_snp}  max_bin_length={max_len:,}"
+    plot_labels = [lb for lb in [hard_label, ref_label] if lb in anns]
+
     for data_type in data_types:
         seg_sx = seg_data_sources[data_type]
-        for val in ["BAF", "log2RDR"]:
-            if val == "log2RDR" and data_type not in seg_lambda:
-                continue
-            for my_label in [hard_label, ref_label]:
-                if my_label not in anns:
+        for my_label in plot_labels:
+            # Heatmaps
+            for val in ["BAF", "log2RDR"]:
+                if val == "log2RDR" and data_type not in seg_lambda:
                     continue
-                agg_levels = [
+                for agg, agg_dir in [
                     (1, dirs["heatmap_agg1"]),
                     (agg_size, dirs["heatmap_aggx"]),
-                ]
-                for agg, agg_dir in agg_levels:
+                ]:
                     plot_cnv_heatmap(
                         sample,
                         data_type,
@@ -298,28 +301,26 @@ def run(args=None):
                         transparent=transparent,
                     )
 
-        # Agg-BBC 1D scatter
-        min_snp = args["min_snp_count"]
-        max_len = args["max_bin_length"]
-        plot_rdr_baf_1d_pseudobulk(
-            agg_bbc_data_sources[data_type],
-            anns,
-            agg_bbc_lambda.get(data_type),
-            sample,
-            data_type,
-            genome_size,
-            haplo_blocks=cnv_blocks,
-            wl_segments=wl_segments,
-            resolution="agg-bbc",
-            mask_cnp=False,
-            lab_type=hard_label,
-            filename=os.path.join(
-                dirs["scatter"],
-                f"{out_prefix}.{platform}"
-                f".1d_scatter_agg_bbc.{data_type}.{hard_label}.pdf",
-            ),
-            subtitle=f"min_snp_count={min_snp}  max_bin_length={max_len:,}",
-        )
+            # Agg-BBC 1D scatter
+            plot_rdr_baf_1d_pseudobulk(
+                agg_bbc_data_sources[data_type],
+                anns,
+                agg_bbc_lambda.get(data_type),
+                sample,
+                data_type,
+                genome_size,
+                haplo_blocks=cnv_blocks,
+                wl_segments=wl_segments,
+                resolution="agg-bbc",
+                mask_cnp=False,
+                lab_type=my_label,
+                filename=os.path.join(
+                    dirs["scatter"],
+                    f"{out_prefix}.{platform}"
+                    f".1d_scatter_agg_bbc.{data_type}.{my_label}.pdf",
+                ),
+                subtitle=scatter_subtitle,
+            )
 
     if args["umap"]:
         pass  # not yet implemented
