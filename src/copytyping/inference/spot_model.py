@@ -9,7 +9,7 @@ from copytyping.inference.model_utils import (
     clone_rdr_gk,
     cond_betabin_logpmf_theta,
     cond_negbin_logpmf_theta,
-    estimate_tumor_proportion,
+    estimate_tumor_proportion_bin,
     mle_invphi,
     mle_tau,
 )
@@ -70,7 +70,7 @@ class Spot_Model(Base_Model):
 
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
-            params[f"{data_type}-theta"] = estimate_tumor_proportion(
+            params[f"{data_type}-theta"] = estimate_tumor_proportion_bin(
                 sx_data, params[f"{data_type}-lambda"]
             )
 
