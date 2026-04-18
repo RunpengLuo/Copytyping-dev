@@ -350,13 +350,16 @@ class Spot_Model(Base_Model):
 
         anns[label] = anns[tumor_clones].idxmax(axis=1)
 
-        clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in tumor_clones}
-
         # Purity-based label: low purity spots → "normal", rest → MAP clone
         purity_label = f"{label}-purity_cutoff"
         anns[purity_label] = anns[label]
         if purity_threshold is not None and purity_threshold > 0:
             low_purity = anns["tumor_purity"] < purity_threshold
             anns.loc[low_purity, purity_label] = "normal"
+
+        all_labels = ["normal"] + list(tumor_clones)
+        clone_props = {
+            c: np.mean(anns[purity_label].to_numpy() == c) for c in all_labels
+        }
 
         return anns, clone_props
