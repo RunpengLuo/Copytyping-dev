@@ -54,9 +54,17 @@ def _build_ch_boundary(
 
 
 def _merge_exp_lines(abs_starts, abs_ends, exp_vals, chrs):
-    """Merge adjacent bins with the same expected value into one line segment."""
+    """Merge adjacent bins with the same expected value into one line segment.
+
+    Skips bins with NaN positions (outside whitelist regions).
+    """
+    valid = np.isfinite(abs_starts) & np.isfinite(abs_ends)
+    abs_starts = np.asarray(abs_starts)[valid]
+    abs_ends = np.asarray(abs_ends)[valid]
+    exp_vals = np.asarray(exp_vals)[valid]
+    chr_arr = np.asarray(chrs)[valid]
+
     lines = []
-    chr_arr = np.asarray(chrs)
     n = len(exp_vals)
     i = 0
     while i < n:
