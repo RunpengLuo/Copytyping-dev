@@ -93,6 +93,7 @@ def plot_rdr_baf_1d_pseudobulk(
     mask_cnp=True,
     mask_id="CNP",
     lab_type="cell_label",
+    is_inferred=True,
     figsize=(20, 4),
     filename=None,
     log2=True,
@@ -164,18 +165,22 @@ def plot_rdr_baf_1d_pseudobulk(
 
     linecolor = (0, 0, 0, 1)
 
-    # Order labels: normal first, then clone*, then other non-NA labels
-    ordered_labels = (
-        [x for x in ["normal"] if x in uniq_cell_labels]
-        + sorted([x for x in uniq_cell_labels if x.startswith("clone")])
-        + sorted(
-            [
-                x
-                for x in uniq_cell_labels
-                if x != "normal" and not x.startswith("clone") and x != "NA"
-            ]
+    if is_inferred:
+        # Order: normal, clone1, clone2, ..., then other non-NA labels
+        ordered_labels = (
+            [x for x in ["normal"] if x in uniq_cell_labels]
+            + sorted([x for x in uniq_cell_labels if x.startswith("clone")])
+            + sorted(
+                [
+                    x
+                    for x in uniq_cell_labels
+                    if x != "normal" and not x.startswith("clone") and x != "NA"
+                ]
+            )
         )
-    )
+    else:
+        # External label: keep original order, skip NA
+        ordered_labels = [x for x in uniq_cell_labels if x != "NA"]
     rdr_label = "log2RDR" if log2 else "RDR"
     default_color = "grey"
 
@@ -229,7 +234,8 @@ def plot_rdr_baf_1d_pseudobulk(
         bin_colors = [default_color] * len(cnv_blocks)
         clone_C_full = None
         if (
-            cell_label != "NA"
+            is_inferred
+            and cell_label != "NA"
             and hasattr(sx_data, "clones")
             and cell_label in sx_data.clones
         ):
@@ -355,7 +361,8 @@ def plot_rdr_baf_1d_pseudobulk(
             colors="k",
         )
         if (
-            exp_bafs is not None
+            is_inferred
+            and exp_bafs is not None
             and hasattr(sx_data, "clones")
             and cell_label in sx_data.clones
         ):

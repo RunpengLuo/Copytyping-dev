@@ -317,6 +317,7 @@ def run(args=None):
                 resolution="agg-bbc",
                 mask_cnp=False,
                 lab_type=my_label,
+                is_inferred=(my_label == hard_label),
                 filename=os.path.join(
                     dirs["scatter"],
                     f"{out_prefix}.{platform}"
