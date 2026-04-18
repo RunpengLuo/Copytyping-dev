@@ -2,7 +2,6 @@ import argparse
 import logging
 import os
 
-import numpy as np
 import pandas as pd
 import scanpy as sc
 
@@ -247,18 +246,6 @@ def run(args=None):
     img_type = args["img_type"]
     dpi = args["dpi"]
     transparent = args["transparent"]
-
-    # Posterior statistics
-    logging.info("posterior statistics:")
-        for grp, sub in anns.groupby(hard_label, sort=True):
-            mp = sub["max_posterior"].to_numpy()
-            md = sub["margin_delta"].to_numpy()
-            logging.info(
-                f"  {grp:8s} (n={len(sub):4d}): "
-                f"max_post min={mp.min():.3f} mean={mp.mean():.3f} "
-                f"median={np.median(mp):.3f} max={mp.max():.3f}  "
-                f"margin min={md.min():.3f} mean={md.mean():.3f}"
-            )
 
     # Crosstab (all spots/cells)
     if ref_label in anns.columns:

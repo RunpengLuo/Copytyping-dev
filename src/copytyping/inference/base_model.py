@@ -338,7 +338,21 @@ class Base_Model:
         clone_props = {
             clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones
         }
+        self._log_posterior_stats(anns, label)
         return anns, clone_props
+
+    def _log_posterior_stats(self, anns, group_label):
+        """Log per-group posterior statistics."""
+        logging.info("posterior statistics:")
+        for grp, sub in anns.groupby(group_label, sort=True):
+            mp = sub["max_posterior"].to_numpy()
+            md = sub["margin_delta"].to_numpy()
+            logging.info(
+                f"  {grp:8s} (n={len(sub):4d}): "
+                f"max_post min={mp.min():.3f} mean={mp.mean():.3f} "
+                f"median={np.median(mp):.3f} max={mp.max():.3f}  "
+                f"margin min={md.min():.3f} mean={md.mean():.3f}"
+            )
 
     # ------------------------------------------------------------------
     # Utilities

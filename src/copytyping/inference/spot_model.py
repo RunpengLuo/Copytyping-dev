@@ -361,5 +361,5 @@ class Spot_Model(Base_Model):
         clone_props = {
             c: np.mean(anns[purity_label].to_numpy() == c) for c in all_labels
         }
-
+        self._log_posterior_stats(anns, purity_label)
         return anns, clone_props
