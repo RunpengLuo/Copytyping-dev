@@ -249,8 +249,7 @@ def run(args=None):
     transparent = args["transparent"]
 
     # Posterior statistics
-    if "max_posterior" in anns.columns:
-        logging.info("posterior statistics:")
+    logging.info("posterior statistics:")
         for grp, sub in anns.groupby(hard_label, sort=True):
             mp = sub["max_posterior"].to_numpy()
             md = sub["margin_delta"].to_numpy()
