@@ -89,9 +89,6 @@ def plot_rdr_baf_1d_pseudobulk(
     genome_file: str,
     haplo_blocks: pd.DataFrame = None,
     wl_segments: pd.DataFrame = None,
-    resolution: str = "seg",
-    mask_cnp=True,
-    mask_id="CNP",
     lab_type="cell_label",
     is_inferred=True,
     figsize=(20, 4),
@@ -106,29 +103,13 @@ def plot_rdr_baf_1d_pseudobulk(
     Observed BAF = y_{g,n} / D_{g,n}
     """
     chrom_sizes = get_chr_sizes(genome_file)
-    cnv_blocks = sx_data.cnv_blocks
-    if mask_cnp:
-        cnv_blocks = cnv_blocks.loc[sx_data.MASK[mask_id], :]
-
+    cnv_blocks = sx_data.cnv_blocks.copy(deep=True)
     exp_bafs = getattr(sx_data, "BAF", None)
-    if exp_bafs is not None and mask_cnp:
-        exp_bafs = exp_bafs[sx_data.MASK[mask_id], :]
-
-    cnv_blocks = cnv_blocks.copy(deep=True)
 
     X = sx_data.X
     Y = sx_data.Y
     D = sx_data.D
     T = sx_data.T
-    if mask_cnp:
-        mask = sx_data.MASK[mask_id]
-        X = X[mask]
-        Y = Y[mask]
-        D = D[mask]
-
-    masked_base_props = base_props
-    if masked_base_props is not None and mask_cnp:
-        masked_base_props = masked_base_props[sx_data.MASK[mask_id]]
 
     cell_labels = anns[lab_type].tolist()
     uniq_cell_labels = anns[lab_type].unique()
@@ -240,29 +221,21 @@ def plot_rdr_baf_1d_pseudobulk(
             and cell_label in sx_data.clones
         ):
             clone_idx = sx_data.clones.index(cell_label)
-            C_normal_full = np.maximum(sx_data.C[:, 0], 1).astype(np.float64)
             clone_C_full = sx_data.C[:, clone_idx].astype(np.float64)
             clone_A = sx_data.A[:, clone_idx]
             clone_B = sx_data.B[:, clone_idx]
-            if mask_cnp:
-                C_normal_full = C_normal_full[sx_data.MASK[mask_id]]
-                clone_C_full = clone_C_full[sx_data.MASK[mask_id]]
-                clone_A = clone_A[sx_data.MASK[mask_id]]
-                clone_B = clone_B[sx_data.MASK[mask_id]]
             bin_colors = [
                 state_style.get((int(a), int(b)), state_style["default"])
                 for a, b in zip(clone_A, clone_B)
             ]
 
         # ── RDR panel ──
-        if masked_base_props is not None:
+        if base_props is not None:
             agg_x = np.sum(X[:, barcode_idxs], axis=1).astype(np.float64)
             agg_T = np.sum(T[barcode_idxs]).astype(np.float64)
-            rdr_valid = masked_base_props > 0
+            rdr_valid = base_props > 0
             obs_rdr = np.full(len(agg_x), np.nan)
-            obs_rdr[rdr_valid] = agg_x[rdr_valid] / (
-                agg_T * masked_base_props[rdr_valid]
-            )
+            obs_rdr[rdr_valid] = agg_x[rdr_valid] / (agg_T * base_props[rdr_valid])
             if log2:
                 log2_mask = rdr_valid & (obs_rdr > 0)
                 obs_rdr[log2_mask] = np.log2(obs_rdr[log2_mask])
@@ -292,8 +265,6 @@ def plot_rdr_baf_1d_pseudobulk(
             exp_vals = None
             if clone_C_full is not None:
                 C_normal = np.maximum(sx_data.C[:, 0], 1).astype(np.float64)
-                if mask_cnp:
-                    C_normal = C_normal[sx_data.MASK[mask_id]]
                 exp_vals = clone_C_full / C_normal
                 if log2:
                     exp_vals = np.log2(np.maximum(exp_vals, 1e-6))

@@ -314,8 +314,6 @@ def run(args=None):
                 genome_size,
                 haplo_blocks=cnv_blocks,
                 wl_segments=wl_segments,
-                resolution="agg-bbc",
-                mask_cnp=False,
                 lab_type=my_label,
                 is_inferred=(my_label == hard_label),
                 filename=os.path.join(
