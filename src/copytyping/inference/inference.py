@@ -81,7 +81,9 @@ def run(args=None):
         assert "BARCODE" in cell_type_df.columns
         assert ref_label in cell_type_df.columns
 
-    aggr_mode = args.get("aggr_mode", "clust")
+    min_snp_agg_bbc = args["min_snp_count"]
+    max_len_agg_bbc = args["max_bin_length"]
+    aggr_mode = args["aggr_mode"]
     data_sources = {}  # used by EM (seg or clust level)
     seg_data_sources = {}
     agg_bbc_data_sources = {}
@@ -114,8 +116,8 @@ def run(args=None):
             Y_bbc,
             D_bbc,
             seg_sx,
-            args["min_snp_count"],
-            args["max_bin_length"],
+            min_snp_agg_bbc,
+            max_len_agg_bbc,
         )
 
         data_sources[data_type] = (
@@ -261,10 +263,7 @@ def run(args=None):
             bcol=ref_label,
         )
 
-    # Per-data_type plots (all reps combined)
-    min_snp = args["min_snp_count"]
-    max_len = args["max_bin_length"]
-    scatter_subtitle = f"min_snp_count={min_snp}  max_bin_length={max_len:,}"
+    scatter_subtitle = f"min_snp_count={min_snp_agg_bbc}  max_bin_length={max_len_agg_bbc / 1e6:.1f}Mbp"
     plot_labels = [lb for lb in [hard_label, ref_label] if lb in anns]
 
     for data_type in data_types:
