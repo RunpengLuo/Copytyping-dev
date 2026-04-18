@@ -298,43 +298,28 @@ def run(args=None):
                         transparent=transparent,
                     )
 
-        # Segment-level 1D scatter
+        # Agg-BBC 1D scatter
+        min_snp = args["min_snp_count"]
+        max_len = args["max_bin_length"]
         plot_rdr_baf_1d_pseudobulk(
-            seg_sx,
+            agg_bbc_data_sources[data_type],
             anns,
-            seg_lambda.get(data_type),
+            agg_bbc_lambda.get(data_type),
             sample,
             data_type,
             genome_size,
             haplo_blocks=cnv_blocks,
             wl_segments=wl_segments,
+            resolution="agg-bbc",
             mask_cnp=False,
             lab_type=hard_label,
             filename=os.path.join(
                 dirs["scatter"],
-                f"{out_prefix}.{platform}.1d_scatter.{data_type}.{hard_label}.pdf",
+                f"{out_prefix}.{platform}"
+                f".1d_scatter_agg_bbc.{data_type}.{hard_label}.pdf",
             ),
+            subtitle=f"min_snp_count={min_snp}  max_bin_length={max_len:,}",
         )
-
-        if data_type in agg_bbc_data_sources:
-            plot_rdr_baf_1d_pseudobulk(
-                agg_bbc_data_sources[data_type],
-                anns,
-                agg_bbc_lambda.get(data_type),
-                sample,
-                data_type,
-                genome_size,
-                haplo_blocks=cnv_blocks,
-                wl_segments=wl_segments,
-                resolution="agg-bbc",
-                mask_cnp=False,
-                lab_type=hard_label,
-                filename=os.path.join(
-                    dirs["scatter"],
-                    f"{out_prefix}.{platform}"
-                    f".1d_scatter_agg_bbc.{data_type}.{hard_label}.pdf",
-                ),
-            )
 
     if args["umap"]:
         pass  # not yet implemented

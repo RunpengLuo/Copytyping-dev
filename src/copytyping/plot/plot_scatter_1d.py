@@ -5,7 +5,11 @@ from collections import OrderedDict
 from matplotlib.collections import LineCollection
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
-from copytyping.plot.plot_copynumber import get_cn_colors, plot_cnv_legend, plot_cnv_profile
+from copytyping.plot.plot_copynumber import (
+    get_cn_colors,
+    plot_cnv_legend,
+    plot_cnv_profile,
+)
 from copytyping.plot.plot_common import build_wl_coords
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import get_chr_sizes
@@ -375,6 +379,8 @@ def plot_rdr_baf_1d_pseudobulk(
         f"sample={sample}  data_type={data_type}"
         f"  resolution={resolution}  label={lab_type}"
     )
+    if kwargs.get("subtitle"):
+        title += f"\n{kwargs['subtitle']}"
     fig.suptitle(title, fontsize=12, fontweight="bold", y=1.02)
     fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
