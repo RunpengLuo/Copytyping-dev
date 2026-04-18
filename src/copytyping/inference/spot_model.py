@@ -63,7 +63,7 @@ class Spot_Model(Base_Model):
         self._init_is_normal = is_normal
 
         params = {
-            "pi": init_params.get("pi", np.ones(self.K_tumor) / self.K_tumor),
+            "pi": init_params.get("pi", np.ones(self.K) / self.K),
         }
 
         self._init_lambda(params, is_normal)
@@ -102,7 +102,7 @@ class Spot_Model(Base_Model):
 
     def compute_log_likelihood(self, fit_mode, params):
         N_t = self._N_tumor
-        global_lls = np.zeros((N_t, self.K_tumor), dtype=np.float32)
+        global_lls = np.zeros((N_t, self.K), dtype=np.float32)
         tumor_idx = self._tumor_idx
 
         for data_type in self.data_types:
@@ -111,7 +111,7 @@ class Spot_Model(Base_Model):
             tumor_mask_n = mask_n[tumor_idx]
 
             lambda_g = params[f"{data_type}-lambda"]
-            rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
+            rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
             theta_tumor = params[f"{data_type}-theta"][tumor_idx]
 
             allele_mask = sx_data.MASK[self.allele_mask_id] & (lambda_g > 0)
@@ -128,7 +128,7 @@ class Spot_Model(Base_Model):
                     MA["Y"][:, tumor_idx],
                     MA["D"][:, tumor_idx],
                     tau_valid,
-                    MA["BAF"][:, 1:],
+                    MA["BAF"],
                     rdrs_gk[allele_mask],
                     theta_tumor,
                 )
@@ -160,15 +160,19 @@ class Spot_Model(Base_Model):
         N_t = self._N_tumor
         tumor_idx = self._tumor_idx
 
-        self._update_pi(gamma, params, fix_params, N_t, self.K_tumor)
+        self._update_pi(gamma, params, fix_params, N_t, self.K)
 
-        gamma_gnk = gamma[None, :, :]
+        # Tumor-only gamma for dispersion/theta updates
+        gamma_tumor = gamma[:, 1:]
+        gamma_tumor_sum = gamma_tumor.sum(axis=1, keepdims=True)
+        gamma_tumor_norm = gamma_tumor / np.maximum(gamma_tumor_sum, eps)
+        gamma_gnk = gamma_tumor_norm[None, :, :]
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
             lambda_g = params[f"{data_type}-lambda"]
             theta = params[f"{data_type}-theta"]
             theta_t = theta[tumor_idx]  # (N_tumor,)
-            rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
+            rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)
 
             # BB tau update
             if (
@@ -179,7 +183,7 @@ class Spot_Model(Base_Model):
                 allele_mask = sx_data.MASK[self.allele_mask_id] & (lambda_g > 0)
                 baf_gk = sx_data.BAF[:, 1:]
                 # theta-adjusted BAF: p = (theta*rdr*BAF + 0.5*(1-theta)) / (theta*rdr + (1-theta))
-                rdr_bb = rdrs_gk[allele_mask]  # (G_bb, K_tumor)
+                rdr_bb = rdrs_gk[allele_mask, 1:]  # (G_bb, K_tumor)
                 baf_bb = baf_gk[allele_mask]  # (G_bb, K_tumor)
                 p_gnk = (
                     theta_t[None, :, None] * rdr_bb[:, None, :] * baf_bb[:, None, :]
@@ -211,7 +215,7 @@ class Spot_Model(Base_Model):
                 and sx_data.MASK[self.total_mask_id].sum() > 0
             ):
                 total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
-                rdr_nb = rdrs_gk[total_mask]  # (G_nb, K_tumor)
+                rdr_nb = rdrs_gk[total_mask, 1:]  # (G_nb, K_tumor)
                 # theta-adjusted mu: mu = T * lambda * (theta * rdr + (1-theta))
                 mu_gnk = (
                     sx_data.T[tumor_idx][None, :, None]
@@ -245,7 +249,7 @@ class Spot_Model(Base_Model):
         for data_type in self.data_types:
             sx = self.data_sources[data_type]
             lg = params[f"{data_type}-lambda"]
-            rdrs[data_type] = clone_rdr_gk(lg, sx.C)[:, 1:]
+            rdrs[data_type] = clone_rdr_gk(lg, sx.C)
             total_masks[data_type] = sx.MASK[self.total_mask_id] & (lg > 0)
             allele_masks[data_type] = sx.MASK[self.allele_mask_id] & (lg > 0)
 
@@ -279,7 +283,7 @@ class Spot_Model(Base_Model):
                             params[f"{data_type}-inv_phi"][
                                 lg[sx.MASK[self.total_mask_id]] > 0
                             ],
-                            rdrs_gk[total_mask],
+                            rdrs_gk[total_mask, 1:],
                             theta_val,
                         )
                         Q += np.sum(ll_nb[:, 0, :] * w)
@@ -292,7 +296,7 @@ class Spot_Model(Base_Model):
                                 lg[sx.MASK[self.allele_mask_id]] > 0
                             ],
                             sx.BAF[allele_mask, 1:],
-                            rdrs_gk[allele_mask],
+                            rdrs_gk[allele_mask, 1:],
                             theta_val,
                         )
                         Q += np.sum(ll_bb[:, 0, :] * w)
@@ -319,11 +323,11 @@ class Spot_Model(Base_Model):
         label,
         posterior_thres=0.5,
         margin_thres=0.1,
-        purity_threshold=0.5,
+        **kwargs,
     ):
         logging.info("Decode labels with MAP estimation")
         posteriors = self._e_step(fit_mode, params)
-        tumor_clones = self.clones[1:]
+        # posteriors: (N, K) including normal at index 0
 
         anns = self.barcodes.copy(deep=True)
 
@@ -335,31 +339,18 @@ class Spot_Model(Base_Model):
         else:
             anns["tumor_purity"] = np.mean(theta_list, axis=0)
 
-        for c in tumor_clones:
-            anns[c] = 0.0
-        anns.iloc[self._tumor_idx, anns.columns.get_indexer(tumor_clones)] = posteriors
+        # All clones including normal
+        all_clones = list(self.clones)
+        anns.loc[:, all_clones] = posteriors
+        anns["tumor"] = 1 - anns["normal"]
 
-        probs = anns[tumor_clones].to_numpy()
+        probs = anns[all_clones].to_numpy()
         probs_sorted = np.sort(probs, axis=1)
         anns["max_posterior"] = probs_sorted[:, -1]
-        anns["margin_delta"] = (
-            probs_sorted[:, -1] - probs_sorted[:, -2]
-            if probs_sorted.shape[1] > 1
-            else 1.0
-        )
+        anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
 
-        anns[label] = anns[tumor_clones].idxmax(axis=1)
+        anns[label] = anns[all_clones].idxmax(axis=1)
 
-        # Purity-based label: low purity spots → "normal", rest → MAP clone
-        purity_label = f"{label}-purity_cutoff"
-        anns[purity_label] = anns[label]
-        if purity_threshold is not None and purity_threshold > 0:
-            low_purity = anns["tumor_purity"] < purity_threshold
-            anns.loc[low_purity, purity_label] = "normal"
-
-        all_labels = ["normal"] + list(tumor_clones)
-        clone_props = {
-            c: np.mean(anns[purity_label].to_numpy() == c) for c in all_labels
-        }
-        self._log_posterior_stats(anns, purity_label)
+        clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in all_clones}
+        self._log_posterior_stats(anns, label)
         return anns, clone_props

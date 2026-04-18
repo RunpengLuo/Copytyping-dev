@@ -175,8 +175,7 @@ def run(args=None):
     )
 
     is_spot = platform in SPATIAL_PLATFORMS
-    hard_label = f"{label}-purity_cutoff" if is_spot else label
-    is_normal = (anns[hard_label] == "normal").to_numpy()
+    is_normal = (anns[label] == "normal").to_numpy()
     if is_normal.sum() == 0:
         is_normal = None
     # Compute segment-level baseline proportions from predicted normal labels
@@ -203,7 +202,7 @@ def run(args=None):
     if ref_label in barcodes.columns:
         metric = evaluate_malignant_accuracy(
             anns,
-            qry_label=hard_label,
+            qry_label=label,
             ref_label=ref_label,
             tumor_post="tumor_purity" if is_spot else "tumor",
         )
@@ -216,7 +215,7 @@ def run(args=None):
             adata_sub = gex_adata[gex_adata.obs_names.isin(common)]
             anns_indexed = anns.set_index("BARCODE").loc[adata_sub.obs_names]
             coords = adata_sub.obsm["spatial"]
-            clone_labels = anns_indexed[hard_label].to_numpy()
+            clone_labels = anns_indexed[label].to_numpy()
 
             jc = joincount_zscore(clone_labels, coords)
             logging.info("joincount z-score:")
@@ -259,7 +258,7 @@ def run(args=None):
                 f"{out_prefix}.{platform}.crosstab.png",
             ),
             metric=metric,
-            acol=hard_label,
+            acol=label,
             bcol=ref_label,
         )
 
@@ -268,7 +267,7 @@ def run(args=None):
         f"min_snp_count={min_snp_agg_bbc}  max_bin_length={max_len_agg_bbc / 1e6:.1f}Mbp"
         f"  purity_threshold={purity_thres}"
     )
-    plot_labels = [lb for lb in [hard_label, ref_label] if lb in anns]
+    plot_labels = [lb for lb in [label, ref_label] if lb in anns]
 
     for data_type in data_types:
         seg_sx = seg_data_sources[data_type]
@@ -315,7 +314,7 @@ def run(args=None):
                 haplo_blocks=cnv_blocks,
                 wl_segments=wl_segments,
                 lab_type=my_label,
-                is_inferred=(my_label == hard_label),
+                is_inferred=(my_label == label),
                 filename=os.path.join(
                     dirs["scatter"],
                     f"{out_prefix}.{platform}"
