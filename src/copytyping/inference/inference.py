@@ -121,10 +121,7 @@ def run(args=None):
             args["max_bin_length"],
         )
 
-        if aggr_mode == "clust":
-            data_sources[data_type] = seg_sx.to_cluster_level()
-        else:
-            data_sources[data_type] = seg_sx
+        data_sources[data_type] = seg_sx.to_cluster_level() if aggr_mode == "clust" else seg_sx
 
         if args.get(f"{data_type}_h5ad") is not None:
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
@@ -154,7 +151,7 @@ def run(args=None):
         out_prefix,
         verbosity,
         modality_masks=modality_masks,
-        hard_em=args.get("hard_em", False),
+        hard_em=args["hard_em"],
     )
     model_params = instance.fit(
         fit_mode=args["fit_mode"],
@@ -192,18 +189,6 @@ def run(args=None):
                 model_params[lam_key] = compute_baseline_proportions(
                     seg_sx.X, seg_sx.T, is_normal
                 )
-            for disp_key in [
-                f"{data_type}-tau",
-                f"{data_type}-inv_phi",
-            ]:
-                if disp_key in model_params and len(model_params[disp_key]) > 0:
-                    val = model_params[disp_key][0]
-                    n_seg = (
-                        seg_sx.nrows_imbalanced
-                        if "tau" in disp_key
-                        else seg_sx.nrows_aneuploid
-                    )
-                    model_params[disp_key] = np.full(n_seg, val, dtype=np.float32)
 
     # Compute agg-bbc baseline proportions
     agg_bbc_lambda = {}
