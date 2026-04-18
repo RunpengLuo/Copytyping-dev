@@ -31,10 +31,8 @@ from copytyping.io_utils import (
     union_align_barcodes,
 )
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
-from copytyping.plot.plot_common import (
-    plot_crosstab,
-    plot_rdr_baf_1d_pseudobulk,
-)
+from copytyping.plot.plot_common import plot_crosstab
+from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_visium import plot_visium_iters, plot_visium_panel
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
@@ -121,7 +119,9 @@ def run(args=None):
             args["max_bin_length"],
         )
 
-        data_sources[data_type] = seg_sx.to_cluster_level() if aggr_mode == "clust" else seg_sx
+        data_sources[data_type] = (
+            seg_sx.to_cluster_level() if aggr_mode == "clust" else seg_sx
+        )
 
         if args.get(f"{data_type}_h5ad") is not None:
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
