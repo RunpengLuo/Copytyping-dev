@@ -172,6 +172,18 @@ def run(args=None):
         "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
     )
 
+    # Log gate posterior trace by ref_label
+    if hasattr(instance, "gamma_trace") and ref_label in barcodes.columns:
+        ref_labels = barcodes[ref_label].to_numpy()
+        logging.info("gate posterior trace (P(normal|data) by ref_label):")
+        for t, gamma in enumerate(instance.gamma_trace):
+            parts = []
+            for grp in sorted(set(ref_labels)):
+                mask = ref_labels == grp
+                p_normal = gamma[mask, 0].mean()
+                parts.append(f"{grp}={p_normal:.4f}")
+            logging.info(f"  iter={t + 1}: {', '.join(parts)}")
+
     is_spot = platform in SPATIAL_PLATFORMS
     is_normal = (anns[label] == "normal").to_numpy()
     if is_normal.sum() == 0:

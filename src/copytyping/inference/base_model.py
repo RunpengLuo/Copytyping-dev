@@ -266,11 +266,12 @@ class Base_Model:
 
         params, fix_params = self._init_params(fit_mode, fix_params, init_params)
 
-        ll_trace, param_trace = [], []
+        ll_trace, param_trace, gamma_trace = [], [], []
         prev_ll = -np.inf
         for t in range(1, max_iter):
             param_trace.append(copy.deepcopy(params))
             gamma = self._e_step(fit_mode, params, t)
+            gamma_trace.append(gamma.copy())
             if self.hard_em:
                 hard = np.zeros_like(gamma)
                 hard[np.arange(len(gamma)), gamma.argmax(axis=1)] = 1.0
@@ -300,6 +301,7 @@ class Base_Model:
             )
 
         self.param_trace = param_trace
+        self.gamma_trace = gamma_trace
         self.save_param_trace(param_trace)
         return params
 
