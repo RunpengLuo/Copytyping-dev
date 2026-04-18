@@ -11,7 +11,7 @@ from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Rectangle
 
 from copytyping.sx_data.sx_data import SX_Data
-from copytyping.plot.plot_cnp import (
+from copytyping.plot.plot_copynumber import (
     BLACK,
     plot_cnv_legend,
     plot_cnv_profile,

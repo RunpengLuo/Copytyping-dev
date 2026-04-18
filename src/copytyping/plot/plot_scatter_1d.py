@@ -5,7 +5,7 @@ from collections import OrderedDict
 from matplotlib.collections import LineCollection
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
-from copytyping.plot.plot_cnp import get_cn_colors, plot_cnv_legend, plot_cnv_profile
+from copytyping.plot.plot_copynumber import get_cn_colors, plot_cnv_legend, plot_cnv_profile
 from copytyping.plot.plot_common import build_wl_coords
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import get_chr_sizes
