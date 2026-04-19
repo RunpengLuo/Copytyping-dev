@@ -69,14 +69,16 @@ def load_modality_data(
         f"{int(bbc_df['PHASE'].sum())}/{len(bbc_df)} BBC blocks flipped"
     )
 
+    # Load segments and apply solfile before any BBC mapping
+    seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
+    if "SAMPLE" in seg_df.columns:
+        first_sample = seg_df["SAMPLE"].iloc[0]
+        seg_df = seg_df[seg_df["SAMPLE"] == first_sample].reset_index(drop=True)
+    if solfile is not None:
+        seg_df, clones, clone_props = _apply_solfile(seg_df, solfile)
+
     seg_df, X_sp, Y_sp, D_sp = aggregate_bbc_to_seg(
-        bbc_df,
-        seg_ucn_file,
-        X_bbc,
-        Y_bbc,
-        D_bbc,
-        solfile=solfile,
-        data_type=data_type,
+        bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=data_type
     )
     X_seg = X_sp.toarray().astype(np.int32)
     Y_seg = Y_sp.toarray().astype(np.int32)
@@ -327,18 +329,15 @@ def _apply_solfile(seg_df, solfile):
     return seg_df, clones, clone_props
 
 
-def aggregate_bbc_to_seg(
-    bbc_df, seg_ucn_file, X_bbc, Y_bbc, D_bbc, solfile=None, data_type=""
-):
+def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=""):
     """Map bbc-level bins to segments and aggregate count matrices.
 
     Args:
         bbc_df: DataFrame with bbc-level cnv_segments (#CHR, START, END, bbc_id).
-        seg_ucn_file: Path to HATCHet seg.ucn.tsv with segment copy numbers.
+        seg_df: Segment-level DataFrame (already loaded, with solfile applied).
         X_bbc: (G_bbc, N) sparse or dense count matrix (read depth).
         Y_bbc: (G_bbc, N) sparse or dense count matrix (B-allele).
         D_bbc: (G_bbc, N) sparse or dense count matrix (total allele).
-        solfile: Optional path to HATCHet solution.tsv to override CN profiles.
         data_type: Modality tag used to prefix log messages (e.g. "gex").
 
     Returns:
@@ -346,16 +345,6 @@ def aggregate_bbc_to_seg(
         X_seg, Y_seg, D_seg: (G_seg, N) aggregated count matrices (sparse).
     """
     tag = f"[{data_type}] " if data_type else ""
-    seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
-    # deduplicate: seg.ucn has one row per (segment, sample); keep first sample only
-    if "SAMPLE" in seg_df.columns:
-        first_sample = seg_df["SAMPLE"].iloc[0]
-        seg_df = seg_df[seg_df["SAMPLE"] == first_sample].reset_index(drop=True)
-
-    # override CN profiles from solution file if provided
-    if solfile is not None:
-        seg_df, clones, clone_props = _apply_solfile(seg_df, solfile)
-
     seg_df["seg_id"] = np.arange(len(seg_df))
     n_seg = len(seg_df)
     n_bbc = len(bbc_df)
