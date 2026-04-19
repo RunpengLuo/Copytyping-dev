@@ -86,111 +86,6 @@ def load_modality_data(
 
     return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc
 
-
-def build_bbc_sx(bbc_df, X_bbc, Y_bbc, D_bbc, seg_sx, rep_mask=None):
-    """Build a BBC-level SX_Data-like namespace with segment CN profiles.
-
-    Uses the seg_id column on bbc_df (set by aggregate_bbc_to_seg) to
-    propagate A/B/C/BAF/clones from the segment level.
-
-    Args:
-        bbc_df: BBC-level DataFrame with seg_id column.
-        X_bbc, Y_bbc, D_bbc: (G_bbc, N) sparse or dense count matrices.
-        seg_sx: segment-level SX_Data with cnv_blocks, A, B, C, BAF, clones.
-        rep_mask: optional boolean mask (N,) to subset barcodes.
-
-    Returns:
-        SimpleNamespace with cnv_blocks, X, Y, D, T, A, B, C, BAF, clones.
-    """
-    from types import SimpleNamespace
-
-    def _to_dense(m):
-        return (
-            m.toarray().astype(np.int32)
-            if sparse.issparse(m)
-            else np.asarray(m, dtype=np.int32)
-        )
-
-    X = _to_dense(X_bbc)
-    Y = _to_dense(Y_bbc)
-    D = _to_dense(D_bbc)
-    if rep_mask is not None:
-        X = X[:, rep_mask]
-        Y = Y[:, rep_mask]
-        D = D[:, rep_mask]
-
-    bbc_sx = SimpleNamespace(
-        cnv_blocks=bbc_df,
-        X=X,
-        Y=Y,
-        D=D,
-        T=X.sum(axis=0),
-        clones=seg_sx.clones,
-    )
-
-    seg_idx = bbc_df["seg_id"].to_numpy().astype(int)
-    mapped = seg_idx >= 0
-    K = seg_sx.C.shape[1]
-    for attr in ("A", "B", "C", "BAF"):
-        src = getattr(seg_sx, attr)
-        default = {"A": 1, "B": 1, "C": 2, "BAF": 0.5}[attr]
-        arr = np.full((len(bbc_df), K), default, dtype=src.dtype)
-        arr[mapped] = src[seg_idx[mapped]]
-        setattr(bbc_sx, attr, arr)
-
-    return bbc_sx
-
-
-def subset_sx_data(sx_data, idx):
-    """Create a lightweight view of SX_Data for a barcode subset.
-
-    Args:
-        sx_data: SX_Data or SimpleNamespace with X, Y, D, T, N, barcodes, etc.
-        idx: boolean mask or integer indices over the barcode (column) axis.
-
-    Returns:
-        SimpleNamespace sharing segment-level attributes but with
-        subsetted barcode-level arrays.
-    """
-    from types import SimpleNamespace
-
-    sub = SimpleNamespace()
-    # Barcode-dependent (subset columns)
-    sub.X = sx_data.X[:, idx]
-    sub.Y = sx_data.Y[:, idx]
-    sub.D = sx_data.D[:, idx]
-    sub.T = sx_data.T[idx]
-    sub.barcodes = sx_data.barcodes.iloc[idx].reset_index(drop=True)
-    sub.N = sub.X.shape[1]
-    # Segment-dependent (shared references)
-    for attr in (
-        "G",
-        "K",
-        "cnv_blocks",
-        "clones",
-        "A",
-        "B",
-        "C",
-        "BAF",
-        "MASK",
-        "nrows_imbalanced",
-        "nrows_aneuploid",
-    ):
-        if hasattr(sx_data, attr):
-            setattr(sub, attr, getattr(sx_data, attr))
-    return sub
-
-
-def subset_model_params(model_params, idx, data_types):
-    """Subset per-barcode model params (e.g. theta) by indices."""
-    out = dict(model_params)
-    for dt in data_types:
-        theta_key = f"{dt}-theta"
-        if theta_key in out:
-            out[theta_key] = out[theta_key][idx]
-    return out
-
-
 def union_align_barcodes(data_dict, data_types):
     """Compute union barcodes across modalities and realign matrices.
 
@@ -258,18 +153,6 @@ def union_align_barcodes(data_dict, data_types):
         + ", ".join(f"{dt}={int(modality_masks[dt].sum())}" for dt in data_types)
     )
     return union_barcodes_df, modality_masks
-
-
-def mark_imbalanced(segs: pd.DataFrame):
-    def is_imbalanced(seg):
-        cnp = seg["CNP"].split(";")[1:]
-        cna = [int(cn.split("|")[0]) for cn in cnp]
-        cnb = [int(cn.split("|")[1]) for cn in cnp]
-        imb = any(a != b for (a, b) in zip(cna, cnb))
-        return imb
-
-    return segs.apply(is_imbalanced, axis=1).to_numpy()
-
 
 ##################################################
 # bbc -> segment aggregation
@@ -448,40 +331,3 @@ def parse_cnv_profile(haplo_blocks: pd.DataFrame, laplace=0.01):
 
     # assign the CNP group id
     return clones, A, B, C, BAF
-
-
-##################################################
-# validation IOs
-##################################################
-
-
-def load_visium_path_annotation(
-    ann_file: str, raw_label="Microregion_annotation", label="path_label", anns=None
-):
-    def simplify_label(v):
-        if v[0] == "T":
-            if "_" not in v:
-                return "tumor"
-            else:
-                return v[str(v).find("_") + 1 :]
-        else:
-            return v
-
-    path_anns = pd.read_table(ann_file, sep="\t", keep_default_na=True).rename(
-        columns={"Barcode": "BARCODE"}
-    )
-
-    # NA labels are non-tumor
-    path_anns[raw_label].fillna("normal", inplace=True)
-    path_anns[raw_label] = path_anns.apply(
-        func=lambda r: simplify_label(r[raw_label]), axis=1
-    )
-    path_anns[raw_label] = path_anns[raw_label].astype("str")
-    path_anns[label] = path_anns[raw_label]
-
-    if anns is not None:
-        anns = pd.merge(anns, path_anns, on="BARCODE", how="left").set_index(
-            "BARCODE", drop=False
-        )
-        return anns
-    return path_anns

@@ -353,16 +353,6 @@ BLACK = (0, 0, 0, 1)
 RED = (1, 0, 0, 1)
 BLUE = (0, 0, 1, 1)
 
-
-def fcn_color(fcn: float, base=1, tol=1e-2):
-    if fcn > base + tol:
-        return RED
-    elif fcn < base - tol:
-        return BLUE
-    else:
-        return BLACK
-
-
 def get_cn_colors():
     _palette = {
         (0, 0): "darkblue",
