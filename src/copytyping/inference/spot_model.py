@@ -295,9 +295,36 @@ class Spot_Model(Base_Model):
 
         # --- Theta update ---
         if any(not fix_params[f"{dt}-theta"] for dt in self.data_types):
-            purity_bounds = (self._purity_min, 1.0 - 1e-4)
             a_theta, b_theta = self._theta_prior
+            purity_bounds = (self._purity_min, 1.0 - 1e-4)
             theta_arr = params[f"{self.data_types[0]}-theta"]
+
+            # Precompute masked arrays per data_type
+            dt_cache = {}
+            for data_type in self.data_types:
+                sx = self.data_sources[data_type]
+                lg = params[f"{data_type}-lambda"]
+                rdrs_gk = clone_rdr_gk(lg, sx.C)[:, 1:]
+                c = {"mask_n": self.modality_masks[data_type]}
+                am = sx.MASK[self.allele_mask_id] & (lg > 0)
+                if fit_mode in {"allele_only", "hybrid"} and am.any():
+                    c["Y"] = sx.Y[am]
+                    c["D"] = sx.D[am]
+                    c["tau"] = params[f"{data_type}-tau"][
+                        lg[sx.MASK[self.allele_mask_id]] > 0
+                    ]
+                    c["baf"] = sx.BAF[am, 1:]
+                    c["rdr_bb"] = rdrs_gk[am]
+                tm = sx.MASK[self.total_mask_id] & (lg > 0)
+                if fit_mode in {"total_only", "hybrid"} and tm.any():
+                    c["X"] = sx.X[tm]
+                    c["T"] = sx.T
+                    c["lam"] = lg[tm]
+                    c["invphi"] = params[f"{data_type}-inv_phi"][
+                        lg[sx.MASK[self.total_mask_id]] > 0
+                    ]
+                    c["rdr_nb"] = rdrs_gk[tm]
+                dt_cache[data_type] = c
 
             for n in range(self.N):
                 w = r_tilde[n]
@@ -305,43 +332,29 @@ class Spot_Model(Base_Model):
                 def neg_Q_theta(tv, _n=n, _w=w):
                     tv_arr = np.array([tv], dtype=float)
                     Q = 0.0
-                    for data_type in self.data_types:
-                        if not self.modality_masks[data_type][_n]:
+                    for c in dt_cache.values():
+                        if not c["mask_n"][_n]:
                             continue
-                        sx = self.data_sources[data_type]
-                        lg = params[f"{data_type}-lambda"]
-                        rdrs_gk = clone_rdr_gk(lg, sx.C)[:, 1:]
-
-                        if fit_mode in {"allele_only", "hybrid"}:
-                            am = sx.MASK[self.allele_mask_id] & (lg > 0)
-                            if am.any():
-                                ll = cond_betabin_logpmf_theta(
-                                    sx.Y[am, _n : _n + 1],
-                                    sx.D[am, _n : _n + 1],
-                                    params[f"{data_type}-tau"][
-                                        lg[sx.MASK[self.allele_mask_id]] > 0
-                                    ],
-                                    sx.BAF[am, 1:],
-                                    rdrs_gk[am],
-                                    tv_arr,
-                                )
-                                Q += np.sum(ll[:, 0, :] * _w)
-
-                        if fit_mode in {"total_only", "hybrid"}:
-                            tm = sx.MASK[self.total_mask_id] & (lg > 0)
-                            if tm.any():
-                                ll = cond_negbin_logpmf_theta(
-                                    sx.X[tm, _n : _n + 1],
-                                    np.array([sx.T[_n]], dtype=float),
-                                    lg[tm],
-                                    params[f"{data_type}-inv_phi"][
-                                        lg[sx.MASK[self.total_mask_id]] > 0
-                                    ],
-                                    rdrs_gk[tm],
-                                    tv_arr,
-                                )
-                                Q += np.sum(ll[:, 0, :] * _w)
-
+                        if "Y" in c:
+                            ll = cond_betabin_logpmf_theta(
+                                c["Y"][:, _n : _n + 1],
+                                c["D"][:, _n : _n + 1],
+                                c["tau"],
+                                c["baf"],
+                                c["rdr_bb"],
+                                tv_arr,
+                            )
+                            Q += np.sum(ll[:, 0, :] * _w)
+                        if "X" in c:
+                            ll = cond_negbin_logpmf_theta(
+                                c["X"][:, _n : _n + 1],
+                                np.array([c["T"][_n]], dtype=float),
+                                c["lam"],
+                                c["invphi"],
+                                c["rdr_nb"],
+                                tv_arr,
+                            )
+                            Q += np.sum(ll[:, 0, :] * _w)
                     Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(
                         1.0 - tv
                     )
