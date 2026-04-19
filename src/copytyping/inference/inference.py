@@ -214,7 +214,7 @@ def run(args=None):
             anns,
             qry_label=label,
             ref_label=ref_label,
-            tumor_post="tumor_purity" if is_spot else "tumor",
+            tumor_post="tumor_purity_eff" if is_spot else "tumor",
         )
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
 
