@@ -209,21 +209,23 @@ class Spot_Model(Base_Model):
     def _m_step(self, fit_mode, gamma, params, fix_params, t=0, eps=1e-10):
         tumor_idx = self._tumor_idx
 
-        # Update gate + clone pi
-        # gamma: (N, K) where K = 1 + K_tumor
-        gamma_normal = gamma[:, 0].mean()
-        gamma_tumor_total = gamma[:, 1:].sum(axis=1).mean()
-        pi_normal = gamma_normal / (gamma_normal + gamma_tumor_total + eps)
-        pi_tumor_unnorm = gamma[:, 1:].mean(axis=0)
-        pi_tumor_norm = pi_tumor_unnorm / np.maximum(pi_tumor_unnorm.sum(), eps)
-        params["pi"] = np.concatenate([[pi_normal], (1 - pi_normal) * pi_tumor_norm])
+        # --- Mixture weights (doc: M-step mixture weights) ---
+        # ρ = (1/N) Σ r_{n0}
+        rho = gamma[:, 0].mean()
+        # ω_k = Σ r_{nk} / Σ r_{nT}
+        r_tumor = gamma[:, 1:]  # (N, K_tumor)
+        r_nT = r_tumor.sum(axis=1)  # (N,)
+        omega = r_tumor.sum(axis=0) / np.maximum(r_nT.sum(), eps)
+        # Store as marginal: π_0=ρ, π_k=(1-ρ)ω_k
+        params["pi"] = np.concatenate([[rho], (1 - rho) * omega])
 
-        # Tumor-only gamma for dispersion/theta
-        gamma_tumor = gamma[:, 1:]
-        gamma_tumor_sum = gamma_tumor.sum(axis=1, keepdims=True)
-        gamma_tumor_norm = gamma_tumor / np.maximum(gamma_tumor_sum, eps)
-        gamma_gnk = gamma_tumor_norm[None, :, :]
+        # Conditional tumor posterior: r̃_{nk} = r_{nk} / r_{nT}
+        r_tilde = r_tumor / np.maximum(r_nT[:, None], eps)  # (N, K_tumor)
 
+        # --- Dispersion updates (doc: weighted by ALL responsibilities) ---
+        # Build (G, N, K_tumor+1) weights for joint normal+tumor dispersion fit
+        # For tau: normal branch uses p=0.5, tumor branches use p̃_{gnk}(v_n)
+        # For inv_phi: normal branch uses mu=T*λ, tumor uses T*λ*(θ*rdr+(1-θ))
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
             lambda_g = params[f"{data_type}-lambda"]
@@ -231,7 +233,7 @@ class Spot_Model(Base_Model):
             theta_t = theta[tumor_idx]
             rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
 
-            # BB tau update
+            # BB tau update — weighted by all K+1 branches
             if (
                 fit_mode in {"allele_only", "hybrid"}
                 and not fix_params[f"{data_type}-tau"]
@@ -241,19 +243,28 @@ class Spot_Model(Base_Model):
                 baf_gk = sx_data.BAF[:, 1:]
                 rdr_bb = rdrs_gk[allele_mask]
                 baf_bb = baf_gk[allele_mask]
-                p_gnk = (
+                # Tumor p̃: (G_bb, N, K_tumor)
+                p_tumor = (
                     theta_t[None, :, None] * rdr_bb[:, None, :] * baf_bb[:, None, :]
                     + 0.5 * (1 - theta_t[None, :, None])
                 ) / (
                     theta_t[None, :, None] * rdr_bb[:, None, :]
                     + (1 - theta_t[None, :, None])
                 )
+                # Normal p̃ = 0.5: (G_bb, N, 1)
+                p_normal = np.full((p_tumor.shape[0], p_tumor.shape[1], 1), 0.5)
+                # Concat: (G_bb, N, K+1) with weights (1, N, K+1)
+                p_all = np.concatenate([p_normal, p_tumor], axis=2)
+                w_all = gamma[None, :, :]  # (1, N, K+1)
                 Y_gnk = sx_data.Y[allele_mask][:, tumor_idx, None].astype(np.float64)
                 D_gnk = sx_data.D[allele_mask][:, tumor_idx, None].astype(np.float64)
-                tau_map = mle_tau(Y_gnk, D_gnk, p_gnk, gamma_gnk, prior=self._tau_prior)
+                # Broadcast Y,D to match K+1 columns
+                Y_all = np.broadcast_to(Y_gnk, p_all.shape)
+                D_all = np.broadcast_to(D_gnk, p_all.shape)
+                tau_map = mle_tau(Y_all, D_all, p_all, w_all, prior=self._tau_prior)
                 params[f"{data_type}-tau"][:] = tau_map
 
-            # NB inv_phi update
+            # NB inv_phi update — weighted by all K+1 branches
             if (
                 fit_mode in {"total_only", "hybrid"}
                 and not fix_params[f"{data_type}-inv_phi"]
@@ -261,7 +272,8 @@ class Spot_Model(Base_Model):
             ):
                 total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
                 rdr_nb = rdrs_gk[total_mask]
-                mu_gnk = (
+                # Tumor mu: (G_nb, N, K_tumor)
+                mu_tumor = (
                     sx_data.T[tumor_idx][None, :, None]
                     * lambda_g[total_mask, None, None]
                     * (
@@ -269,13 +281,21 @@ class Spot_Model(Base_Model):
                         + (1 - theta_t[None, :, None])
                     )
                 )
+                # Normal mu = T*λ*2 (m_{g0}=2, but RDR=1 so mu=T*λ)
+                mu_normal = (
+                    sx_data.T[tumor_idx][None, :, None]
+                    * lambda_g[total_mask, None, None]
+                )  # (G_nb, N, 1)
+                mu_all = np.concatenate([mu_normal, mu_tumor], axis=2)
+                w_all = gamma[None, :, :]
                 X_gnk = sx_data.X[total_mask][:, tumor_idx, None].astype(np.float64)
-                invphi_map = mle_invphi(
-                    X_gnk, mu_gnk, gamma_gnk, prior=self._invphi_prior
-                )
+                X_all = np.broadcast_to(X_gnk, mu_all.shape)
+                invphi_map = mle_invphi(X_all, mu_all, w_all, prior=self._invphi_prior)
                 params[f"{data_type}-inv_phi"][:] = invphi_map
 
-        # Theta update: only for tumor-gated spots, bounded by purity_min
+        # --- Theta update (doc: M-step tumor-branch purity) ---
+        # v_n^new = argmax [ Σ_k r̃_{nk}·ℓ_{nk}(v) + log p(v) ]
+        # Only meaningful when r_{nT} > 0; use r̃_{nk} (conditional tumor posterior)
         purity_bounds = (self._purity_min, 1.0 - 1e-4)
         a_theta, b_theta = self._theta_prior
 
@@ -296,7 +316,7 @@ class Spot_Model(Base_Model):
             def neg_Q_theta(theta_val, _n=n):
                 theta_val = np.array([theta_val], dtype=float)
                 Q = 0.0
-                w = gamma_tumor_norm[_n][None, :]
+                w = r_tilde[_n][None, :]  # conditional tumor posterior r̃_{nk}
 
                 for data_type in self.data_types:
                     if not self.modality_masks[data_type][_n]:
