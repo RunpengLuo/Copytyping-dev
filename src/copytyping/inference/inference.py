@@ -196,13 +196,11 @@ def run(args=None):
             seg_lambda[data_type] = compute_baseline_proportions(
                 seg_sx.X, seg_sx.T, is_normal
             )
-        elif f"{data_type}-lambda" in model_params:
-            seg_lambda[data_type] = model_params[f"{data_type}-lambda"]
 
     # Compute agg-bbc baseline proportions
     agg_bbc_lambda = {}
-    for data_type in data_types:
-        if data_type in agg_bbc_data_sources and is_normal is not None:
+    if is_normal is not None:
+        for data_type in data_types:
             agg_sx = agg_bbc_data_sources[data_type]
             agg_bbc_lambda[data_type] = compute_baseline_proportions(
                 agg_sx.X, agg_sx.T, is_normal
