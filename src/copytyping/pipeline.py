@@ -101,7 +101,9 @@ def _resolve_solfiles(row, sol_pattern):
     return results
 
 
-def _run_one(run_args, run_dir, genome_size, region_bed, verbosity, force):
+def _run_one(
+    run_args, run_dir, genome_size, region_bed, verbosity, force, extra_args=None
+):
     """Run inference for one configuration. Returns (status, eval_dict)."""
     prefix = run_args["out_prefix"]
     platform = run_args["platform"]
@@ -121,6 +123,8 @@ def _run_one(run_args, run_dir, genome_size, region_bed, verbosity, force):
     inf_args["genome_size"] = genome_size
     inf_args["region_bed"] = region_bed
     inf_args["verbosity"] = verbosity
+    if extra_args:
+        inf_args.update(extra_args)
     os.makedirs(run_dir, exist_ok=True)
 
     logging.info(f"RUN: {run_dir}")
@@ -154,6 +158,9 @@ def run(args):
     force = args.get("force", False)
     verbosity = args.get("verbosity", 0)
     sol_pattern = args.get("sol_pattern", "*{SOLID}*.tsv")
+    extra_args = {}
+    if args.get("update_purity"):
+        extra_args["update_purity"] = True
 
     panel = pd.read_table(panel_tsv, dtype=str).fillna("")
     required = [
@@ -200,7 +207,13 @@ def run(args):
             )
 
             status, metrics = _run_one(
-                run_args, run_dir, genome_size, region_bed, verbosity, force
+                run_args,
+                run_dir,
+                genome_size,
+                region_bed,
+                verbosity,
+                force,
+                extra_args=extra_args,
             )
 
             dtypes = []

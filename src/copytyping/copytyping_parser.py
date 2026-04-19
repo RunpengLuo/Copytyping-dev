@@ -461,4 +461,10 @@ def add_arguments_pipeline(parser):
         type=int,
         help="Verbose level for each inference run",
     )
+    parser.add_argument(
+        "--update_purity",
+        action="store_true",
+        default=False,
+        help="Update per-spot purity in M-step",
+    )
     return parser
