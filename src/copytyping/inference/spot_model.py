@@ -400,6 +400,11 @@ class Spot_Model(Base_Model):
 
         anns[label] = anns[all_clones].idxmax(axis=1)
 
+        # Hard effective purity: 0 if normal, v_n if tumor
+        anns["tumor_purity"] = np.where(
+            anns[label] == "normal", 0.0, anns["tumor_purity"]
+        )
+
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in all_clones}
         self._log_posterior_stats(anns, label)
         return anns, clone_props
