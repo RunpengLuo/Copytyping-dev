@@ -188,22 +188,18 @@ def run(args=None):
     is_normal = (anns[label] == "normal").to_numpy()
     if is_normal.sum() == 0:
         is_normal = None
-    # Compute segment-level baseline proportions from predicted normal labels
-    seg_lambda = {}
-    for data_type in data_types:
-        seg_sx = seg_data_sources[data_type]
-        if is_normal is not None:
-            seg_lambda[data_type] = compute_baseline_proportions(
-                seg_sx.X, seg_sx.T, is_normal
-            )
 
-    # Compute agg-bbc baseline proportions
-    agg_bbc_lambda = {}
+    # Baseline proportions from predicted normals (seg + agg-bbc level)
+    seg_lambda, agg_bbc_lambda = {}, {}
     if is_normal is not None:
         for data_type in data_types:
-            agg_sx = agg_bbc_data_sources[data_type]
+            seg_lambda[data_type] = compute_baseline_proportions(
+                seg_data_sources[data_type].X, seg_data_sources[data_type].T, is_normal
+            )
             agg_bbc_lambda[data_type] = compute_baseline_proportions(
-                agg_sx.X, agg_sx.T, is_normal
+                agg_bbc_data_sources[data_type].X,
+                agg_bbc_data_sources[data_type].T,
+                is_normal,
             )
 
     metric = {}
