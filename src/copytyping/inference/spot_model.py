@@ -96,6 +96,18 @@ class Spot_Model(Base_Model):
         self._N_tumor = self.N
         self._purity_min = init_params.get("purity_min", 0.1)
 
+        # Precompute fixed arrays (lambda and masks don't change across iterations)
+        for data_type in self.data_types:
+            sx = self.data_sources[data_type]
+            lg = params[f"{data_type}-lambda"]
+            params[f"{data_type}-rdrs"] = clone_rdr_gk(lg, sx.C)
+            params[f"{data_type}-allele_mask"] = sx.MASK[self.allele_mask_id] & (lg > 0)
+            params[f"{data_type}-total_mask"] = sx.MASK[self.total_mask_id] & (lg > 0)
+            params[f"{data_type}-tau_valid_idx"] = lg[sx.MASK[self.allele_mask_id]] > 0
+            params[f"{data_type}-invphi_valid_idx"] = (
+                lg[sx.MASK[self.total_mask_id]] > 0
+            )
+
         return params, fix_params
 
     def _compute_normal_ll(self, fit_mode, params):
@@ -112,7 +124,7 @@ class Spot_Model(Base_Model):
                     self.allele_mask_id, additional_mask=lambda_g > 0
                 )
                 tau_valid = params[f"{data_type}-tau"][
-                    lambda_g[sx_data.MASK[self.allele_mask_id]] > 0
+                    params[f"{data_type}-tau_valid_idx"]
                 ]
                 p_normal = np.full((MA["BAF"].shape[0], 1), 0.5)
                 ll_bb = cond_betabin_logpmf(MA["Y"], MA["D"], tau_valid, p_normal)
@@ -121,9 +133,9 @@ class Spot_Model(Base_Model):
                 normal_ll += contrib
 
             if fit_mode in {"total_only", "hybrid"}:
-                total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
+                total_mask = params[f"{data_type}-total_mask"]
                 invphi_valid = params[f"{data_type}-inv_phi"][
-                    lambda_g[sx_data.MASK[self.total_mask_id]] > 0
+                    params[f"{data_type}-invphi_valid_idx"]
                 ]
                 pi_normal = lambda_g[total_mask, None]
                 ll_nb = cond_negbin_logpmf(
@@ -146,16 +158,16 @@ class Spot_Model(Base_Model):
             tumor_mask_n = mask_n[tumor_idx]
 
             lambda_g = params[f"{data_type}-lambda"]
-            rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
+            rdrs_gk = params[f"{data_type}-rdrs"][:, 1:]
             theta_tumor = params[f"{data_type}-theta"][tumor_idx]
 
             if fit_mode in {"allele_only", "hybrid"}:
                 MA, _ = sx_data.apply_mask_shallow(
                     self.allele_mask_id, additional_mask=lambda_g > 0
                 )
-                allele_mask = sx_data.MASK[self.allele_mask_id] & (lambda_g > 0)
+                allele_mask = params[f"{data_type}-allele_mask"]
                 tau_valid = params[f"{data_type}-tau"][
-                    lambda_g[sx_data.MASK[self.allele_mask_id]] > 0
+                    params[f"{data_type}-tau_valid_idx"]
                 ]
                 allele_ll = cond_betabin_logpmf_theta(
                     MA["Y"][:, tumor_idx],
@@ -170,9 +182,9 @@ class Spot_Model(Base_Model):
                 tumor_lls += contrib
 
             if fit_mode in {"total_only", "hybrid"}:
-                total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
+                total_mask = params[f"{data_type}-total_mask"]
                 invphi_valid = params[f"{data_type}-inv_phi"][
-                    lambda_g[sx_data.MASK[self.total_mask_id]] > 0
+                    params[f"{data_type}-invphi_valid_idx"]
                 ]
                 total_ll = cond_negbin_logpmf_theta(
                     sx_data.X[total_mask][:, tumor_idx],
@@ -231,7 +243,7 @@ class Spot_Model(Base_Model):
             lambda_g = params[f"{data_type}-lambda"]
             theta = params[f"{data_type}-theta"]
             theta_t = theta[tumor_idx]
-            rdrs_gk = clone_rdr_gk(lambda_g, sx_data.C)[:, 1:]
+            rdrs_gk = params[f"{data_type}-rdrs"][:, 1:]
 
             # BB tau update — weighted by all K+1 branches
             if (
@@ -239,7 +251,7 @@ class Spot_Model(Base_Model):
                 and not fix_params[f"{data_type}-tau"]
                 and sx_data.MASK[self.allele_mask_id].sum() > 0
             ):
-                allele_mask = sx_data.MASK[self.allele_mask_id] & (lambda_g > 0)
+                allele_mask = params[f"{data_type}-allele_mask"]
                 baf_gk = sx_data.BAF[:, 1:]
                 rdr_bb = rdrs_gk[allele_mask]
                 baf_bb = baf_gk[allele_mask]
@@ -270,7 +282,7 @@ class Spot_Model(Base_Model):
                 and not fix_params[f"{data_type}-inv_phi"]
                 and sx_data.MASK[self.total_mask_id].sum() > 0
             ):
-                total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
+                total_mask = params[f"{data_type}-total_mask"]
                 rdr_nb = rdrs_gk[total_mask]
                 # Tumor mu: (G_nb, N, K_tumor)
                 mu_tumor = (
@@ -299,59 +311,42 @@ class Spot_Model(Base_Model):
             purity_bounds = (self._purity_min, 1.0 - 1e-4)
             theta_arr = params[f"{self.data_types[0]}-theta"]
 
-            # Precompute masked arrays per data_type
-            dt_cache = {}
-            for data_type in self.data_types:
-                sx = self.data_sources[data_type]
-                lg = params[f"{data_type}-lambda"]
-                rdrs_gk = clone_rdr_gk(lg, sx.C)[:, 1:]
-                c = {"mask_n": self.modality_masks[data_type]}
-                am = sx.MASK[self.allele_mask_id] & (lg > 0)
-                if fit_mode in {"allele_only", "hybrid"} and am.any():
-                    c["Y"] = sx.Y[am]
-                    c["D"] = sx.D[am]
-                    c["tau"] = params[f"{data_type}-tau"][
-                        lg[sx.MASK[self.allele_mask_id]] > 0
-                    ]
-                    c["baf"] = sx.BAF[am, 1:]
-                    c["rdr_bb"] = rdrs_gk[am]
-                tm = sx.MASK[self.total_mask_id] & (lg > 0)
-                if fit_mode in {"total_only", "hybrid"} and tm.any():
-                    c["X"] = sx.X[tm]
-                    c["T"] = sx.T
-                    c["lam"] = lg[tm]
-                    c["invphi"] = params[f"{data_type}-inv_phi"][
-                        lg[sx.MASK[self.total_mask_id]] > 0
-                    ]
-                    c["rdr_nb"] = rdrs_gk[tm]
-                dt_cache[data_type] = c
-
             for n in range(self.N):
                 w = r_tilde[n]
 
                 def neg_Q_theta(tv, _n=n, _w=w):
                     tv_arr = np.array([tv], dtype=float)
                     Q = 0.0
-                    for c in dt_cache.values():
-                        if not c["mask_n"][_n]:
+                    for data_type in self.data_types:
+                        if not self.modality_masks[data_type][_n]:
                             continue
-                        if "Y" in c:
+                        sx = self.data_sources[data_type]
+                        am = params[f"{data_type}-allele_mask"]
+                        rdrs_gk = params[f"{data_type}-rdrs"][:, 1:]
+
+                        if fit_mode in {"allele_only", "hybrid"} and am.any():
                             ll = cond_betabin_logpmf_theta(
-                                c["Y"][:, _n : _n + 1],
-                                c["D"][:, _n : _n + 1],
-                                c["tau"],
-                                c["baf"],
-                                c["rdr_bb"],
+                                sx.Y[am, _n : _n + 1],
+                                sx.D[am, _n : _n + 1],
+                                params[f"{data_type}-tau"][
+                                    params[f"{data_type}-tau_valid_idx"]
+                                ],
+                                sx.BAF[am, 1:],
+                                rdrs_gk[am],
                                 tv_arr,
                             )
                             Q += np.sum(ll[:, 0, :] * _w)
-                        if "X" in c:
+
+                        tm = params[f"{data_type}-total_mask"]
+                        if fit_mode in {"total_only", "hybrid"} and tm.any():
                             ll = cond_negbin_logpmf_theta(
-                                c["X"][:, _n : _n + 1],
-                                np.array([c["T"][_n]], dtype=float),
-                                c["lam"],
-                                c["invphi"],
-                                c["rdr_nb"],
+                                sx.X[tm, _n : _n + 1],
+                                np.array([sx.T[_n]], dtype=float),
+                                params[f"{data_type}-lambda"][tm],
+                                params[f"{data_type}-inv_phi"][
+                                    params[f"{data_type}-invphi_valid_idx"]
+                                ],
+                                rdrs_gk[tm],
                                 tv_arr,
                             )
                             Q += np.sum(ll[:, 0, :] * _w)
