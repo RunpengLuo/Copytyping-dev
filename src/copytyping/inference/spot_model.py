@@ -293,68 +293,81 @@ class Spot_Model(Base_Model):
                 invphi_map = mle_invphi(X_all, mu_all, w_all, prior=self._invphi_prior)
                 params[f"{data_type}-inv_phi"][:] = invphi_map
 
-        # --- Theta update (doc: M-step tumor-branch purity) ---
-        # v_n^new = argmax [ Σ_k r̃_{nk}·ℓ_{nk}(v) + log p(v) ]
-        # Only meaningful when r_{nT} > 0; use r̃_{nk} (conditional tumor posterior)
+        # --- Theta update (per-spot MLE with precomputed data) ---
+        # Precompute per-spot data slices once, then run minimize_scalar per spot.
         if any(not fix_params[f"{dt}-theta"] for dt in self.data_types):
             purity_bounds = (self._purity_min, 1.0 - 1e-4)
             a_theta, b_theta = self._theta_prior
 
-            allele_masks = {}
-            total_masks = {}
-            rdrs = {}
+            # Precompute arrays needed for theta objective
+            precomp = []
             for data_type in self.data_types:
                 sx = self.data_sources[data_type]
                 lg = params[f"{data_type}-lambda"]
-                rdrs[data_type] = clone_rdr_gk(lg, sx.C)[:, 1:]
-                total_masks[data_type] = sx.MASK[self.total_mask_id] & (lg > 0)
-                allele_masks[data_type] = sx.MASK[self.allele_mask_id] & (lg > 0)
+                mask_n = self.modality_masks[data_type]
+                rdrs_gk = clone_rdr_gk(lg, sx.C)[:, 1:]
+                pc = {"mask_n": mask_n}
+
+                if fit_mode in {"allele_only", "hybrid"}:
+                    allele_mask = sx.MASK[self.allele_mask_id] & (lg > 0)
+                    if allele_mask.any():
+                        pc["bb"] = {
+                            "Y": sx.Y[allele_mask],
+                            "D": sx.D[allele_mask],
+                            "tau": params[f"{data_type}-tau"][
+                                lg[sx.MASK[self.allele_mask_id]] > 0
+                            ],
+                            "baf": sx.BAF[allele_mask, 1:],
+                            "rdr": rdrs_gk[allele_mask],
+                        }
+
+                if fit_mode in {"total_only", "hybrid"}:
+                    total_mask = sx.MASK[self.total_mask_id] & (lg > 0)
+                    if total_mask.any():
+                        pc["nb"] = {
+                            "X": sx.X[total_mask],
+                            "T": sx.T,
+                            "lam": lg[total_mask],
+                            "invphi": params[f"{data_type}-inv_phi"][
+                                lg[sx.MASK[self.total_mask_id]] > 0
+                            ],
+                            "rdr": rdrs_gk[total_mask],
+                        }
+                precomp.append(pc)
 
             theta_arr = params[f"{self.data_types[0]}-theta"]
 
             for n in range(self.N):
+                w = r_tilde[n]  # (K_tumor,)
 
-                def neg_Q_theta(theta_val, _n=n):
-                    theta_val = np.array([theta_val], dtype=float)
+                def neg_Q_theta(tv, _n=n, _w=w):
+                    tv_arr = np.array([tv], dtype=float)
                     Q = 0.0
-                    w = r_tilde[_n][None, :]
-
-                    for data_type in self.data_types:
-                        if not self.modality_masks[data_type][_n]:
+                    for pc in precomp:
+                        if not pc["mask_n"][_n]:
                             continue
-                        sx = self.data_sources[data_type]
-                        lg = params[f"{data_type}-lambda"]
-                        total_mask = total_masks[data_type]
-                        allele_mask = allele_masks[data_type]
-                        rdrs_gk = rdrs[data_type]
-
-                        if fit_mode in {"total_only", "hybrid"} and total_mask.any():
-                            ll_nb = cond_negbin_logpmf_theta(
-                                sx.X[total_mask][:, _n : _n + 1],
-                                np.array([sx.T[_n]], dtype=float),
-                                lg[total_mask],
-                                params[f"{data_type}-inv_phi"][
-                                    lg[sx.MASK[self.total_mask_id]] > 0
-                                ],
-                                rdrs_gk[total_mask],
-                                theta_val,
+                        if "bb" in pc:
+                            b = pc["bb"]
+                            ll = cond_betabin_logpmf_theta(
+                                b["Y"][:, _n : _n + 1],
+                                b["D"][:, _n : _n + 1],
+                                b["tau"],
+                                b["baf"],
+                                b["rdr"],
+                                tv_arr,
                             )
-                            Q += np.sum(ll_nb[:, 0, :] * w)
-
-                        if fit_mode in {"allele_only", "hybrid"} and allele_mask.any():
-                            ll_bb = cond_betabin_logpmf_theta(
-                                sx.Y[allele_mask][:, _n : _n + 1],
-                                sx.D[allele_mask][:, _n : _n + 1],
-                                params[f"{data_type}-tau"][
-                                    lg[sx.MASK[self.allele_mask_id]] > 0
-                                ],
-                                sx.BAF[allele_mask, 1:],
-                                rdrs_gk[allele_mask],
-                                theta_val,
+                            Q += np.sum(ll[:, 0, :] * _w[None, :])
+                        if "nb" in pc:
+                            b = pc["nb"]
+                            ll = cond_negbin_logpmf_theta(
+                                b["X"][:, _n : _n + 1],
+                                np.array([b["T"][_n]], dtype=float),
+                                b["lam"],
+                                b["invphi"],
+                                b["rdr"],
+                                tv_arr,
                             )
-                            Q += np.sum(ll_bb[:, 0, :] * w)
-
-                    tv = float(theta_val[0])
+                            Q += np.sum(ll[:, 0, :] * _w[None, :])
                     Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(
                         1.0 - tv
                     )
