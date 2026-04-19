@@ -306,13 +306,17 @@ def _apply_solfile(seg_df, solfile):
             lambda cid, c=col: sol_map.get(cid, {}).get(c)
         )
 
-    # check for unmapped clusters
+    # segments with clusters not in solfile → default diploid (1|1)
     unmapped = seg_df[cn_cols[0]].isna()
     if unmapped.any():
         logging.warning(
-            f"{unmapped.sum()} segments have CLUSTER IDs not in solfile, dropping them"
+            f"{unmapped.sum()} segments have CLUSTER IDs not in solfile, "
+            "defaulting to diploid 1|1"
         )
-        seg_df = seg_df[~unmapped].reset_index(drop=True)
+        for col in cn_cols:
+            seg_df.loc[unmapped, col] = "1|1"
+        for col in u_cols:
+            seg_df.loc[unmapped, col] = 0.0
 
     # rebuild CNP and PROPS
     seg_df["CNP"] = seg_df.apply(

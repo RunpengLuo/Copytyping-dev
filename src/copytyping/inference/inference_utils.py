@@ -152,18 +152,6 @@ def adaptive_bin_bbc(
     agg_df = pd.DataFrame(rows)
 
     lengths = (agg_df["END"] - agg_df["START"]).to_numpy()
-    # Filter out unmapped bins (seg_id=-1, empty CNP)
-    mapped = agg_df["seg_id"] >= 0
-    if not mapped.all():
-        n_drop = (~mapped).sum()
-        logging.info(f"adaptive_bin_bbc: dropping {n_drop} unmapped bins")
-        agg_df = agg_df[mapped].reset_index(drop=True)
-        X_agg = X_agg[mapped.to_numpy()]
-        Y_agg = Y_agg[mapped.to_numpy()]
-        D_agg = D_agg[mapped.to_numpy()]
-        n_agg = len(agg_df)
-
-    lengths = (agg_df["END"] - agg_df["START"]).to_numpy()
     d_sums = D_agg.sum(axis=1)
     x_sums = X_agg.sum(axis=1)
     logging.info(
