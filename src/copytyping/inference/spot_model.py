@@ -350,7 +350,7 @@ class Spot_Model(Base_Model):
                 res = minimize_scalar(
                     neg_Q_theta, bounds=purity_bounds, method="bounded"
                 )
-                theta_arr[n] = np.clip(res.x, purity_bounds[0], purity_bounds[1])
+                theta_arr[n] = res.x
 
     # ------------------------------------------------------------------
     # Predict
