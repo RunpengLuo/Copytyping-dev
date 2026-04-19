@@ -2,7 +2,7 @@ import logging
 
 import numpy as np
 import pandas as pd
-from scipy.spatial import distance
+from scipy import sparse
 from sklearn.metrics import (
     accuracy_score,
     adjusted_rand_score,
@@ -100,24 +100,21 @@ def evaluate_malignant_accuracy(
     return metric
 
 
-def joincount_zscore(labels, coords, adjacent_dist=105.0):
+def joincount_zscore(labels, W):
     """Per-label joincount z-score for spatial coherence.
 
-    Builds row-normalized adjacency from coordinates, binarizes each
-    label, computes z-score(J_11). Higher = more spatially coherent.
+    Args:
+        labels: (N,) array of clone labels.
+        W: (N, N) row-normalized adjacency matrix (e.g. from squidpy).
 
     Ref: Bouayad Agha & Bellefon, Handbook of Spatial Analysis (2018).
     """
     labels = np.asarray(labels)
-    coords = np.asarray(coords, dtype=np.float64)
     N = len(labels)
 
-    dists = distance.cdist(coords, coords)
-    W = (dists < adjacent_dist).astype(np.float64)
-    np.fill_diagonal(W, 0.0)
-    row_sums = W.sum(axis=1)
-    row_sums[row_sums == 0] = 1.0
-    W = W / row_sums[:, None]
+    if sparse.issparse(W):
+        W = W.toarray()
+    W = np.asarray(W, dtype=np.float64)
 
     W_sum = W.sum()
     W2_sum = (W * W).sum()

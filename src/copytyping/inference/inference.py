@@ -2,8 +2,10 @@ import argparse
 import logging
 import os
 
+import numpy as np
 import pandas as pd
 import scanpy as sc
+import squidpy as sq
 
 from copytyping.copytyping_parser import (
     add_arguments_inference,
@@ -220,12 +222,18 @@ def run(args=None):
         gex_adata = adatas.get("gex")
         if gex_adata is not None and "spatial" in gex_adata.obsm:
             common = anns["BARCODE"].values
-            adata_sub = gex_adata[gex_adata.obs_names.isin(common)]
+            adata_sub = gex_adata[gex_adata.obs_names.isin(common)].copy()
             anns_indexed = anns.set_index("BARCODE").loc[adata_sub.obs_names]
-            coords = adata_sub.obsm["spatial"]
             clone_labels = anns_indexed[label].to_numpy()
 
-            jc = joincount_zscore(clone_labels, coords)
+            sq.gr.spatial_neighbors(adata_sub, n_neighs=6, coord_type="generic")
+            W = adata_sub.obsp["spatial_connectivities"]
+            # Row-normalize
+            row_sums = np.asarray(W.sum(axis=1)).flatten()
+            row_sums[row_sums == 0] = 1.0
+            W = W.multiply(1.0 / row_sums[:, None])
+
+            jc = joincount_zscore(clone_labels, W)
             logging.info("joincount z-score:")
             for lab, z in sorted(jc.items()):
                 logging.info(f"  {lab:8s}: {z:.4f}")
