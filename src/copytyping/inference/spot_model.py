@@ -269,12 +269,6 @@ class Spot_Model(Base_Model):
                     neg_Q, bounds=purity_bounds, method="bounded"
                 ).x
 
-        # Compute hard effective purity from posteriors
-        map_label = np.argmax(gamma, axis=1)  # 0=normal, 1+=tumor
-        for dt in self.data_types:
-            theta = params[f"{dt}-theta"]
-            params[f"{dt}-theta_eff"] = np.where(map_label == 0, 0.0, theta)
-
     def predict(
         self, fit_mode, params, label, posterior_thres=0.5, margin_thres=0.1, **kwargs
     ):
@@ -285,14 +279,15 @@ class Spot_Model(Base_Model):
         all_clones = list(self.clones)
         anns.loc[:, all_clones] = posteriors
         anns["tumor"] = 1 - anns["normal"]
-        anns["tumor_purity"] = params[f"{self.data_types[0]}-theta"]
-        anns["tumor_purity_eff"] = params[f"{self.data_types[0]}-theta_eff"]
 
         probs = anns[all_clones].to_numpy()
         probs_sorted = np.sort(probs, axis=1)
         anns["max_posterior"] = probs_sorted[:, -1]
         anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
         anns[label] = anns[all_clones].idxmax(axis=1)
+
+        theta = params[f"{self.data_types[0]}-theta"]
+        anns["tumor_purity"] = np.where(anns[label] == "normal", 0.0, theta)
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in all_clones}
         self._log_posterior_stats(anns, label)
