@@ -7,9 +7,7 @@ from scipy.special import logsumexp
 from copytyping.inference.base_model import Base_Model
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
-    cond_betabin_logpmf,
     cond_betabin_logpmf_theta,
-    cond_negbin_logpmf,
     cond_negbin_logpmf_theta,
     estimate_tumor_proportion_bin,
     mle_invphi,
@@ -24,8 +22,8 @@ class Spot_Model(Base_Model):
     - h_n=normal: θ=0, CN=diploid
     - h_n=tumor: θ_n in [purity_min, 1], clone z_n in {clone1,...,cloneK}
 
-    Posteriors are over K+1 labels: [normal, clone1, ..., cloneK].
-    Pi has two levels: gate (normal vs tumor) and clone (within tumor).
+    Posteriors are over K labels: [normal, clone1, ..., cloneK].
+    Normal clone uses θ-mixing with CN=(1,1) which naturally produces θ=0 behavior.
     """
 
     def __init__(
@@ -55,8 +53,7 @@ class Spot_Model(Base_Model):
             allele_mask_id=allele_mask_id,
             total_mask_id=total_mask_id,
         )
-        self.tumor_clones = self.clones[1:]
-        self.K_tumor = len(self.tumor_clones)
+        self.K_tumor = self.K - 1
 
     def _init_params(self, fit_mode, init_fix_params, init_params):
         is_normal = self._identify_normal_cells(
@@ -64,27 +61,27 @@ class Spot_Model(Base_Model):
         )
         self._init_is_normal = is_normal
 
-        # pi over all K+1 (gate + clone combined)
-        bulk_pi = init_params.get("pi", np.ones(self.K) / self.K)
-        params = {"pi": bulk_pi}
-
+        params = {"pi": init_params.get("pi", np.ones(self.K) / self.K)}
         self._init_lambda(params, is_normal)
 
-        for data_type in self.data_types:
-            sx_data = self.data_sources[data_type]
-            params[f"{data_type}-theta"] = estimate_tumor_proportion_bin(
-                sx_data, params[f"{data_type}-lambda"]
-            )
+        for dt in self.data_types:
+            sx = self.data_sources[dt]
+            lg = params[f"{dt}-lambda"]
+            params[f"{dt}-theta"] = estimate_tumor_proportion_bin(sx, lg)
             if fit_mode in {"allele_only", "hybrid"}:
-                n_allele = int(sx_data.MASK[self.allele_mask_id].sum())
-                params[f"{data_type}-tau"] = np.full(
-                    n_allele, init_params["tau0"], dtype=np.float32
-                )
+                n = int(sx.MASK[self.allele_mask_id].sum())
+                params[f"{dt}-tau"] = np.full(n, init_params["tau0"], dtype=np.float32)
             if fit_mode in {"total_only", "hybrid"}:
-                n_total = int(sx_data.MASK[self.total_mask_id].sum())
-                params[f"{data_type}-inv_phi"] = np.full(
-                    n_total, 1 / init_params["phi0"], dtype=np.float32
+                n = int(sx.MASK[self.total_mask_id].sum())
+                params[f"{dt}-inv_phi"] = np.full(
+                    n, 1 / init_params["phi0"], dtype=np.float32
                 )
+            # Precompute fixed arrays
+            params[f"{dt}-rdrs"] = clone_rdr_gk(lg, sx.C)
+            params[f"{dt}-allele_mask"] = sx.MASK[self.allele_mask_id] & (lg > 0)
+            params[f"{dt}-total_mask"] = sx.MASK[self.total_mask_id] & (lg > 0)
+            params[f"{dt}-tau_valid_idx"] = lg[sx.MASK[self.allele_mask_id]] > 0
+            params[f"{dt}-invphi_valid_idx"] = lg[sx.MASK[self.total_mask_id]] > 0
 
         fix_params = {key: False for key in params}
         if init_fix_params is not None:
@@ -95,161 +92,96 @@ class Spot_Model(Base_Model):
         self._tumor_idx = np.arange(self.N)
         self._N_tumor = self.N
         self._purity_min = init_params.get("purity_min", 0.1)
-
-        # Precompute fixed arrays (lambda and masks don't change across iterations)
-        for data_type in self.data_types:
-            sx = self.data_sources[data_type]
-            lg = params[f"{data_type}-lambda"]
-            params[f"{data_type}-rdrs"] = clone_rdr_gk(lg, sx.C)
-            params[f"{data_type}-allele_mask"] = sx.MASK[self.allele_mask_id] & (lg > 0)
-            params[f"{data_type}-total_mask"] = sx.MASK[self.total_mask_id] & (lg > 0)
-            params[f"{data_type}-tau_valid_idx"] = lg[sx.MASK[self.allele_mask_id]] > 0
-            params[f"{data_type}-invphi_valid_idx"] = (
-                lg[sx.MASK[self.total_mask_id]] > 0
-            )
-
         return params, fix_params
 
-    def _compute_normal_ll(self, fit_mode, params):
-        """Log-likelihood for normal gate (θ=0, CN=diploid) for all spots."""
-        normal_ll = np.zeros(self.N, dtype=np.float64)
-
-        for data_type in self.data_types:
-            sx_data = self.data_sources[data_type]
-            mask_n = self.modality_masks[data_type]
-            lambda_g = params[f"{data_type}-lambda"]
-
-            if fit_mode in {"allele_only", "hybrid"}:
-                MA, _ = sx_data.apply_mask_shallow(
-                    self.allele_mask_id, additional_mask=lambda_g > 0
-                )
-                tau_valid = params[f"{data_type}-tau"][
-                    params[f"{data_type}-tau_valid_idx"]
-                ]
-                p_normal = np.full((MA["BAF"].shape[0], 1), 0.5)
-                ll_bb = cond_betabin_logpmf(MA["Y"], MA["D"], tau_valid, p_normal)
-                contrib = ll_bb[:, :, 0].sum(axis=0)
-                contrib[~mask_n] = 0.0
-                normal_ll += contrib
-
-            if fit_mode in {"total_only", "hybrid"}:
-                total_mask = params[f"{data_type}-total_mask"]
-                invphi_valid = params[f"{data_type}-inv_phi"][
-                    params[f"{data_type}-invphi_valid_idx"]
-                ]
-                pi_normal = lambda_g[total_mask, None]
-                ll_nb = cond_negbin_logpmf(
-                    sx_data.X[total_mask], sx_data.T, pi_normal, invphi_valid
-                )
-                contrib = ll_nb[:, :, 0].sum(axis=0)
-                contrib[~mask_n] = 0.0
-                normal_ll += contrib
-
-        return normal_ll
-
     def compute_log_likelihood(self, fit_mode, params):
-        N_t = self._N_tumor
-        tumor_lls = np.zeros((N_t, self.K_tumor), dtype=np.float64)
-        tumor_idx = self._tumor_idx
+        """Compute log-likelihood for all K clones (normal + tumor).
 
-        for data_type in self.data_types:
-            sx_data = self.data_sources[data_type]
-            mask_n = self.modality_masks[data_type]
-            tumor_mask_n = mask_n[tumor_idx]
+        Normal clone (k=0) has CN=(1,1), so theta-mixing naturally gives
+        BAF=0.5 and RDR=1 regardless of theta. No separate normal branch needed.
+        """
+        N = self.N
+        global_lls = np.zeros((N, self.K), dtype=np.float64)
 
-            lambda_g = params[f"{data_type}-lambda"]
-            rdrs_gk = params[f"{data_type}-rdrs"][:, 1:]
-            theta_tumor = params[f"{data_type}-theta"][tumor_idx]
+        for dt in self.data_types:
+            sx = self.data_sources[dt]
+            mask_n = self.modality_masks[dt]
+            theta = params[f"{dt}-theta"]
+            rdrs = params[f"{dt}-rdrs"]
+            allele_mask = params[f"{dt}-allele_mask"]
+            total_mask = params[f"{dt}-total_mask"]
 
-            if fit_mode in {"allele_only", "hybrid"}:
-                MA, _ = sx_data.apply_mask_shallow(
-                    self.allele_mask_id, additional_mask=lambda_g > 0
+            if fit_mode in {"allele_only", "hybrid"} and allele_mask.any():
+                MA, _ = sx.apply_mask_shallow(
+                    self.allele_mask_id, additional_mask=params[f"{dt}-lambda"] > 0
                 )
-                allele_mask = params[f"{data_type}-allele_mask"]
-                tau_valid = params[f"{data_type}-tau"][
-                    params[f"{data_type}-tau_valid_idx"]
-                ]
-                allele_ll = cond_betabin_logpmf_theta(
-                    MA["Y"][:, tumor_idx],
-                    MA["D"][:, tumor_idx],
+                tau_valid = params[f"{dt}-tau"][params[f"{dt}-tau_valid_idx"]]
+                ll = cond_betabin_logpmf_theta(
+                    MA["Y"],
+                    MA["D"],
                     tau_valid,
-                    MA["BAF"][:, 1:],
-                    rdrs_gk[allele_mask],
-                    theta_tumor,
+                    MA["BAF"],
+                    rdrs[allele_mask],
+                    theta,
                 )
-                contrib = allele_ll.sum(axis=0)
-                contrib[~tumor_mask_n, :] = 0.0
-                tumor_lls += contrib
+                contrib = ll.sum(axis=0)  # (N, K)
+                contrib[~mask_n, :] = 0.0
+                global_lls += contrib
 
-            if fit_mode in {"total_only", "hybrid"}:
-                total_mask = params[f"{data_type}-total_mask"]
-                invphi_valid = params[f"{data_type}-inv_phi"][
-                    params[f"{data_type}-invphi_valid_idx"]
-                ]
-                total_ll = cond_negbin_logpmf_theta(
-                    sx_data.X[total_mask][:, tumor_idx],
-                    sx_data.T[tumor_idx],
-                    lambda_g[total_mask],
+            if fit_mode in {"total_only", "hybrid"} and total_mask.any():
+                invphi_valid = params[f"{dt}-inv_phi"][params[f"{dt}-invphi_valid_idx"]]
+                ll = cond_negbin_logpmf_theta(
+                    sx.X[total_mask],
+                    sx.T,
+                    params[f"{dt}-lambda"][total_mask],
                     invphi_valid,
-                    rdrs_gk[total_mask],
-                    theta_tumor,
+                    rdrs[total_mask],
+                    theta,
                 )
-                contrib = total_ll.sum(axis=0)
-                contrib[~tumor_mask_n, :] = 0.0
-                tumor_lls += contrib
+                contrib = ll.sum(axis=0)
+                contrib[~mask_n, :] = 0.0
+                global_lls += contrib
 
-        # Normal gate ll
-        normal_ll = self._compute_normal_ll(fit_mode, params)
-
-        # Gated log-posteriors: [normal, clone1, ..., cloneK]
+        # Gated pi: π_0=ρ, π_k=(1-ρ)·ω_k
         pi = params["pi"]
-        pi_normal = pi[0]
-        pi_tumor = 1.0 - pi_normal
+        rho = pi[0]
         pi_clone = pi[1:] / np.maximum(pi[1:].sum(), 1e-30)
-
-        global_lls = np.zeros((self.N, self.K), dtype=np.float64)
-        global_lls[:, 0] = normal_ll + np.log(np.maximum(pi_normal, 1e-30))
-        global_lls[tumor_idx, 1:] = (
-            tumor_lls
-            + np.log(np.maximum(pi_tumor, 1e-30))
-            + np.log(np.maximum(pi_clone, 1e-30))[None, :]
+        global_lls[:, 0] += np.log(np.maximum(rho, 1e-30))
+        global_lls[:, 1:] += np.log(np.maximum(1 - rho, 1e-30)) + np.log(
+            np.maximum(pi_clone, 1e-30)
         )
 
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
     def _m_step(self, fit_mode, gamma, params, fix_params, t=0, eps=1e-10):
-        tumor_idx = self._tumor_idx
-
-        # --- Mixture weights (doc: M-step mixture weights) ---
-        # ρ = (1/N) Σ r_{n0}
+        # Mixture weights: ρ and ω_k
         rho = gamma[:, 0].mean()
-        # ω_k = Σ r_{nk} / Σ r_{nT}
-        r_tumor = gamma[:, 1:]  # (N, K_tumor)
-        r_nT = r_tumor.sum(axis=1)  # (N,)
+        r_tumor = gamma[:, 1:]
+        r_nT = r_tumor.sum(axis=1)
         omega = r_tumor.sum(axis=0) / np.maximum(r_nT.sum(), eps)
-        # Store as marginal: π_0=ρ, π_k=(1-ρ)ω_k
         params["pi"] = np.concatenate([[rho], (1 - rho) * omega])
 
-        # Conditional tumor posterior: r̃_{nk} = r_{nk} / r_{nT}
-        r_tilde = r_tumor / np.maximum(r_nT[:, None], eps)  # (N, K_tumor)
+        # Conditional tumor posterior for theta update
+        r_tilde = r_tumor / np.maximum(r_nT[:, None], eps)
 
-        # --- Dispersion updates (doc: weighted by ALL responsibilities) ---
-        for data_type in self.data_types:
-            sx_data = self.data_sources[data_type]
-            lambda_g = params[f"{data_type}-lambda"]
-            theta_t = params[f"{data_type}-theta"][tumor_idx]
-            rdrs_all = params[f"{data_type}-rdrs"]  # (G, K) including normal
-            allele_mask = params[f"{data_type}-allele_mask"]
-            total_mask = params[f"{data_type}-total_mask"]
+        # Dispersion updates (weighted by all K branches)
+        tumor_idx = self._tumor_idx
+        for dt in self.data_types:
+            sx = self.data_sources[dt]
+            lg = params[f"{dt}-lambda"]
+            theta_t = params[f"{dt}-theta"][tumor_idx]
+            rdrs = params[f"{dt}-rdrs"]
+            allele_mask = params[f"{dt}-allele_mask"]
+            total_mask = params[f"{dt}-total_mask"]
 
             if (
                 fit_mode in {"allele_only", "hybrid"}
-                and not fix_params[f"{data_type}-tau"]
+                and not fix_params[f"{dt}-tau"]
                 and allele_mask.any()
             ):
-                rdr = rdrs_all[allele_mask]  # (G_bb, K)
-                baf = sx_data.BAF[allele_mask]  # (G_bb, K)
+                rdr = rdrs[allele_mask]
+                baf = sx.BAF[allele_mask]
                 p_gnk = (
                     theta_t[None, :, None] * rdr[:, None, :] * baf[:, None, :]
                     + 0.5 * (1 - theta_t[None, :, None])
@@ -257,37 +189,39 @@ class Spot_Model(Base_Model):
                     theta_t[None, :, None] * rdr[:, None, :]
                     + (1 - theta_t[None, :, None])
                 )
-                Y_gnk = sx_data.Y[allele_mask][:, tumor_idx, None].astype(np.float64)
-                D_gnk = sx_data.D[allele_mask][:, tumor_idx, None].astype(np.float64)
-                Y_all = np.broadcast_to(Y_gnk, p_gnk.shape)
-                D_all = np.broadcast_to(D_gnk, p_gnk.shape)
-                tau_map = mle_tau(
-                    Y_all, D_all, p_gnk, gamma[None, :, :], prior=self._tau_prior
+                Y = sx.Y[allele_mask][:, tumor_idx, None].astype(np.float64)
+                D = sx.D[allele_mask][:, tumor_idx, None].astype(np.float64)
+                params[f"{dt}-tau"][:] = mle_tau(
+                    np.broadcast_to(Y, p_gnk.shape),
+                    np.broadcast_to(D, p_gnk.shape),
+                    p_gnk,
+                    gamma[None, :, :],
+                    prior=self._tau_prior,
                 )
-                params[f"{data_type}-tau"][:] = tau_map
 
             if (
                 fit_mode in {"total_only", "hybrid"}
-                and not fix_params[f"{data_type}-inv_phi"]
+                and not fix_params[f"{dt}-inv_phi"]
                 and total_mask.any()
             ):
-                rdr = rdrs_all[total_mask]  # (G_nb, K)
+                rdr = rdrs[total_mask]
                 mu_gnk = (
-                    sx_data.T[tumor_idx][None, :, None]
-                    * lambda_g[total_mask, None, None]
+                    sx.T[tumor_idx][None, :, None]
+                    * lg[total_mask, None, None]
                     * (
                         theta_t[None, :, None] * rdr[:, None, :]
                         + (1 - theta_t[None, :, None])
                     )
                 )
-                X_gnk = sx_data.X[total_mask][:, tumor_idx, None].astype(np.float64)
-                X_all = np.broadcast_to(X_gnk, mu_gnk.shape)
-                invphi_map = mle_invphi(
-                    X_all, mu_gnk, gamma[None, :, :], prior=self._invphi_prior
+                X = sx.X[total_mask][:, tumor_idx, None].astype(np.float64)
+                params[f"{dt}-inv_phi"][:] = mle_invphi(
+                    np.broadcast_to(X, mu_gnk.shape),
+                    mu_gnk,
+                    gamma[None, :, :],
+                    prior=self._invphi_prior,
                 )
-                params[f"{data_type}-inv_phi"][:] = invphi_map
 
-        # --- Theta update ---
+        # Theta update (per-spot, tumor clones only)
         if any(not fix_params[f"{dt}-theta"] for dt in self.data_types):
             a_theta, b_theta = self._theta_prior
             purity_bounds = (self._purity_min, 1.0 - 1e-4)
@@ -296,76 +230,58 @@ class Spot_Model(Base_Model):
             for n in range(self.N):
                 w = r_tilde[n]
 
-                def neg_Q_theta(tv, _n=n, _w=w):
+                def neg_Q(tv, _n=n, _w=w):
                     tv_arr = np.array([tv], dtype=float)
                     Q = 0.0
-                    for data_type in self.data_types:
-                        if not self.modality_masks[data_type][_n]:
+                    for dt in self.data_types:
+                        if not self.modality_masks[dt][_n]:
                             continue
-                        sx = self.data_sources[data_type]
-                        am = params[f"{data_type}-allele_mask"]
-                        rdrs_gk = params[f"{data_type}-rdrs"][:, 1:]
-
+                        sx = self.data_sources[dt]
+                        rdrs_t = params[f"{dt}-rdrs"][:, 1:]
+                        am = params[f"{dt}-allele_mask"]
                         if fit_mode in {"allele_only", "hybrid"} and am.any():
                             ll = cond_betabin_logpmf_theta(
                                 sx.Y[am, _n : _n + 1],
                                 sx.D[am, _n : _n + 1],
-                                params[f"{data_type}-tau"][
-                                    params[f"{data_type}-tau_valid_idx"]
-                                ],
+                                params[f"{dt}-tau"][params[f"{dt}-tau_valid_idx"]],
                                 sx.BAF[am, 1:],
-                                rdrs_gk[am],
+                                rdrs_t[am],
                                 tv_arr,
                             )
                             Q += np.sum(ll[:, 0, :] * _w)
-
-                        tm = params[f"{data_type}-total_mask"]
+                        tm = params[f"{dt}-total_mask"]
                         if fit_mode in {"total_only", "hybrid"} and tm.any():
                             ll = cond_negbin_logpmf_theta(
                                 sx.X[tm, _n : _n + 1],
                                 np.array([sx.T[_n]], dtype=float),
-                                params[f"{data_type}-lambda"][tm],
-                                params[f"{data_type}-inv_phi"][
-                                    params[f"{data_type}-invphi_valid_idx"]
+                                params[f"{dt}-lambda"][tm],
+                                params[f"{dt}-inv_phi"][
+                                    params[f"{dt}-invphi_valid_idx"]
                                 ],
-                                rdrs_gk[tm],
+                                rdrs_t[tm],
                                 tv_arr,
                             )
                             Q += np.sum(ll[:, 0, :] * _w)
-                    Q += (a_theta - 1.0) * np.log(tv) + (b_theta - 1.0) * np.log(
-                        1.0 - tv
-                    )
+                    Q += (a_theta - 1) * np.log(tv) + (b_theta - 1) * np.log(1 - tv)
                     return -Q
 
-                res = minimize_scalar(
-                    neg_Q_theta, bounds=purity_bounds, method="bounded"
-                )
-                theta_arr[n] = res.x
+                theta_arr[n] = minimize_scalar(
+                    neg_Q, bounds=purity_bounds, method="bounded"
+                ).x
 
-    # ------------------------------------------------------------------
-    # Predict
-    # ------------------------------------------------------------------
     def predict(
-        self,
-        fit_mode,
-        params,
-        label,
-        posterior_thres=0.5,
-        margin_thres=0.1,
-        **kwargs,
+        self, fit_mode, params, label, posterior_thres=0.5, margin_thres=0.1, **kwargs
     ):
         logging.info("Decode labels with MAP estimation")
         posteriors = self._e_step(fit_mode, params)
-
         anns = self.barcodes.copy(deep=True)
 
         theta_list = [
             params[f"{dt}-theta"] for dt in self.data_types if f"{dt}-theta" in params
         ]
-        if len(theta_list) == 1:
-            anns["tumor_purity"] = theta_list[0]
-        else:
-            anns["tumor_purity"] = np.mean(theta_list, axis=0)
+        anns["tumor_purity"] = (
+            theta_list[0] if len(theta_list) == 1 else np.mean(theta_list, axis=0)
+        )
 
         all_clones = list(self.clones)
         anns.loc[:, all_clones] = posteriors
@@ -375,7 +291,6 @@ class Spot_Model(Base_Model):
         probs_sorted = np.sort(probs, axis=1)
         anns["max_posterior"] = probs_sorted[:, -1]
         anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
-
         anns[label] = anns[all_clones].idxmax(axis=1)
 
         # Hard effective purity: 0 if normal, v_n if tumor
