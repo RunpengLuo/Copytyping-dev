@@ -235,74 +235,56 @@ class Spot_Model(Base_Model):
         r_tilde = r_tumor / np.maximum(r_nT[:, None], eps)  # (N, K_tumor)
 
         # --- Dispersion updates (doc: weighted by ALL responsibilities) ---
-        # Build (G, N, K_tumor+1) weights for joint normal+tumor dispersion fit
-        # For tau: normal branch uses p=0.5, tumor branches use p̃_{gnk}(v_n)
-        # For inv_phi: normal branch uses mu=T*λ, tumor uses T*λ*(θ*rdr+(1-θ))
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
             lambda_g = params[f"{data_type}-lambda"]
-            theta = params[f"{data_type}-theta"]
-            theta_t = theta[tumor_idx]
-            rdrs_gk = params[f"{data_type}-rdrs"][:, 1:]
+            theta_t = params[f"{data_type}-theta"][tumor_idx]
+            rdrs_all = params[f"{data_type}-rdrs"]  # (G, K) including normal
+            allele_mask = params[f"{data_type}-allele_mask"]
+            total_mask = params[f"{data_type}-total_mask"]
 
-            # BB tau update — weighted by all K+1 branches
             if (
                 fit_mode in {"allele_only", "hybrid"}
                 and not fix_params[f"{data_type}-tau"]
-                and sx_data.MASK[self.allele_mask_id].sum() > 0
+                and allele_mask.any()
             ):
-                allele_mask = params[f"{data_type}-allele_mask"]
-                baf_gk = sx_data.BAF[:, 1:]
-                rdr_bb = rdrs_gk[allele_mask]
-                baf_bb = baf_gk[allele_mask]
-                # Tumor p̃: (G_bb, N, K_tumor)
-                p_tumor = (
-                    theta_t[None, :, None] * rdr_bb[:, None, :] * baf_bb[:, None, :]
+                rdr = rdrs_all[allele_mask]  # (G_bb, K)
+                baf = sx_data.BAF[allele_mask]  # (G_bb, K)
+                p_gnk = (
+                    theta_t[None, :, None] * rdr[:, None, :] * baf[:, None, :]
                     + 0.5 * (1 - theta_t[None, :, None])
                 ) / (
-                    theta_t[None, :, None] * rdr_bb[:, None, :]
+                    theta_t[None, :, None] * rdr[:, None, :]
                     + (1 - theta_t[None, :, None])
                 )
-                # Normal p̃ = 0.5: (G_bb, N, 1)
-                p_normal = np.full((p_tumor.shape[0], p_tumor.shape[1], 1), 0.5)
-                # Concat: (G_bb, N, K+1) with weights (1, N, K+1)
-                p_all = np.concatenate([p_normal, p_tumor], axis=2)
-                w_all = gamma[None, :, :]  # (1, N, K+1)
                 Y_gnk = sx_data.Y[allele_mask][:, tumor_idx, None].astype(np.float64)
                 D_gnk = sx_data.D[allele_mask][:, tumor_idx, None].astype(np.float64)
-                # Broadcast Y,D to match K+1 columns
-                Y_all = np.broadcast_to(Y_gnk, p_all.shape)
-                D_all = np.broadcast_to(D_gnk, p_all.shape)
-                tau_map = mle_tau(Y_all, D_all, p_all, w_all, prior=self._tau_prior)
+                Y_all = np.broadcast_to(Y_gnk, p_gnk.shape)
+                D_all = np.broadcast_to(D_gnk, p_gnk.shape)
+                tau_map = mle_tau(
+                    Y_all, D_all, p_gnk, gamma[None, :, :], prior=self._tau_prior
+                )
                 params[f"{data_type}-tau"][:] = tau_map
 
-            # NB inv_phi update — weighted by all K+1 branches
             if (
                 fit_mode in {"total_only", "hybrid"}
                 and not fix_params[f"{data_type}-inv_phi"]
-                and sx_data.MASK[self.total_mask_id].sum() > 0
+                and total_mask.any()
             ):
-                total_mask = params[f"{data_type}-total_mask"]
-                rdr_nb = rdrs_gk[total_mask]
-                # Tumor mu: (G_nb, N, K_tumor)
-                mu_tumor = (
+                rdr = rdrs_all[total_mask]  # (G_nb, K)
+                mu_gnk = (
                     sx_data.T[tumor_idx][None, :, None]
                     * lambda_g[total_mask, None, None]
                     * (
-                        theta_t[None, :, None] * rdr_nb[:, None, :]
+                        theta_t[None, :, None] * rdr[:, None, :]
                         + (1 - theta_t[None, :, None])
                     )
                 )
-                # Normal mu = T*λ*2 (m_{g0}=2, but RDR=1 so mu=T*λ)
-                mu_normal = (
-                    sx_data.T[tumor_idx][None, :, None]
-                    * lambda_g[total_mask, None, None]
-                )  # (G_nb, N, 1)
-                mu_all = np.concatenate([mu_normal, mu_tumor], axis=2)
-                w_all = gamma[None, :, :]
                 X_gnk = sx_data.X[total_mask][:, tumor_idx, None].astype(np.float64)
-                X_all = np.broadcast_to(X_gnk, mu_all.shape)
-                invphi_map = mle_invphi(X_all, mu_all, w_all, prior=self._invphi_prior)
+                X_all = np.broadcast_to(X_gnk, mu_gnk.shape)
+                invphi_map = mle_invphi(
+                    X_all, mu_gnk, gamma[None, :, :], prior=self._invphi_prior
+                )
                 params[f"{data_type}-inv_phi"][:] = invphi_map
 
         # --- Theta update ---
