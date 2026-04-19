@@ -170,18 +170,16 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--theta_prior_a",
         required=False,
-        default=0.5,
+        default=2.0,
         type=float,
-        help="Beta prior alpha for per-spot tumor purity theta "
-        "(default 0.5, Jeffreys prior)",
+        help="Beta prior alpha for tumor purity theta (default 2.0)",
     )
     parser.add_argument(
         "--theta_prior_b",
         required=False,
-        default=0.5,
+        default=1.0,
         type=float,
-        help="Beta prior beta for per-spot tumor purity theta "
-        "(default 0.5, Jeffreys prior)",
+        help="Beta prior beta for tumor purity theta (default 1.0)",
     )
 
     parser.add_argument(
