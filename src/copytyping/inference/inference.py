@@ -37,6 +37,7 @@ from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
+    is_tumor_label,
     read_whitelist_segments,
     save_cnp_profile,
     setup_logging,
@@ -185,13 +186,16 @@ def run(args=None):
             logging.info(f"  iter={t + 1}: {', '.join(parts)}")
 
     is_spot = platform in SPATIAL_PLATFORMS
-    is_normal = (anns[label] == "normal").to_numpy()
-    if is_normal.sum() == 0:
-        is_normal = None
+    if ref_label in anns.columns:
+        is_normal = ~anns[ref_label].apply(is_tumor_label).to_numpy()
+        logging.info(f"baseline from ref_label={ref_label}: {is_normal.sum()} normals")
+    else:
+        is_normal = (anns[label] == "normal").to_numpy()
+        logging.info(f"baseline from predicted {label}: {is_normal.sum()} normals")
 
     # Baseline proportions from predicted normals (seg + agg-bbc level)
     seg_lambda, agg_bbc_lambda = {}, {}
-    if is_normal is not None:
+    if is_normal.sum() > 0:
         for data_type in data_types:
             seg_lambda[data_type] = compute_baseline_proportions(
                 seg_data_sources[data_type].X, seg_data_sources[data_type].T, is_normal
