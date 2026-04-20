@@ -128,16 +128,7 @@ def _run_one(
     os.makedirs(run_dir, exist_ok=True)
 
     logging.info(f"RUN: {run_dir}")
-    root = logging.getLogger()
-    prev_level = root.level
-    try:
-        root.setLevel(logging.WARNING)
-        run_inference(inf_args)
-        root.setLevel(prev_level)
-    except Exception:
-        root.setLevel(prev_level)
-        logging.exception(f"FAILED {run_dir}")
-        return "FAILED", {}
+    run_inference(inf_args)
 
     metrics = {}
     if os.path.isfile(eval_file):

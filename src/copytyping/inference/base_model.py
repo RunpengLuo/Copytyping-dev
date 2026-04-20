@@ -359,15 +359,22 @@ class Base_Model:
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
+    # Keys that are precomputed/fixed and should not be saved in trace
+    _skip_trace_keys = {"rdrs", "allele_mask", "total_mask", "tau_valid_idx", "invphi_valid_idx"}
+
     def save_param_trace(self, param_trace: list):
         if not param_trace or not self.work_dir:
             return
         for key in param_trace[0]:
+            if any(key.endswith(f"-{s}") for s in self._skip_trace_keys):
+                continue
             vals = [p[key] for p in param_trace]
-            if isinstance(vals[0], np.ndarray):
+            if isinstance(vals[0], np.ndarray) and vals[0].ndim == 1:
                 df = pd.DataFrame(vals)
-            else:
+            elif not isinstance(vals[0], np.ndarray):
                 df = pd.DataFrame({"value": vals})
+            else:
+                continue
             df.index.name = "iter"
             out_path = os.path.join(self.work_dir, f"{self.prefix}.trace.{key}.tsv")
             df.to_csv(out_path, sep="\t")
