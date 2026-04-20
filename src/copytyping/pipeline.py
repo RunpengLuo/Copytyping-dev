@@ -232,6 +232,11 @@ def run(args):
 
     if summary_rows:
         summary = pd.DataFrame(summary_rows)
+        # Sort metric columns: #clone* together, JC_* together
+        fixed = [c for c in summary.columns if not c.startswith("#clone") and not c.startswith("JC_")]
+        clone_cols = sorted([c for c in summary.columns if c.startswith("#clone")])
+        jc_cols = sorted([c for c in summary.columns if c.startswith("JC_")])
+        summary = summary[fixed + clone_cols + jc_cols]
         summary.to_csv(summary_file, sep="\t", index=False, na_rep="")
         logging.info(f"saved {len(summary)} rows to {summary_file}")
 
