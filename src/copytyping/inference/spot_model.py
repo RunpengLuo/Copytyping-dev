@@ -59,8 +59,6 @@ class Spot_Model(Base_Model):
         is_normal = self._identify_normal_cells(
             init_fix_params, init_params, ref_label="path_label"
         )
-        self._init_is_normal = is_normal
-
         params = {"pi": init_params.get("pi", np.ones(self.K) / self.K)}
         self._init_lambda(params, is_normal)
 
@@ -89,8 +87,6 @@ class Spot_Model(Base_Model):
                 if key in fix_params:
                     fix_params[key] = init_fix_params[key]
 
-        self._tumor_idx = np.arange(self.N)
-        self._N_tumor = self.N
         self._purity_min = init_params.get("purity_min", 0.1)
         return params, fix_params
 
@@ -165,12 +161,10 @@ class Spot_Model(Base_Model):
         # Conditional tumor posterior for theta update
         r_tilde = r_tumor / np.maximum(r_nT[:, None], eps)
 
-        # Dispersion updates (weighted by all K branches)
-        tumor_idx = self._tumor_idx
         for dt in self.data_types:
             sx = self.data_sources[dt]
             lg = params[f"{dt}-lambda"]
-            theta_t = params[f"{dt}-theta"][tumor_idx]
+            theta_t = params[f"{dt}-theta"]
             rdrs = params[f"{dt}-rdrs"]
             allele_mask = params[f"{dt}-allele_mask"]
             total_mask = params[f"{dt}-total_mask"]
@@ -189,8 +183,8 @@ class Spot_Model(Base_Model):
                     theta_t[None, :, None] * rdr[:, None, :]
                     + (1 - theta_t[None, :, None])
                 )
-                Y = sx.Y[allele_mask][:, tumor_idx, None].astype(np.float64)
-                D = sx.D[allele_mask][:, tumor_idx, None].astype(np.float64)
+                Y = sx.Y[allele_mask][:, :, None].astype(np.float64)
+                D = sx.D[allele_mask][:, :, None].astype(np.float64)
                 params[f"{dt}-tau"][:] = mle_tau(
                     np.broadcast_to(Y, p_gnk.shape),
                     np.broadcast_to(D, p_gnk.shape),
@@ -206,14 +200,14 @@ class Spot_Model(Base_Model):
             ):
                 rdr = rdrs[total_mask]
                 mu_gnk = (
-                    sx.T[tumor_idx][None, :, None]
+                    sx.T[None, :, None]
                     * lg[total_mask, None, None]
                     * (
                         theta_t[None, :, None] * rdr[:, None, :]
                         + (1 - theta_t[None, :, None])
                     )
                 )
-                X = sx.X[total_mask][:, tumor_idx, None].astype(np.float64)
+                X = sx.X[total_mask][:, :, None].astype(np.float64)
                 params[f"{dt}-inv_phi"][:] = mle_invphi(
                     np.broadcast_to(X, mu_gnk.shape),
                     mu_gnk,

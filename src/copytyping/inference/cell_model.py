@@ -59,8 +59,6 @@ class Cell_Model(Base_Model):
                 init_fix_params,
                 init_params,
             )
-        self._init_is_normal = is_normal
-
         if fit_mode in {"total_only", "hybrid"}:
             self._init_lambda(params, is_normal)
 
