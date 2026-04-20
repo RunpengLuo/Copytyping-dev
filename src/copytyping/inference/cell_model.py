@@ -55,9 +55,11 @@ class Cell_Model(Base_Model):
         # from _identify_normal_cells inner sub-EM)
         is_normal = None
         if fit_mode != "allele_only":
+            ref_label = init_params.get("ref_label") if init_params.get("init_baseline_by_cell_type") else None
             is_normal = self._identify_normal_cells(
                 init_fix_params,
                 init_params,
+                ref_label=ref_label,
             )
         if fit_mode in {"total_only", "hybrid"}:
             self._init_lambda(params, is_normal)

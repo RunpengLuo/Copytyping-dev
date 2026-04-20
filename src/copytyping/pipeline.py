@@ -170,6 +170,8 @@ def run(args):
     extra_args = {}
     if args.get("update_purity"):
         extra_args["update_purity"] = True
+    if args.get("init_baseline_by_cell_type"):
+        extra_args["init_baseline_by_cell_type"] = True
 
     panel = pd.read_table(panel_tsv, dtype=str).fillna("")
     required = [

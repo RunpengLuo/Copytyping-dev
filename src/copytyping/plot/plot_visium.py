@@ -244,32 +244,23 @@ def plot_visium_iters(
     clones: list = None,
     spot_label: str = "copytyping-label",
     ref_label=None,
-    dpi=200,
+    dpi=150,
     size=1.5,
 ):
-    """Iteration PDF: one row per EM iteration showing clone x purity per slice.
+    """Animated GIF: one frame per EM iteration, all slices side by side.
 
-    Each spot is colored by its gate-aware MAP clone label (from predict)
-    blended with gray by effective tumor purity (0 if normal, theta if tumor).
-
-    Args:
-        slices: list of (rep_id, anns_df, adata) tuples.
-        iter_anns: list of annotation DataFrames, one per iteration (from predict).
-        clones: list of all clone names (including "normal" at index 0).
-        spot_label: column name for MAP clone label in iter_anns.
-        ref_label: if provided, compute per-iteration AUC against this column.
+    Row 0: clone x purity blend (MAP label colored, blended with gray by theta).
+    Row 1: max_posterior heatmap (confidence of MAP assignment).
     """
     import squidpy as sq
+    from PIL import Image
     from sklearn.metrics import roc_auc_score
     from copytyping.utils import is_tumor_label, NA_CELLTYPE
-
-    plt.rcParams["pdf.fonttype"] = 42
-    plt.rcParams["ps.fonttype"] = 42
 
     niters = len(iter_anns)
     ncols = len(slices)
 
-    # compute per-iteration AUC if ref_label available
+    # per-iteration AUC
     iter_aucs = []
     if ref_label:
         for anns_t in iter_anns:
@@ -285,82 +276,172 @@ def plot_visium_iters(
             else:
                 iter_aucs.append(np.nan)
 
+    # clone colors matching blend_clone_color_by_purity
+    gray = np.array([0.69, 0.69, 0.69])
+    base_palette = sns.color_palette("tab10", n_colors=max(len(clones or []) + 1, 10))
+    clone_rgb = {}
+    j = 0
+    for c in (clones or []):
+        if c == "normal":
+            clone_rgb[c] = gray
+        else:
+            clone_rgb[c] = np.array(base_palette[j][:3])
+            j += 1
+    legend_handles = [
+        mpatches.Patch(color=clone_rgb.get(c, gray), label=c)
+        for c in (clones or [])
+    ]
+
     col_w = 6
     row_h = 5
-    fig, axes = plt.subplots(
-        nrows=niters,
-        ncols=ncols,
-        figsize=(col_w * ncols, row_h * niters),
-        squeeze=False,
-    )
-
     label_col = "_iter_clone"
+    frames = []
+
     for ri, anns_t in enumerate(iter_anns):
         anns_indexed = anns_t.set_index("BARCODE")
+        fig, axes = plt.subplots(
+            nrows=2,
+            ncols=ncols,
+            figsize=(col_w * ncols, row_h * 2),
+            squeeze=False,
+        )
 
         for ci, (rep_id, _anns_vis, vis_adata) in enumerate(slices):
             anns_sub = anns_indexed.reindex(vis_adata.obs_names)
             vis_adata.obs["tumor_purity"] = anns_sub["tumor_purity"].values
+            vis_adata.obs["max_posterior"] = anns_sub["max_posterior"].values
             vis_adata.obs[label_col] = pd.Categorical(
                 anns_sub[spot_label].values, categories=clones
             )
 
+            # Row 0: clone x purity
             rgba = blend_clone_color_by_purity(vis_adata, label_col, "tumor_purity")
+            ax0 = axes[0, ci]
             sq.pl.spatial_scatter(
                 vis_adata,
                 color=label_col,
                 size=size,
                 library_id=rep_id,
-                ax=axes[ri, ci],
+                ax=ax0,
                 edgecolors="none",
             )
-            ax = axes[ri, ci]
             from matplotlib.collections import PatchCollection as _PC
 
-            for child in ax.get_children():
+            for child in ax0.get_children():
                 if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
                     child.set_facecolors(rgba)
                     break
-            ax.set_title(f"{sample}_{rep_id}")
+            ax0.set_title(f"{rep_id} — clone x purity", fontsize=10)
+            legend = ax0.get_legend()
+            if legend is not None:
+                legend.remove()
 
-    # row labels
-    fig.subplots_adjust(wspace=0.3, hspace=0.25)
-    fig.canvas.draw()
-    for ri in range(niters):
-        row_top = axes[ri, 0].get_position().y1
-        row_bot = axes[ri, 0].get_position().y0
-        y_mid = (row_top + row_bot) / 2
-        rlabel = f"iter {ri}"
-        if iter_aucs:
-            rlabel += f"\nAUC={iter_aucs[ri]:.3f}"
-        fig.text(
-            0.02,
-            y_mid,
-            rlabel,
-            fontsize=12,
-            fontweight="bold",
-            ha="center",
-            va="center",
-            rotation=90,
+            # Row 1: max_posterior
+            ax1 = axes[1, ci]
+            sq.pl.spatial_scatter(
+                vis_adata,
+                color="max_posterior",
+                size=size,
+                library_id=rep_id,
+                ax=ax1,
+                edgecolors="none",
+                cmap="magma_r",
+                vmin=0,
+                vmax=1,
+            )
+            ax1.set_title(f"{rep_id} — max posterior", fontsize=10)
+            # keep colorbar only on last column
+            if ci < ncols - 1:
+                cb = ax1.collections[-1].colorbar if ax1.collections else None
+                if cb is not None:
+                    cb.remove()
+
+        # legend on last axis of row 0
+        axes[0, -1].legend(
+            handles=legend_handles,
+            loc="center left",
+            bbox_to_anchor=(1.0, 0.5),
+            fontsize=8,
         )
 
-    # only keep legend on last column, positioned outside the plot
-    for ri in range(niters):
-        for ci in range(ncols):
-            legend = axes[ri, ci].get_legend()
-            if legend is None:
-                continue
-            if ci < ncols - 1:
-                legend.remove()
-            else:
-                legend.set_bbox_to_anchor((1.0, 0.5))
-                legend._loc = 6  # center left
+        title = f"{sample}  iter {ri + 1}/{niters}"
+        if iter_aucs and ri < len(iter_aucs):
+            title += f"  AUC={iter_aucs[ri]:.3f}"
+        fig.suptitle(title, fontsize=13, fontweight="bold")
+        fig.tight_layout()
 
-    fig.suptitle(
-        f"{sample} — clone x purity per iteration", fontsize=14, fontweight="bold"
+        tmp_path = os.path.join(out_dir, f"_frame_{ri}.png")
+        fig.savefig(tmp_path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+        frames.append(Image.open(tmp_path).convert("RGB"))
+        os.remove(tmp_path)
+
+    out_file = os.path.join(out_dir, f"{sample}.visium_iters.gif")
+    frames[0].save(
+        out_file,
+        save_all=True,
+        append_images=frames[1:],
+        duration=800,
+        loop=0,
     )
+    logging.info(f"saved visium iterations GIF to {out_file}")
 
-    out_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
+
+def plot_purity_histogram(
+    anns: pd.DataFrame,
+    sample: str,
+    out_dir: str,
+    spot_label: str = "copytyping-label",
+    clones: list = None,
+    bins=50,
+    dpi=200,
+):
+    """Histogram of tumor_purity per clone label."""
+    if "tumor_purity" not in anns.columns:
+        return
+
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.rcParams["ps.fonttype"] = 42
+
+    gray = "#b0b0b0"
+    base = sns.color_palette("tab10", n_colors=10).as_hex()
+    clone_colors = {}
+    j = 0
+    for c in (clones or []):
+        if c == "normal":
+            clone_colors[c] = gray
+        else:
+            clone_colors[c] = base[j]
+            j += 1
+
+    labels = anns[spot_label].values
+    purity = anns["tumor_purity"].values
+    unique_labels = sorted(set(labels), key=lambda x: (x != "normal", x))
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    for lab in unique_labels:
+        mask = labels == lab
+        vals = purity[mask]
+        if len(vals) == 0:
+            continue
+        ax.hist(
+            vals,
+            bins=bins,
+            range=(0, 1),
+            alpha=0.6,
+            label=f"{lab} (n={len(vals)})",
+            color=clone_colors.get(lab, gray),
+            edgecolor="black",
+            linewidth=0.3,
+        )
+
+    ax.set_xlabel("Tumor purity (θ)", fontsize=11)
+    ax.set_ylabel("Count", fontsize=11)
+    ax.set_title(f"{sample} — purity distribution by clone", fontsize=12)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+
+    out_file = os.path.join(out_dir, f"{sample}.purity_histogram.pdf")
     fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
-    logging.info(f"saved visium iterations panel to {out_file}")
+    logging.info(f"saved purity histogram to {out_file}")

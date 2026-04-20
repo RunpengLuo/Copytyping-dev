@@ -28,6 +28,8 @@ def prepare_params(args, cnv_blocks, platform, data_types):
         "theta_prior_a": args["theta_prior_a"],
         "theta_prior_b": args["theta_prior_b"],
         "purity_min": args.get("purity_min", 0.1),
+        "init_baseline_by_cell_type": args.get("init_baseline_by_cell_type", False),
+        "ref_label": args.get("ref_label"),
     }
     fix_params = {"pi": False}
     for data_type in data_types:

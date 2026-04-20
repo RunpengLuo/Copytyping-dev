@@ -223,6 +223,14 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="if set, use hard EM (argmax clone assignment) "
         "instead of soft EM in M-step",
     )
+    parser.add_argument(
+        "--init_baseline_by_cell_type",
+        required=False,
+        action="store_true",
+        default=False,
+        help="if set, use reference cell type labels to identify normal "
+        "cells for RDR baseline estimation (default: infer via allele-only sub-EM)",
+    )
     # post selection
     parser.add_argument(
         "--posterior_thres",
@@ -465,5 +473,11 @@ def add_arguments_pipeline(parser):
         action="store_true",
         default=False,
         help="Update per-spot purity in M-step",
+    )
+    parser.add_argument(
+        "--init_baseline_by_cell_type",
+        action="store_true",
+        default=False,
+        help="Use reference cell type labels for RDR baseline init",
     )
     return parser

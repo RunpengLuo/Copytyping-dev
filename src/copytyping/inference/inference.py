@@ -34,7 +34,11 @@ from copytyping.io_utils import (
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_common import plot_crosstab
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
-from copytyping.plot.plot_visium import plot_visium_iters, plot_visium_panel
+from copytyping.plot.plot_visium import (
+    plot_purity_histogram,
+    plot_visium_iters,
+    plot_visium_panel,
+)
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
@@ -361,6 +365,14 @@ def run(args=None):
             path_label=ref_label,
             dpi=args["dpi"],
             title_info=visium_title,
+        )
+        plot_purity_histogram(
+            anns,
+            sample,
+            dirs["visium"],
+            spot_label=label,
+            clones=seg_data_sources[data_types[0]].clones,
+            dpi=args["dpi"],
         )
         if hasattr(instance, "param_trace") and instance.param_trace:
             iter_anns = []

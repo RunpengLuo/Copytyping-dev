@@ -56,8 +56,9 @@ class Spot_Model(Base_Model):
         self.K_tumor = self.K - 1
 
     def _init_params(self, fit_mode, init_fix_params, init_params):
+        ref_label = init_params.get("ref_label") if init_params.get("init_baseline_by_cell_type") else None
         is_normal = self._identify_normal_cells(
-            init_fix_params, init_params, ref_label="path_label"
+            init_fix_params, init_params, ref_label=ref_label
         )
         params = {"pi": init_params.get("pi", np.ones(self.K) / self.K)}
         self._init_lambda(params, is_normal)
