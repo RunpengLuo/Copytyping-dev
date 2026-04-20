@@ -174,8 +174,11 @@ def run(args):
     n_runs = 0
     n_skipped = 0
 
+    sample_filter = args.get("samples")
     for _, row in panel.iterrows():
         if platform_filter and row["PLATFORM"] != platform_filter:
+            continue
+        if sample_filter and row["SAMPLE"] not in sample_filter:
             continue
 
         base_args = _build_base_args(row)

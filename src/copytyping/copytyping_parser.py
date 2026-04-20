@@ -442,6 +442,12 @@ def add_arguments_pipeline(parser):
         "(default: '*sol{SOLID}*.tsv')",
     )
     parser.add_argument(
+        "--samples",
+        nargs="*",
+        default=None,
+        help="List of sample names to run (default: all)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         default=False,

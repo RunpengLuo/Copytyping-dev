@@ -283,10 +283,10 @@ def run(args=None):
     )
     plot_labels = [lb for lb in [label, ref_label] if lb in anns]
 
+    logging.info("generating plots...")
     for data_type in data_types:
         seg_sx = seg_data_sources[data_type]
         for my_label in plot_labels:
-            # Heatmaps
             for val in ["BAF", "log2RDR"]:
                 if val == "log2RDR" and data_type not in seg_lambda:
                     continue
@@ -294,6 +294,7 @@ def run(args=None):
                     (1, dirs["heatmap_agg1"]),
                     (agg_size, dirs["heatmap_aggx"]),
                 ]:
+                    logging.info(f"  heatmap {val} agg={agg} {my_label}")
                     plot_cnv_heatmap(
                         sample,
                         data_type,
@@ -317,7 +318,7 @@ def run(args=None):
                         transparent=transparent,
                     )
 
-            # Agg-BBC 1D scatter
+            logging.info(f"  1d scatter {my_label}")
             plot_rdr_baf_1d_pseudobulk(
                 agg_bbc_data_sources[data_type],
                 anns,
