@@ -44,6 +44,7 @@ def sort_chroms(chromosomes: list):
     chr2ord = get_chr2ord(ch)
     return sorted(chromosomes, key=lambda x: chr2ord[x])
 
+
 def get_chr_sizes(sz_file: str):
     chr_sizes = OrderedDict()
     with open(sz_file, "r") as rfd:
@@ -52,6 +53,7 @@ def get_chr_sizes(sz_file: str):
             chr_sizes[ch] = int(sizes)
         rfd.close()
     return chr_sizes
+
 
 def sort_df_chr(df: pd.DataFrame, ch="#CHR", pos="POS"):
     chs = sort_chroms(df[ch].unique().tolist())
@@ -72,6 +74,7 @@ def read_seg_ucn_file(seg_ucn_file: str):
     )
     segs_df["PROPS"] = ";".join([str(p) for p in clone_props])
     return segs_df, clones, clone_props
+
 
 def read_whitelist_segments(bed_file: str):
     wl_fragments = pd.read_table(

@@ -353,6 +353,7 @@ BLACK = (0, 0, 0, 1)
 RED = (1, 0, 0, 1)
 BLUE = (0, 0, 1, 1)
 
+
 def get_cn_colors():
     _palette = {
         (0, 0): "darkblue",

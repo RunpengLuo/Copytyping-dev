@@ -14,9 +14,7 @@ def main(argv=None):
     add_arguments_inference(p_inf)
     p_inf.set_defaults(func=copytyping_inference)
 
-    p_pipe = subparsers.add_parser(
-        "run_pipeline", help="batch run from a panel TSV"
-    )
+    p_pipe = subparsers.add_parser("run_pipeline", help="batch run from a panel TSV")
     add_arguments_pipeline(p_pipe)
     p_pipe.set_defaults(func=copytyping_pipeline)
 

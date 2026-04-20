@@ -360,7 +360,13 @@ class Base_Model:
     # Utilities
     # ------------------------------------------------------------------
     # Keys that are precomputed/fixed and should not be saved in trace
-    _skip_trace_keys = {"rdrs", "allele_mask", "total_mask", "tau_valid_idx", "invphi_valid_idx"}
+    _skip_trace_keys = {
+        "rdrs",
+        "allele_mask",
+        "total_mask",
+        "tau_valid_idx",
+        "invphi_valid_idx",
+    }
 
     def save_param_trace(self, param_trace: list):
         if not param_trace or not self.work_dir:

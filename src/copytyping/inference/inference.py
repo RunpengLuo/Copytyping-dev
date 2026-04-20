@@ -40,7 +40,6 @@ from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
     is_tumor_label,
-    read_whitelist_segments,
     save_cnp_profile,
     setup_logging,
 )
@@ -74,7 +73,6 @@ def run(args=None):
         dirs["visium"] = os.path.join(out_dir, "plots", "spatial_images")
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
-    verbosity = args["verbosity"]
 
     logging.info(f"sample={sample}, platform={platform}, data_types={data_types}")
 
@@ -86,7 +84,6 @@ def run(args=None):
 
     min_snp_agg_bbc = args["min_snp_count"]
     max_len_agg_bbc = args["max_bin_length"]
-    aggr_mode = args["aggr_mode"]
     data_sources = {}  # used by EM (seg or clust level)
     seg_data_sources = {}
     agg_bbc_data_sources = {}
@@ -124,7 +121,7 @@ def run(args=None):
         )
 
         data_sources[data_type] = (
-            seg_sx.to_cluster_level() if aggr_mode == "clust" else seg_sx
+            seg_sx.to_cluster_level() if args["aggr_mode"] == "clust" else seg_sx
         )
 
         if args.get(f"{data_type}_h5ad") is not None:
@@ -151,7 +148,7 @@ def run(args=None):
         data_sources,
         dirs["work"],
         out_prefix,
-        verbosity,
+        args["verbosity"],
         modality_masks=modality_masks,
         hard_em=args["hard_em"],
     )
@@ -209,44 +206,49 @@ def run(args=None):
 
     metric = {}
     if ref_label in barcodes.columns:
-        metric = evaluate_malignant_accuracy(
-            anns,
-            qry_label=label,
-            ref_label=ref_label,
-            tumor_post="tumor_purity" if is_spot else "tumor",
+        metric.update(
+            evaluate_malignant_accuracy(
+                anns,
+                qry_label=label,
+                ref_label=ref_label,
+                tumor_post="tumor_purity" if is_spot else "tumor",
+            )
         )
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
 
     if is_spot:
         gex_adata = adatas.get("gex")
         if gex_adata is not None and "spatial" in gex_adata.obsm:
-            common = anns["BARCODE"].values
-            adata_sub = gex_adata[gex_adata.obs_names.isin(common)].copy()
-            anns_indexed = anns.set_index("BARCODE").loc[adata_sub.obs_names]
-            clone_labels = anns_indexed[label].to_numpy()
+            for rep_id in anns["REP_ID"].unique():
+                anns_rep = anns[anns["REP_ID"] == rep_id]
+                adata_rep = gex_adata[
+                    gex_adata.obs_names.isin(anns_rep["BARCODE"].values)
+                ].copy()
+                anns_rep_idx = anns.set_index("BARCODE").loc[adata_rep.obs_names]
+                clone_labels = anns_rep_idx[label].to_numpy()
 
-            sq.gr.spatial_neighbors(adata_sub, n_neighs=6, coord_type="generic")
-            W = adata_sub.obsp["spatial_connectivities"]
-            # Row-normalize
-            row_sums = np.asarray(W.sum(axis=1)).flatten()
-            row_sums[row_sums == 0] = 1.0
-            W = W.multiply(1.0 / row_sums[:, None])
+                sq.gr.spatial_neighbors(adata_rep, n_neighs=6, coord_type="generic")
+                W = adata_rep.obsp["spatial_connectivities"]
+                row_sums = np.asarray(W.sum(axis=1)).flatten()
+                row_sums[row_sums == 0] = 1.0
+                W = W.multiply(1.0 / row_sums[:, None])
 
-            jc = joincount_zscore(clone_labels, W)
-            logging.info("joincount z-score:")
-            for lab, z in sorted(jc.items()):
-                logging.info(f"  {lab:8s}: {z:.4f}")
-                metric[f"JC_{lab}"] = z
+                jc = joincount_zscore(clone_labels, W)
+                logging.info(f"joincount z-score (rep={rep_id}):")
+                for lab, z in sorted(jc.items()):
+                    if lab == "normal":
+                        continue
+                    logging.info(f"  {lab:8s}: {z:.4f}")
+                    metric[f"JC_{rep_id}_{lab}"] = z
 
-    if metric:
-        eval_df = pd.DataFrame([{"SAMPLE": sample, "PLATFORM": platform, **metric}])
-        eval_df.to_csv(
-            os.path.join(out_dir, f"{out_prefix}.{platform}.evaluation.tsv"),
-            sep="\t",
-            header=True,
-            index=False,
-            na_rep="",
-        )
+    eval_df = pd.DataFrame([{"SAMPLE": sample, "PLATFORM": platform, **metric}])
+    eval_df.to_csv(
+        os.path.join(out_dir, f"{out_prefix}.{platform}.evaluation.tsv"),
+        sep="\t",
+        header=True,
+        index=False,
+        na_rep="",
+    )
 
     anns.to_csv(
         os.path.join(out_dir, f"{out_prefix}.{platform}.annotations.tsv"),
@@ -256,14 +258,6 @@ def run(args=None):
     )
 
     # ---- Plotting (all reps combined per data_type) ----
-    wl_segments = read_whitelist_segments(args["region_bed"])
-    genome_size = args["genome_size"]
-    agg_size = args["heatmap_agg"]
-    img_type = args["img_type"]
-    dpi = args["dpi"]
-    transparent = args["transparent"]
-
-    # Crosstab (all spots/cells)
     if ref_label in anns.columns:
         plot_crosstab(
             anns,
@@ -292,7 +286,7 @@ def run(args=None):
                     continue
                 for agg, agg_dir in [
                     (1, dirs["heatmap_agg1"]),
-                    (agg_size, dirs["heatmap_aggx"]),
+                    (args["heatmap_agg"], dirs["heatmap_aggx"]),
                 ]:
                     logging.info(f"  heatmap {val} agg={agg} {my_label}")
                     plot_cnv_heatmap(
@@ -301,7 +295,7 @@ def run(args=None):
                         cnv_blocks,
                         seg_sx,
                         anns,
-                        wl_segments,
+                        args["region_bed"],
                         proportions=model_params.get(f"{data_type}-theta", None),
                         val=val,
                         base_props=seg_lambda.get(data_type),
@@ -311,11 +305,11 @@ def run(args=None):
                             agg_dir,
                             f"{out_prefix}.{platform}"
                             f".{val}_heatmap.{data_type}"
-                            f".{my_label}.{img_type}",
+                            f".{my_label}.{args['img_type']}",
                         ),
-                        dpi=dpi,
+                        dpi=args["dpi"],
                         figsize=(20, 6 if agg > 1 else 15),
-                        transparent=transparent,
+                        transparent=args["transparent"],
                     )
 
             logging.info(f"  1d scatter {my_label}")
@@ -325,9 +319,9 @@ def run(args=None):
                 agg_bbc_lambda.get(data_type),
                 sample,
                 data_type,
-                genome_size,
+                args["genome_size"],
                 haplo_blocks=cnv_blocks,
-                wl_segments=wl_segments,
+                region_bed=args["region_bed"],
                 lab_type=my_label,
                 is_inferred=(my_label == label),
                 filename=os.path.join(
@@ -365,20 +359,29 @@ def run(args=None):
             dirs["visium"],
             spot_label=label,
             path_label=ref_label,
-            dpi=dpi,
+            dpi=args["dpi"],
             title_info=visium_title,
         )
         if hasattr(instance, "param_trace") and instance.param_trace:
+            iter_anns = []
+            for params_t in instance.param_trace:
+                anns_t, _ = instance.predict(
+                    args["fit_mode"],
+                    params_t,
+                    label=label,
+                    posterior_thres=args["posterior_thres"],
+                    margin_thres=args["margin_thres"],
+                )
+                iter_anns.append(anns_t)
             plot_visium_iters(
                 sample,
                 visium_slices,
-                instance.param_trace,
-                barcodes=barcodes,
-                data_type=data_types[0],
+                iter_anns,
                 out_dir=dirs["visium"],
                 clones=seg_data_sources[data_types[0]].clones,
+                spot_label=label,
                 ref_label=(ref_label if ref_label in barcodes.columns else None),
-                dpi=dpi,
+                dpi=args["dpi"],
             )
 
     logging.root.removeHandler(_file_handler)

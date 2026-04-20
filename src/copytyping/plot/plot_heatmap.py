@@ -11,6 +11,7 @@ from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Rectangle
 
 from copytyping.sx_data.sx_data import SX_Data
+from copytyping.utils import read_whitelist_segments
 from copytyping.plot.plot_copynumber import (
     BLACK,
     plot_cnv_legend,
@@ -287,7 +288,7 @@ def plot_cnv_heatmap(
     haplo_blocks: pd.DataFrame,
     sx_data: SX_Data,
     anns: pd.DataFrame,
-    wl_fragments: pd.DataFrame,
+    region_bed: str,
     proportions=None,
     val="BAF",
     base_props=None,
@@ -301,6 +302,7 @@ def plot_cnv_heatmap(
     title_info="",
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
+    wl_fragments = read_whitelist_segments(region_bed)
     logging.debug(f"plot CNV heatmap val={val}")
 
     plt.rcParams["pdf.fonttype"] = 42

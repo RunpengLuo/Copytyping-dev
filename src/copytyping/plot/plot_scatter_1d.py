@@ -12,7 +12,7 @@ from copytyping.plot.plot_copynumber import (
 )
 from copytyping.plot.plot_common import build_wl_coords
 from copytyping.sx_data.sx_data import SX_Data
-from copytyping.utils import get_chr_sizes
+from copytyping.utils import get_chr_sizes, read_whitelist_segments
 
 
 def _build_ch_boundary(
@@ -88,7 +88,7 @@ def plot_rdr_baf_1d_pseudobulk(
     data_type: str,
     genome_file: str,
     haplo_blocks: pd.DataFrame = None,
-    wl_segments: pd.DataFrame = None,
+    region_bed: str = None,
     lab_type="cell_label",
     is_inferred=True,
     figsize=(20, 4),
@@ -117,6 +117,7 @@ def plot_rdr_baf_1d_pseudobulk(
     assert Y.shape[1] == len(cell_labels)
 
     # genome coordinates
+    wl_segments = read_whitelist_segments(region_bed) if region_bed else None
     has_cnp = haplo_blocks is not None and wl_segments is not None
     if has_cnp:
         wl = build_wl_coords(cnv_blocks, wl_segments)

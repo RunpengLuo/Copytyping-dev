@@ -239,25 +239,24 @@ def plot_visium_panel(
 def plot_visium_iters(
     sample: str,
     slices: list,
-    param_trace: list,
-    barcodes: pd.DataFrame,
-    data_type: str,
+    iter_anns: list,
     out_dir: str,
     clones: list = None,
+    spot_label: str = "copytyping-label",
     ref_label=None,
     dpi=200,
     size=1.5,
 ):
     """Iteration PDF: one row per EM iteration showing clone x purity per slice.
 
-    Each spot is colored by its MAP clone label blended with gray by tumor purity.
+    Each spot is colored by its gate-aware MAP clone label (from predict)
+    blended with gray by effective tumor purity (0 if normal, theta if tumor).
 
     Args:
         slices: list of (rep_id, anns_df, adata) tuples.
-        param_trace: list of param dicts, one per iteration.
-        barcodes: full barcodes DataFrame (index aligned with theta arrays).
-        data_type: e.g. "gex".
+        iter_anns: list of annotation DataFrames, one per iteration (from predict).
         clones: list of all clone names (including "normal" at index 0).
+        spot_label: column name for MAP clone label in iter_anns.
         ref_label: if provided, compute per-iteration AUC against this column.
     """
     import squidpy as sq
@@ -267,29 +266,24 @@ def plot_visium_iters(
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
 
-    theta_key = f"{data_type}-theta"
-    niters = len(param_trace)
+    niters = len(iter_anns)
     ncols = len(slices)
-    tumor_clones = clones[1:] if clones else []
-
-    # map barcode -> position in theta array
-    barcode_to_idx = {bc: i for i, bc in enumerate(barcodes["BARCODE"].values)}
 
     # compute per-iteration AUC if ref_label available
     iter_aucs = []
-    if ref_label and ref_label in barcodes.columns:
-        known = ~barcodes[ref_label].isin(NA_CELLTYPE)
-        y_true = (
-            barcodes.loc[known, ref_label].apply(is_tumor_label).to_numpy(dtype=int)
-        )
-        known_idx = known.to_numpy()
-        for params_t in param_trace:
-            theta_t = params_t[theta_key]
-            scores = theta_t[known_idx]
-            if np.any(np.isnan(scores)):
-                iter_aucs.append(np.nan)
-            else:
+    if ref_label:
+        for anns_t in iter_anns:
+            if ref_label not in anns_t.columns:
+                continue
+            known = ~anns_t[ref_label].isin(NA_CELLTYPE)
+            y_true = (
+                anns_t.loc[known, ref_label].apply(is_tumor_label).to_numpy(dtype=int)
+            )
+            if 0 < y_true.sum() < len(y_true):
+                scores = anns_t.loc[known, "tumor_purity"].to_numpy()
                 iter_aucs.append(roc_auc_score(y_true, scores))
+            else:
+                iter_aucs.append(np.nan)
 
     col_w = 6
     row_h = 5
@@ -300,45 +294,21 @@ def plot_visium_iters(
         squeeze=False,
     )
 
-    # get MAP clone label per spot per iteration from pi posteriors
-    spot_label_col = "_iter_clone"
-    for ri, params_t in enumerate(param_trace):
-        theta_t = params_t[theta_key]
-        pi_t = params_t["pi"]
+    label_col = "_iter_clone"
+    for ri, anns_t in enumerate(iter_anns):
+        anns_indexed = anns_t.set_index("BARCODE")
 
-        for ci, (rep_id, anns_vis, vis_adata) in enumerate(slices):
-            idx = [barcode_to_idx[bc] for bc in vis_adata.obs_names]
-            vis_adata.obs["tumor_purity"] = theta_t[idx]
-
-            # assign MAP clone from pi (use pi as proxy for clone assignment)
-            if len(tumor_clones) > 0 and len(pi_t) == len(tumor_clones):
-                best_clone = tumor_clones[np.argmax(pi_t)]
-                vis_adata.obs[spot_label_col] = best_clone
-                vis_adata.obs[spot_label_col] = vis_adata.obs[spot_label_col].astype(
-                    "category"
-                )
-            else:
-                vis_adata.obs[spot_label_col] = "clone1"
-                vis_adata.obs[spot_label_col] = vis_adata.obs[spot_label_col].astype(
-                    "category"
-                )
-
-            # use per-spot posteriors if available in the anns
-            if tumor_clones and all(c in anns_vis.columns for c in tumor_clones):
-                # re-derive MAP from posteriors at this iteration
-                # but we don't have per-iter posteriors, use current anns
-                clone_probs = anns_vis[tumor_clones].to_numpy()
-                map_labels = [tumor_clones[j] for j in np.argmax(clone_probs, axis=1)]
-                vis_adata.obs[spot_label_col] = pd.Categorical(
-                    map_labels, categories=tumor_clones
-                )
-
-            rgba = blend_clone_color_by_purity(
-                vis_adata, spot_label_col, "tumor_purity"
+        for ci, (rep_id, _anns_vis, vis_adata) in enumerate(slices):
+            anns_sub = anns_indexed.reindex(vis_adata.obs_names)
+            vis_adata.obs["tumor_purity"] = anns_sub["tumor_purity"].values
+            vis_adata.obs[label_col] = pd.Categorical(
+                anns_sub[spot_label].values, categories=clones
             )
+
+            rgba = blend_clone_color_by_purity(vis_adata, label_col, "tumor_purity")
             sq.pl.spatial_scatter(
                 vis_adata,
-                color=spot_label_col,
+                color=label_col,
                 size=size,
                 library_id=rep_id,
                 ax=axes[ri, ci],

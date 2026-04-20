@@ -27,10 +27,11 @@ import os
 
 import pandas as pd
 
-from copytyping.plot.plot_common import plot_metrics_barplot
+from copytyping.plot.plot_common import plot_joincount_boxplot, plot_metrics_barplot
 
 from copytyping.copytyping_parser import get_inference_defaults
 from copytyping.inference.inference import run as run_inference
+from copytyping.inference.validation import _eval_subset
 
 
 def _build_base_args(row):
@@ -112,10 +113,27 @@ def _run_one(
 
     if not force and os.path.isfile(ann_file):
         logging.info(f"SKIP (exists): {run_dir}")
+        ref_label = run_args.get("ref_label", "")
+        anns = pd.read_table(ann_file)
+        # Detect qry_label: column ending with "-label" but not "-refined"
+        qry_labels = [
+            c
+            for c in anns.columns
+            if c.endswith("-label") and not c.endswith("-refined")
+        ]
         metrics = {}
-        if os.path.isfile(eval_file):
+        if qry_labels and ref_label in anns.columns:
+            qry_label = qry_labels[0]
+            tumor_post = "tumor_purity" if platform == "spatial" else "tumor"
+            metrics = _eval_subset(anns, qry_label, ref_label, tumor_post)
+            # Preserve JC_* from old eval file (requires spatial coords)
+            if os.path.isfile(eval_file):
+                old = pd.read_table(eval_file).iloc[0].to_dict()
+                for k, v in old.items():
+                    if k.startswith("JC_"):
+                        metrics[k] = v
+        elif os.path.isfile(eval_file):
             metrics = pd.read_table(eval_file).iloc[0].to_dict()
-            logging.info(pd.read_table(eval_file).to_string(index=False))
         return "SKIPPED", metrics
 
     inf_args = {**get_inference_defaults(), **run_args}
@@ -234,8 +252,11 @@ def run(args):
         summary = pd.DataFrame(summary_rows)
         # Sort metric columns: #clone*, purity_*, JC_* grouped
         fixed = [
-            c for c in summary.columns
-            if not c.startswith("#clone") and not c.startswith("purity_") and not c.startswith("JC_")
+            c
+            for c in summary.columns
+            if not c.startswith("#clone")
+            and not c.startswith("purity_")
+            and not c.startswith("JC_")
         ]
         clone_cols = sorted([c for c in summary.columns if c.startswith("#clone")])
         purity_cols = sorted([c for c in summary.columns if c.startswith("purity_")])
@@ -247,4 +268,8 @@ def run(args):
         plot_metrics_barplot(
             summary,
             os.path.join(out_dir, "pipeline_metrics.pdf"),
+        )
+        plot_joincount_boxplot(
+            summary,
+            os.path.join(out_dir, "pipeline_joincount.pdf"),
         )

@@ -189,7 +189,9 @@ def plot_crosstab(
         for j in range(num_cols):
             n = int(counts[i, j])
             color = "grey" if n == 0 else "black"
-            ax.text(j, i, str(n), ha="center", va="center", color=color, fontsize=font_size)
+            ax.text(
+                j, i, str(n), ha="center", va="center", color=color, fontsize=font_size
+            )
 
     total_n = counts.sum()
     col_sums = counts.sum(axis=0)
@@ -209,7 +211,9 @@ def plot_crosstab(
     ax.tick_params(length=0)
     ax.set_xlabel(f"predicted ({acol})", fontsize=10)
     ax.set_ylabel(f"reference ({bcol})", fontsize=10)
-    ax.set_title(f"{sample}\nprec={prec:.3f}  recall={rec:.3f}  f1={f1:.3f}", fontsize=11)
+    ax.set_title(
+        f"{sample}\nprec={prec:.3f}  recall={rec:.3f}  f1={f1:.3f}", fontsize=11
+    )
 
     for i in range(num_rows + 1):
         ax.axhline(i - 0.5, color="grey", linewidth=0.5)
@@ -225,18 +229,30 @@ def plot_metrics_barplot(
     summary: pd.DataFrame,
     outfile: str,
     metrics=("precision", "recall", "f1"),
+    auc_metrics=("AUC_hard", "AUC_soft"),
     sample_col="SAMPLE",
     dtypes_col="DATA_TYPES",
     group_col="cancer_type",
     dpi=200,
 ):
-    """Bar plot of prec/recall/f1 per sample, one page per cancer_type group."""
-    colors = {"precision": "#1f77b4", "recall": "#ff7f0e", "f1": "#2ca02c"}
-    n_metrics = len(metrics)
+    """Bar plot of prec/recall/f1 per sample, one page per cancer_type group.
+
+    If AUC columns are available, adds a second row with AUC bars.
+    """
+    colors = {
+        "precision": "#1f77b4",
+        "recall": "#ff7f0e",
+        "f1": "#2ca02c",
+        "AUC_hard": "#d62728",
+        "AUC_soft": "#9467bd",
+    }
 
     valid = summary.dropna(subset=list(metrics), how="all").copy()
     if valid.empty:
         return
+
+    auc_cols = [c for c in auc_metrics if c in valid.columns]
+    has_auc = len(auc_cols) > 0 and not valid[auc_cols].isna().all().all()
 
     has_groups = group_col in valid.columns
     groups = sorted(valid[group_col].unique()) if has_groups else [None]
@@ -261,31 +277,176 @@ def plot_metrics_barplot(
                 tick_labels = samples
             n = len(samples)
             x = np.arange(n)
-            bar_w = 1.0 / (n_metrics + 0.5)
 
+            nrows = 2 if has_auc else 1
             fig_w = max(6, n * 0.8 + 2)
-            fig, ax = plt.subplots(figsize=(fig_w, 4))
+            fig, axes = plt.subplots(
+                nrows=nrows,
+                ncols=1,
+                figsize=(fig_w, 4 * nrows),
+                squeeze=False,
+            )
 
+            # Row 0: precision / recall / f1
+            ax0 = axes[0, 0]
+            n_metrics = len(metrics)
+            bar_w = 1.0 / (n_metrics + 0.5)
             for mi, m in enumerate(metrics):
                 vals = sample_df[m].astype(float).to_numpy()
-                bars = ax.bar(
-                    x + mi * bar_w, vals, width=bar_w,
-                    color=colors.get(m, f"C{mi}"), label=m,
+                bars = ax0.bar(
+                    x + mi * bar_w,
+                    vals,
+                    width=bar_w,
+                    color=colors.get(m, f"C{mi}"),
+                    label=m,
                 )
                 for bar, v in zip(bars, vals):
                     if np.isfinite(v):
-                        ax.text(
-                            bar.get_x() + bar.get_width() / 2, v + 0.01,
-                            f"{v:.2f}", ha="center", va="bottom", fontsize=6,
+                        ax0.text(
+                            bar.get_x() + bar.get_width() / 2,
+                            v + 0.01,
+                            f"{v:.2f}",
+                            ha="center",
+                            va="bottom",
+                            fontsize=6,
                         )
-
-            ax.set_xticks(x + bar_w * (n_metrics - 1) / 2)
-            ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
-            ax.set_ylim(0, 1.15)
-            ax.set_ylabel("Score")
-            ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.0, 0.5))
+            ax0.set_xticks(x + bar_w * (n_metrics - 1) / 2)
+            ax0.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
+            ax0.set_ylim(0, 1.15)
+            ax0.set_ylabel("Score")
+            ax0.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.0, 0.5))
             title = grp if grp else "all samples"
-            ax.set_title(title, fontsize=11, fontweight="bold")
+            ax0.set_title(title, fontsize=11, fontweight="bold")
+
+            # Row 1: AUC
+            if has_auc:
+                ax1 = axes[1, 0]
+                n_auc = len(auc_cols)
+                bar_w_auc = 1.0 / (n_auc + 0.5)
+                for mi, m in enumerate(auc_cols):
+                    vals = sample_df[m].astype(float).to_numpy()
+                    bars = ax1.bar(
+                        x + mi * bar_w_auc,
+                        vals,
+                        width=bar_w_auc,
+                        color=colors.get(m, f"C{mi + 3}"),
+                        label=m,
+                    )
+                    for bar, v in zip(bars, vals):
+                        if np.isfinite(v):
+                            ax1.text(
+                                bar.get_x() + bar.get_width() / 2,
+                                v + 0.01,
+                                f"{v:.2f}",
+                                ha="center",
+                                va="bottom",
+                                fontsize=6,
+                            )
+                ax1.set_xticks(x + bar_w_auc * (n_auc - 1) / 2)
+                ax1.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
+                ax1.set_ylim(0, 1.15)
+                ax1.set_ylabel("AUC")
+                ax1.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.0, 0.5))
+
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi)
+            plt.close(fig)
+
+
+def plot_joincount_boxplot(
+    summary: pd.DataFrame,
+    outfile: str,
+    sample_col="SAMPLE",
+    group_col="cancer_type",
+    rank_metric="f1",
+    dpi=200,
+):
+    """Boxplot of per-rep per-clone joincount z-scores (tumor clones only).
+
+    For each sample, picks the best run (by rank_metric), then each dot
+    is one JC_{rep}_{clone} value from that run. One page per group.
+    """
+    # Collect JC columns (JC_{rep}_{clone} format, exclude old JC_normal)
+    jc_cols = [c for c in summary.columns if c.startswith("JC_")]
+    if not jc_cols:
+        return
+
+    has_groups = group_col in summary.columns
+    groups = sorted(summary[group_col].unique()) if has_groups else [None]
+
+    with PdfPages(outfile) as pdf:
+        for grp in groups:
+            df = summary[summary[group_col] == grp] if grp is not None else summary
+            if df.empty:
+                continue
+
+            # Pick best run per sample
+            best_rows = []
+            for sample, sub in df.groupby(sample_col):
+                if rank_metric in sub.columns:
+                    valid = sub.dropna(subset=[rank_metric])
+                    if not valid.empty:
+                        best_rows.append(valid.loc[valid[rank_metric].idxmax()])
+                        continue
+                best_rows.append(sub.iloc[0])
+            if not best_rows:
+                continue
+            best = pd.DataFrame(best_rows)
+
+            # Melt JC columns into long format
+            samples = sorted(best[sample_col].unique())
+            all_vals = []
+            for _, row in best.iterrows():
+                sample = row[sample_col]
+                for c in jc_cols:
+                    v = row.get(c)
+                    if pd.notna(v):
+                        all_vals.append({"sample": sample, "jc": float(v)})
+            if not all_vals:
+                continue
+            long = pd.DataFrame(all_vals)
+
+            n = len(samples)
+            fig_w = max(6, n * 1.2 + 2)
+            fig, ax = plt.subplots(figsize=(fig_w, 4))
+
+            box_data = [long[long["sample"] == s]["jc"].values for s in samples]
+            bp = ax.boxplot(
+                box_data,
+                positions=range(n),
+                widths=0.5,
+                patch_artist=True,
+                showfliers=False,
+            )
+            for patch in bp["boxes"]:
+                patch.set_facecolor("#5b7fb5")
+                patch.set_alpha(0.7)
+
+            rng = np.random.default_rng(42)
+            for si, sample in enumerate(samples):
+                vals = long[long["sample"] == sample]["jc"].values
+                jitter = rng.uniform(-0.15, 0.15, size=len(vals))
+                ax.scatter(
+                    si + jitter,
+                    vals,
+                    color="#2c4d75",
+                    edgecolors="#1a1a1a",
+                    s=25,
+                    linewidths=0.5,
+                    zorder=3,
+                    alpha=0.8,
+                )
+
+            ax.set_xticks(range(n))
+            ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=9)
+            ax.set_ylabel("Spatial coherence (JC z-score)", fontsize=10)
+            ax.axhline(0, color="gray", linestyle="--", linewidth=0.5)
+            title = grp if grp else "all samples"
+            ax.set_title(
+                f"{title} — joincount z-score (tumor clones)",
+                fontsize=11,
+                fontweight="bold",
+            )
             fig.tight_layout()
             pdf.savefig(fig, dpi=dpi)
             plt.close(fig)

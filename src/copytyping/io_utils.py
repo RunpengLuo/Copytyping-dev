@@ -86,6 +86,7 @@ def load_modality_data(
 
     return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc
 
+
 def union_align_barcodes(data_dict, data_types):
     """Compute union barcodes across modalities and realign matrices.
 
@@ -153,6 +154,7 @@ def union_align_barcodes(data_dict, data_types):
         + ", ".join(f"{dt}={int(modality_masks[dt].sum())}" for dt in data_types)
     )
     return union_barcodes_df, modality_masks
+
 
 ##################################################
 # bbc -> segment aggregation
