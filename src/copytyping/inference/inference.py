@@ -169,7 +169,6 @@ def run(args=None):
         label=label,
         posterior_thres=args["posterior_thres"],
         margin_thres=args["margin_thres"],
-        purity_threshold=args["purity_threshold"],
     )
     logging.info(
         "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
@@ -278,10 +277,9 @@ def run(args=None):
             bcol=ref_label,
         )
 
-    purity_thres = args["purity_threshold"]
     scatter_subtitle = (
         f"min_snp_count={min_snp_agg_bbc}  max_bin_length={max_len_agg_bbc / 1e6:.1f}Mbp"
-        f"  purity_threshold={purity_thres}"
+        f"  purity_min={args.get('purity_min', 0.1)}"
     )
     plot_labels = [lb for lb in [label, ref_label] if lb in anns]
 
@@ -333,8 +331,7 @@ def run(args=None):
                 is_inferred=(my_label == label),
                 filename=os.path.join(
                     dirs["scatter"],
-                    f"{out_prefix}.{platform}"
-                    f".1d_scatter_agg_bbc.{data_type}.{my_label}.pdf",
+                    f"{out_prefix}.{platform}.1d_scatter.{data_type}.{my_label}.pdf",
                 ),
                 subtitle=scatter_subtitle,
                 platform=platform,
