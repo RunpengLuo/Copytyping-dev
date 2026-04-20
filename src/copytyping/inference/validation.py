@@ -58,6 +58,10 @@ def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
     for c in clone_cols:
         metric[f"#{c}"] = int(label_counts.get(c, 0))
     metric["#NA"] = na_count
+
+    if "tumor_purity" in anns_sub.columns:
+        for grp, sub in anns_sub.groupby(qry_label):
+            metric[f"purity_{grp}"] = float(sub["tumor_purity"].mean())
     return metric
 
 

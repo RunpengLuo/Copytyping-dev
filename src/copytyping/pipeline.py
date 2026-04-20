@@ -232,11 +232,15 @@ def run(args):
 
     if summary_rows:
         summary = pd.DataFrame(summary_rows)
-        # Sort metric columns: #clone* together, JC_* together
-        fixed = [c for c in summary.columns if not c.startswith("#clone") and not c.startswith("JC_")]
+        # Sort metric columns: #clone*, purity_*, JC_* grouped
+        fixed = [
+            c for c in summary.columns
+            if not c.startswith("#clone") and not c.startswith("purity_") and not c.startswith("JC_")
+        ]
         clone_cols = sorted([c for c in summary.columns if c.startswith("#clone")])
+        purity_cols = sorted([c for c in summary.columns if c.startswith("purity_")])
         jc_cols = sorted([c for c in summary.columns if c.startswith("JC_")])
-        summary = summary[fixed + clone_cols + jc_cols]
+        summary = summary[fixed + clone_cols + purity_cols + jc_cols]
         summary.to_csv(summary_file, sep="\t", index=False, na_rep="")
         logging.info(f"saved {len(summary)} rows to {summary_file}")
 
