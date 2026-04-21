@@ -239,44 +239,29 @@ def plot_visium_panel(
 def plot_visium_iters(
     sample: str,
     slices: list,
-    iter_anns: list,
+    labeling_trace: list,
+    barcodes: pd.DataFrame,
     out_dir: str,
     clones: list = None,
-    spot_label: str = "copytyping-label",
     ref_label=None,
     dpi=150,
     size=1.5,
 ):
-    """Animated GIF: one frame per EM iteration, all slices side by side.
+    """PDF with one page per EM iteration from labeling_trace.
 
-    Row 0: clone x purity blend (MAP label colored, blended with gray by theta).
-    Row 1: max_posterior heatmap (confidence of MAP assignment).
+    Page 0: normal init from allele-only sub-EM (1 row).
+    Pages 1+: Row 0 clone x purity, Row 1 max_posterior, Row 2 purity histogram.
     """
     import squidpy as sq
-    from PIL import Image
+    from matplotlib.backends.backend_pdf import PdfPages
     from sklearn.metrics import roc_auc_score
     from copytyping.utils import is_tumor_label, NA_CELLTYPE
 
-    niters = len(iter_anns)
+    niters = len(labeling_trace)
     ncols = len(slices)
+    bc_to_idx = {bc: i for i, bc in enumerate(barcodes["BARCODE"].values)}
 
-    # per-iteration AUC
-    iter_aucs = []
-    if ref_label:
-        for anns_t in iter_anns:
-            if ref_label not in anns_t.columns:
-                continue
-            known = ~anns_t[ref_label].isin(NA_CELLTYPE)
-            y_true = (
-                anns_t.loc[known, ref_label].apply(is_tumor_label).to_numpy(dtype=int)
-            )
-            if 0 < y_true.sum() < len(y_true):
-                scores = anns_t.loc[known, "tumor_purity"].to_numpy()
-                iter_aucs.append(roc_auc_score(y_true, scores))
-            else:
-                iter_aucs.append(np.nan)
-
-    # clone colors matching blend_clone_color_by_purity
+    # clone colors
     gray = np.array([0.69, 0.69, 0.69])
     base_palette = sns.color_palette("tab10", n_colors=max(len(clones or []) + 1, 10))
     clone_rgb = {}
@@ -287,103 +272,176 @@ def plot_visium_iters(
         else:
             clone_rgb[c] = np.array(base_palette[j][:3])
             j += 1
-    legend_handles = [
-        mpatches.Patch(color=clone_rgb.get(c, gray), label=c) for c in (clones or [])
-    ]
+
+    # per-iteration AUC
+    iter_aucs = []
+    if ref_label and ref_label in barcodes.columns:
+        known = ~barcodes[ref_label].isin(NA_CELLTYPE)
+        y_true = (
+            barcodes.loc[known, ref_label].apply(is_tumor_label).to_numpy(dtype=int)
+        )
+        known_idx = known.to_numpy()
+        for lt in labeling_trace:
+            purity = lt.get("tumor_purity")
+            if purity is not None and 0 < y_true.sum() < len(y_true):
+                iter_aucs.append(roc_auc_score(y_true, purity[known_idx]))
+            else:
+                iter_aucs.append(np.nan)
 
     col_w = 6
     row_h = 5
     label_col = "_iter_clone"
-    frames = []
+    out_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
 
-    for ri, anns_t in enumerate(iter_anns):
-        anns_indexed = anns_t.set_index("BARCODE")
-        fig, axes = plt.subplots(
-            nrows=2,
-            ncols=ncols,
-            figsize=(col_w * ncols, row_h * 2),
-            squeeze=False,
-        )
+    with PdfPages(out_file) as pdf:
+        for ri, lt in enumerate(labeling_trace):
+            labels = lt["labels"]
+            max_post = lt["max_posterior"]
+            purity = lt.get("tumor_purity")
+            has_purity = purity is not None
 
-        for ci, (rep_id, _anns_vis, vis_adata) in enumerate(slices):
-            anns_sub = anns_indexed.reindex(vis_adata.obs_names)
-            vis_adata.obs["tumor_purity"] = anns_sub["tumor_purity"].values
-            vis_adata.obs["max_posterior"] = anns_sub["max_posterior"].values
-            vis_adata.obs[label_col] = pd.Categorical(
-                anns_sub[spot_label].values, categories=clones
+            unique_labels = sorted(set(labels))
+            frame_cats = [c for c in (clones or unique_labels) if c in unique_labels]
+            if not frame_cats:
+                frame_cats = unique_labels
+
+            nrows = 3 if has_purity else 1
+            fig, axes = plt.subplots(
+                nrows=nrows,
+                ncols=ncols,
+                figsize=(col_w * ncols, row_h * nrows),
+                squeeze=False,
             )
 
-            # Row 0: clone x purity
-            rgba = blend_clone_color_by_purity(vis_adata, label_col, "tumor_purity")
-            ax0 = axes[0, ci]
-            sq.pl.spatial_scatter(
-                vis_adata,
-                color=label_col,
-                size=size,
-                library_id=rep_id,
-                ax=ax0,
-                edgecolors="none",
+            for ci, (rep_id, _anns_vis, vis_adata_orig) in enumerate(slices):
+                vis_adata = vis_adata_orig.copy()
+                idx = [bc_to_idx[bc] for bc in vis_adata.obs_names]
+                vis_adata.obs[label_col] = pd.Categorical(
+                    labels[idx], categories=frame_cats
+                )
+                vis_adata.obs["max_posterior"] = max_post[idx]
+                if has_purity:
+                    vis_adata.obs["tumor_purity"] = purity[idx]
+
+                # Row 0: clone x purity (or categorical for init)
+                ax0 = axes[0, ci]
+                set_clone_colors(vis_adata, label_col)
+                if has_purity:
+                    rgba = blend_clone_color_by_purity(
+                        vis_adata, label_col, "tumor_purity"
+                    )
+                    sq.pl.spatial_scatter(
+                        vis_adata,
+                        color=label_col,
+                        size=size,
+                        library_id=rep_id,
+                        ax=ax0,
+                        edgecolors="none",
+                    )
+                    from matplotlib.collections import PatchCollection as _PC
+
+                    for child in ax0.get_children():
+                        if isinstance(child, _PC) and len(child.get_paths()) == len(
+                            rgba
+                        ):
+                            child.set_facecolors(rgba)
+                            break
+                else:
+                    sq.pl.spatial_scatter(
+                        vis_adata,
+                        color=label_col,
+                        size=size,
+                        library_id=rep_id,
+                        ax=ax0,
+                        alpha=0.5,
+                        edgecolors="none",
+                    )
+                ax0.set_title(f"{rep_id}", fontsize=10)
+                leg = ax0.get_legend()
+                if leg is not None:
+                    leg.remove()
+
+                # Row 1: max_posterior
+                if has_purity:
+                    ax1 = axes[1, ci]
+                    sq.pl.spatial_scatter(
+                        vis_adata,
+                        color="max_posterior",
+                        size=size,
+                        library_id=rep_id,
+                        ax=ax1,
+                        edgecolors="none",
+                        cmap="magma_r",
+                        vmin=0,
+                        vmax=1,
+                    )
+                    ax1.set_title(f"{rep_id} — max posterior", fontsize=10)
+                    if ci < ncols - 1:
+                        cb = ax1.collections[-1].colorbar if ax1.collections else None
+                        if cb is not None:
+                            cb.remove()
+
+            # Row 2: purity histogram (single axis spanning full width)
+            if has_purity:
+                for ci in range(1, ncols):
+                    axes[2, ci].set_visible(False)
+                ax_hist = axes[2, 0]
+                for lab in frame_cats:
+                    mask = labels == lab
+                    vals = purity[mask]
+                    if len(vals) == 0:
+                        continue
+                    ax_hist.hist(
+                        vals,
+                        bins=50,
+                        range=(0, 1),
+                        alpha=0.6,
+                        label=f"{lab} (n={len(vals)})",
+                        color=clone_rgb.get(lab, gray),
+                        edgecolor="black",
+                        linewidth=0.3,
+                    )
+                ax_hist.set_xlabel("tumor purity (θ)", fontsize=10)
+                ax_hist.set_ylabel("count", fontsize=10)
+                ax_hist.set_title("purity distribution", fontsize=10)
+                ax_hist.legend(fontsize=8)
+
+            # legend
+            frame_legend = [
+                mpatches.Patch(color=clone_rgb.get(c, gray), label=c)
+                for c in frame_cats
+            ]
+            axes[0, -1].legend(
+                handles=frame_legend,
+                loc="center left",
+                bbox_to_anchor=(1.0, 0.5),
+                fontsize=8,
             )
-            from matplotlib.collections import PatchCollection as _PC
 
-            for child in ax0.get_children():
-                if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
-                    child.set_facecolors(rgba)
-                    break
-            ax0.set_title(f"{rep_id} — clone x purity", fontsize=10)
-            legend = ax0.get_legend()
-            if legend is not None:
-                legend.remove()
+            # title
+            title = f"{sample}  iter {ri}/{niters - 1}"
+            if ri == 0 and ref_label and ref_label in barcodes.columns:
+                is_normal = labels == "normal"
+                ref_normal = (
+                    barcodes[ref_label]
+                    .apply(lambda x: not is_tumor_label(x) and x not in NA_CELLTYPE)
+                    .to_numpy()
+                )
+                tp = int((is_normal & ref_normal).sum())
+                fp = int((is_normal & ~ref_normal).sum())
+                fn = int((~is_normal & ref_normal).sum())
+                prec = tp / max(tp + fp, 1)
+                rec = tp / max(tp + fn, 1)
+                f1 = 2 * prec * rec / max(prec + rec, 1e-10)
+                title += f"  (init normal: prec={prec:.3f} rec={rec:.3f} f1={f1:.3f})"
+            if iter_aucs and ri < len(iter_aucs):
+                title += f"  AUC={iter_aucs[ri]:.3f}"
+            fig.suptitle(title, fontsize=12, fontweight="bold")
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
 
-            # Row 1: max_posterior
-            ax1 = axes[1, ci]
-            sq.pl.spatial_scatter(
-                vis_adata,
-                color="max_posterior",
-                size=size,
-                library_id=rep_id,
-                ax=ax1,
-                edgecolors="none",
-                cmap="magma_r",
-                vmin=0,
-                vmax=1,
-            )
-            ax1.set_title(f"{rep_id} — max posterior", fontsize=10)
-            # keep colorbar only on last column
-            if ci < ncols - 1:
-                cb = ax1.collections[-1].colorbar if ax1.collections else None
-                if cb is not None:
-                    cb.remove()
-
-        # legend on last axis of row 0
-        axes[0, -1].legend(
-            handles=legend_handles,
-            loc="center left",
-            bbox_to_anchor=(1.0, 0.5),
-            fontsize=8,
-        )
-
-        title = f"{sample}  iter {ri + 1}/{niters}"
-        if iter_aucs and ri < len(iter_aucs):
-            title += f"  AUC={iter_aucs[ri]:.3f}"
-        fig.suptitle(title, fontsize=13, fontweight="bold")
-        fig.tight_layout()
-
-        tmp_path = os.path.join(out_dir, f"_frame_{ri}.png")
-        fig.savefig(tmp_path, dpi=dpi, bbox_inches="tight")
-        plt.close(fig)
-        frames.append(Image.open(tmp_path).convert("RGB"))
-        os.remove(tmp_path)
-
-    out_file = os.path.join(out_dir, f"{sample}.visium_iters.gif")
-    frames[0].save(
-        out_file,
-        save_all=True,
-        append_images=frames[1:],
-        duration=800,
-        loop=0,
-    )
-    logging.info(f"saved visium iterations GIF to {out_file}")
+    logging.info(f"saved visium iterations PDF to {out_file}")
 
 
 def plot_purity_histogram(

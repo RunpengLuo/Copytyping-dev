@@ -170,10 +170,6 @@ def run(args):
     extra_args = {}
     if args.get("update_purity"):
         extra_args["update_purity"] = True
-    if args.get("update_NB_dispersion"):
-        extra_args["update_NB_dispersion"] = True
-    if args.get("update_BB_dispersion"):
-        extra_args["update_BB_dispersion"] = True
 
     panel = pd.read_table(panel_tsv, dtype=str).fillna("")
     required = [

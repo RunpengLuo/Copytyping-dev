@@ -140,50 +140,21 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="Laplace smoothing term when computing clone BAF",
     )
     parser.add_argument(
-        "--tau_init",
-        required=False,
-        default=200.0,
-        type=float,
-        help="Initial BB tau (default 200). "
-        "tau is a concentration parameter: larger=less dispersed (BB→Binomial as tau→∞)",
-    )
-    parser.add_argument(
         "--tau_bounds",
         required=False,
-        default="1.0,1e6",
+        default="50.0,5000.0",
         type=str,
-        help="Bounds for BB tau MLE optimization, comma-separated (default: 1.0,1e6)",
-    )
-    parser.add_argument(
-        "--invphi_init",
-        required=False,
-        default=100.0,
-        type=float,
-        help="Initial NB inv_phi (default 100). "
-        "inv_phi is a concentration parameter: larger=less dispersed (NB→Poisson as inv_phi→∞)",
+        help="Bounds for BB tau MLE (comma-separated, default: 50.0,5000.0). "
+        "tau is a concentration parameter: larger=less dispersed (BB→Binomial as tau→∞)",
     )
     parser.add_argument(
         "--invphi_bounds",
         required=False,
-        default="1.0,1e6",
+        default="20.0,5000.0",
         type=str,
-        help="Bounds for NB inv_phi MLE optimization, comma-separated (default: 1.0,1e6)",
+        help="Bounds for NB inv_phi MLE (comma-separated, default: 20.0,5000.0). "
+        "inv_phi is a concentration parameter: larger=less dispersed (NB→Poisson as inv_phi→∞)",
     )
-    parser.add_argument(
-        "--theta_prior_a",
-        required=False,
-        default=2.0,
-        type=float,
-        help="Beta prior alpha for tumor purity theta (default 2.0)",
-    )
-    parser.add_argument(
-        "--theta_prior_b",
-        required=False,
-        default=1.0,
-        type=float,
-        help="Beta prior beta for tumor purity theta (default 1.0)",
-    )
-
     parser.add_argument(
         "--pi_alpha",
         required=False,
@@ -193,22 +164,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         "1: MLE (default), <1: sparse, >1: smoothing",
     )
 
-    parser.add_argument(
-        "--update_NB_dispersion",
-        required=False,
-        action="store_true",
-        default=False,
-        help="if set, update Negative-binomial dispersion "
-        "in M-step (default: fixed after init)",
-    )
-    parser.add_argument(
-        "--update_BB_dispersion",
-        required=False,
-        action="store_true",
-        default=False,
-        help="if set, update Beta-binomial dispersion "
-        "in M-step (default: fixed after init)",
-    )
     parser.add_argument(
         "--update_purity",
         required=False,
@@ -459,17 +414,5 @@ def add_arguments_pipeline(parser):
         action="store_true",
         default=False,
         help="Update per-spot purity in M-step",
-    )
-    parser.add_argument(
-        "--update_NB_dispersion",
-        action="store_true",
-        default=False,
-        help="Update NB dispersion (inv_phi) in M-step",
-    )
-    parser.add_argument(
-        "--update_BB_dispersion",
-        action="store_true",
-        default=False,
-        help="Update BB dispersion (tau) in M-step",
     )
     return parser

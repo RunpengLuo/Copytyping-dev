@@ -365,24 +365,14 @@ def run(args=None):
             clones=seg_data_sources[data_types[0]].clones,
             dpi=args["dpi"],
         )
-        if hasattr(instance, "param_trace") and instance.param_trace:
-            iter_anns = []
-            for params_t in instance.param_trace:
-                anns_t, _ = instance.predict(
-                    args["fit_mode"],
-                    params_t,
-                    label=label,
-                    posterior_thres=args["posterior_thres"],
-                    margin_thres=args["margin_thres"],
-                )
-                iter_anns.append(anns_t)
+        if hasattr(instance, "labeling_trace") and instance.labeling_trace:
             plot_visium_iters(
                 sample,
                 visium_slices,
-                iter_anns,
+                instance.labeling_trace,
+                barcodes=barcodes,
                 out_dir=dirs["visium"],
                 clones=seg_data_sources[data_types[0]].clones,
-                spot_label=label,
                 ref_label=(ref_label if ref_label in barcodes.columns else None),
                 dpi=args["dpi"],
             )
