@@ -60,8 +60,8 @@ class Cell_Model(Base_Model):
             self._init_lambda(params, is_normal)
 
         for data_type in self.data_types:
-            tau_bounds = init_params.get("tau_bounds", (50.0, 5000.0))
-            invphi_bounds = init_params.get("invphi_bounds", (20.0, 5000.0))
+            tau_bounds = init_params["tau_bounds"]
+            invphi_bounds = init_params["invphi_bounds"]
 
             if fit_mode in {"total_only", "hybrid"} and is_normal is not None:
                 lambda_g = params[f"{data_type}-lambda"]

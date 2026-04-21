@@ -62,7 +62,7 @@ class Spot_Model(Base_Model):
             sx = self.data_sources[dt]
             lg = params[f"{dt}-lambda"]
             params[f"{dt}-theta"] = estimate_tumor_proportion_bin(
-                sx, lg, u_min=init_params.get("purity_min", 0.1)
+                sx, lg, u_min=init_params["purity_min"]
             )
             if fit_mode in {"allele_only", "hybrid"}:
                 params[f"{dt}-tau"] = self._init_tau_from_normals(
@@ -83,7 +83,7 @@ class Spot_Model(Base_Model):
                 if key in fix_params:
                     fix_params[key] = init_fix_params[key]
 
-        self._purity_min = init_params.get("purity_min", 0.1)
+        self._purity_min = init_params["purity_min"]
         theta = params[f"{self.data_types[0]}-theta"]
         init_labeling["tumor_purity"] = np.where(is_normal, 0.0, theta)
         return params, fix_params, init_labeling
