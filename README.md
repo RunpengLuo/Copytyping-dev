@@ -88,6 +88,7 @@ Cell-type reference labels can be supplied via **`--cell_type`** (a TSV with `BA
 | `--share_BB_dispersion` | off | Share BB dispersion across CN states |
 | `--share_NB_dispersion` | off | Share NB dispersion across CN states |
 | `--fix_tumor_purity` | off | Fix per-spot tumor purity (Visium only) |
+| `--purity_min` | `0.1` | Lower bound on per-spot tumor purity θ (Visium only). Use 0.1 for highly infiltrative tumors (low tumor content per spot); increase to 0.4–0.5 for solid tumors where most tumor spots have high purity. Higher values prevent the normal gate from collapsing but may miss low-purity tumor spots. |
 
 #### Assignment thresholds
 
