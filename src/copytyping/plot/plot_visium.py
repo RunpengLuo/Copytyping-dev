@@ -281,15 +281,14 @@ def plot_visium_iters(
     base_palette = sns.color_palette("tab10", n_colors=max(len(clones or []) + 1, 10))
     clone_rgb = {}
     j = 0
-    for c in (clones or []):
+    for c in clones or []:
         if c == "normal":
             clone_rgb[c] = gray
         else:
             clone_rgb[c] = np.array(base_palette[j][:3])
             j += 1
     legend_handles = [
-        mpatches.Patch(color=clone_rgb.get(c, gray), label=c)
-        for c in (clones or [])
+        mpatches.Patch(color=clone_rgb.get(c, gray), label=c) for c in (clones or [])
     ]
 
     col_w = 6
@@ -407,7 +406,7 @@ def plot_purity_histogram(
     base = sns.color_palette("tab10", n_colors=10).as_hex()
     clone_colors = {}
     j = 0
-    for c in (clones or []):
+    for c in clones or []:
         if c == "normal":
             clone_colors[c] = gray
         else:

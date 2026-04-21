@@ -27,7 +27,6 @@ class Base_Model:
         prefix="copytyping",
         verbose=1,
         modality_masks: dict = None,
-        hard_em: bool = False,
         allele_mask_id: str = "IMBALANCED",
         total_mask_id: str = "ANEUPLOID",
     ) -> None:
@@ -41,7 +40,6 @@ class Base_Model:
         self.work_dir = work_dir
         self.prefix = prefix
         self.verbose = verbose
-        self.hard_em = hard_em
         self.allele_mask_id = allele_mask_id
         self.total_mask_id = total_mask_id
         if modality_masks is None:
@@ -81,57 +79,67 @@ class Base_Model:
         self,
         init_fix_params,
         init_params,
-        ref_label="cell_type",
         allele_post_thres=0.90,
         allele_max_iter=10,
     ):
-        """Identify normal cells/spots from reference labels or allele-only sub-EM.
+        """Identify normal cells/spots via allele-only sub-EM.
 
-        When running the sub-EM, only clonal imbalanced bins are used
-        (IMBALANCED & ~SUBCLONAL) so that the BB model discriminates
-        normal vs tumor without inter-clone confusion.
+        Uses only clonal imbalanced bins (IMBALANCED & ~SUBCLONAL)
+        so that the BB model discriminates normal vs tumor without
+        inter-clone confusion.
         """
         from copytyping.inference.cell_model import Cell_Model
 
-        is_normal = None
-        if ref_label in self.barcodes.columns:
-            logging.info(f"use reference label={ref_label} for normal identification")
-            is_normal = self.barcodes[ref_label].apply(is_normal_label).to_numpy()
+        logging.info("infer normal cells using allele-only BB model")
+        for dt in self.data_types:
+            sx = self.data_sources[dt]
+            n_clonal = int(sx.MASK["CLONAL_IMBALANCED"].sum())
+            n_all = int(sx.MASK["IMBALANCED"].sum())
+            logging.info(f"  [{dt}] clonal imbalanced: {n_clonal}/{n_all}")
+        pure_model = Cell_Model(
+            self.barcodes,
+            self.platform,
+            self.data_types,
+            self.data_sources,
+            work_dir=self.work_dir,
+            modality_masks=self.modality_masks,
+            allele_mask_id="CLONAL_IMBALANCED",
+        )
+        cell_init = {k: v for k, v in init_params.items() if k != "pi"}
+        allele_params, _ = pure_model.fit(
+            "allele_only",
+            fix_params=init_fix_params,
+            init_params=cell_init,
+            max_iter=allele_max_iter,
+        )
+        allele_anns, _ = pure_model.predict(
+            "allele_only",
+            allele_params,
+            label="allele_only-label",
+            posterior_thres=allele_post_thres,
+        )
+        is_normal = (allele_anns["allele_only-label"] == "normal").to_numpy()
 
-        if is_normal is None or np.sum(is_normal) == 0:
-            logging.info("infer normal cells using allele-only BB model")
-            for dt in self.data_types:
-                sx = self.data_sources[dt]
-                n_clonal = int(sx.MASK["CLONAL_IMBALANCED"].sum())
-                n_all = int(sx.MASK["IMBALANCED"].sum())
-                logging.info(f"  [{dt}] clonal imbalanced: {n_clonal}/{n_all}")
-            pure_model = Cell_Model(
-                self.barcodes,
-                self.platform,
-                self.data_types,
-                self.data_sources,
-                work_dir=self.work_dir,
-                modality_masks=self.modality_masks,
-                allele_mask_id="CLONAL_IMBALANCED",
-            )
-            # Strip pi from init_params so Cell_Model uses uniform init
-            cell_init = {k: v for k, v in init_params.items() if k != "pi"}
-            allele_params, _ = pure_model.fit(
-                "allele_only",
-                fix_params=init_fix_params,
-                init_params=cell_init,
-                max_iter=allele_max_iter,
-            )
-            allele_anns, _ = pure_model.predict(
-                "allele_only",
-                allele_params,
-                label="allele_only-label",
-                posterior_thres=allele_post_thres,
-            )
-            is_normal = (allele_anns["allele_only-label"] == "normal").to_numpy()
-
-        n_normal = np.sum(is_normal)
+        n_normal = int(np.sum(is_normal))
         logging.info(f"#normal cells/spots={n_normal}/{self.num_barcodes}")
+
+        # Compare with reference labels if available
+        ref_label = init_params.get("ref_label")
+        if ref_label and ref_label in self.barcodes.columns:
+            ref_normal = self.barcodes[ref_label].apply(is_normal_label).to_numpy()
+            tp = int((is_normal & ref_normal).sum())
+            fp = int((is_normal & ~ref_normal).sum())
+            fn = int((~is_normal & ref_normal).sum())
+            tn = int((~is_normal & ~ref_normal).sum())
+            prec = tp / max(tp + fp, 1)
+            rec = tp / max(tp + fn, 1)
+            f1 = 2 * prec * rec / max(prec + rec, 1e-10)
+            logging.info(
+                f"normal init vs ref_label={ref_label}: "
+                f"TP={tp} FP={fp} FN={fn} TN={tn} "
+                f"prec={prec:.3f} rec={rec:.3f} f1={f1:.3f}"
+            )
+
         assert n_normal > 0, "no normal cells/spots found for baseline estimation"
         return is_normal
 
@@ -254,11 +262,8 @@ class Base_Model:
             )
 
         self._pi_alpha = init_params["pi_alpha"]
-        self._tau_prior = (init_params["tau_prior_a"], init_params["tau_prior_b"])
-        self._invphi_prior = (
-            init_params["invphi_prior_a"],
-            init_params["invphi_prior_b"],
-        )
+        self._tau_bounds = init_params["tau_bounds"]
+        self._invphi_bounds = init_params["invphi_bounds"]
         self._theta_prior = (
             init_params["theta_prior_a"],
             init_params["theta_prior_b"],
@@ -272,12 +277,7 @@ class Base_Model:
             param_trace.append(copy.deepcopy(params))
             gamma = self._e_step(fit_mode, params, t)
             gamma_trace.append(gamma.copy())
-            if self.hard_em:
-                hard = np.zeros_like(gamma)
-                hard[np.arange(len(gamma)), gamma.argmax(axis=1)] = 1.0
-                self._m_step(fit_mode, hard, params, fix_params, t=t, eps=eps)
-            else:
-                self._m_step(fit_mode, gamma, params, fix_params, t=t, eps=eps)
+            self._m_step(fit_mode, gamma, params, fix_params, t=t, eps=eps)
 
             ll, _, _ = self.compute_log_likelihood(fit_mode, params)
             ll_trace.append(ll)

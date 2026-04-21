@@ -149,7 +149,6 @@ def run(args=None):
         out_prefix,
         args["verbosity"],
         modality_masks=modality_masks,
-        hard_em=args["hard_em"],
     )
     model_params, final_ll = instance.fit(
         fit_mode=args["fit_mode"],

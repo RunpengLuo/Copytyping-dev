@@ -8,27 +8,28 @@ from scipy.stats import binom, zscore
 from copytyping.sx_data.sx_data import SX_Data
 
 
+def _parse_bounds(s):
+    """Parse comma-separated bounds string like '1.0,1e6' into (float, float)."""
+    lo, hi = s.split(",")
+    return (float(lo), float(hi))
+
+
 def prepare_params(args, cnv_blocks, platform, data_types):
     """Build init_params and fix_params dicts from CLI args and CNV profile."""
     bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
     pi_init = bulk_props
-    tau_prior_a = args["tau_prior_a"]
-    tau_prior_b = args["tau_prior_b"]
-    invphi_prior_a = args["invphi_prior_a"]
-    invphi_prior_b = args["invphi_prior_b"]
+    tau_bounds = _parse_bounds(args["tau_bounds"])
+    invphi_bounds = _parse_bounds(args["invphi_bounds"])
     init_params = {
         "pi": pi_init,
-        "tau0": tau_prior_a / tau_prior_b,
-        "phi0": 1.0 / (invphi_prior_a / invphi_prior_b),
+        "tau0": args["tau_init"],
+        "phi0": 1.0 / args["invphi_init"],
         "pi_alpha": args["pi_alpha"],
-        "tau_prior_a": tau_prior_a,
-        "tau_prior_b": tau_prior_b,
-        "invphi_prior_a": invphi_prior_a,
-        "invphi_prior_b": invphi_prior_b,
+        "tau_bounds": tau_bounds,
+        "invphi_bounds": invphi_bounds,
         "theta_prior_a": args["theta_prior_a"],
         "theta_prior_b": args["theta_prior_b"],
         "purity_min": args.get("purity_min", 0.1),
-        "init_baseline_by_cell_type": args.get("init_baseline_by_cell_type", False),
         "ref_label": args.get("ref_label"),
     }
     fix_params = {"pi": False}
@@ -446,10 +447,8 @@ def cond_negbin_logpmf_theta(
 # MLE fit functions
 
 
-def mle_invphi(
-    X_gnk, mu_gnk, weights, invphi_bounds=(1e-4, 1e8), prior=None, eps=1e-12
-):
-    """MAP estimate of NB inv_phi with optional Gamma(a, b) prior."""
+def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds=(1.0, 1e6), eps=1e-12):
+    """MLE of NB inv_phi within bounds."""
     mu_gnk = np.clip(mu_gnk, eps, None)
 
     def neg_Q_invphi(invphi):
@@ -462,11 +461,7 @@ def mle_invphi(
             + invphi * np.log(invphi / (invphi + mu_gnk))
             + X_gnk * np.log(mu_gnk / (invphi + mu_gnk))
         )
-        obj = -np.sum(weights * log_pmf)
-        if prior is not None:
-            a, b = prior
-            obj += -(a - 1) * np.log(invphi) + b * invphi
-        return obj
+        return -np.sum(weights * log_pmf)
 
     res = minimize_scalar(
         neg_Q_invphi,
@@ -477,28 +472,18 @@ def mle_invphi(
     return float(np.clip(res.x, invphi_bounds[0], invphi_bounds[1]))
 
 
-def mle_tau(
-    Y_gnk,
-    D_gnk,
-    p_gnk,
-    weights,
-    logtau_bounds=(np.log(1e-4), np.log(1e8)),
-    prior=None,
-):
-    """MAP estimate of BB tau with optional Gamma(a, b) prior."""
+def mle_tau(Y_gnk, D_gnk, p_gnk, weights, tau_bounds=(1.0, 1e6)):
+    """MLE of BB tau within bounds (optimized in log-space)."""
     X_gnk = D_gnk - Y_gnk
     const = gammaln(D_gnk + 1.0) - gammaln(Y_gnk + 1.0) - gammaln(X_gnk + 1.0)
+    logtau_bounds = (np.log(tau_bounds[0]), np.log(tau_bounds[1]))
 
     def neg_Q_logtau(logtau):
         tau = np.exp(logtau)
         alpha = tau * p_gnk
         beta = tau * (1.0 - p_gnk)
         log_pmf = const + betaln(Y_gnk + alpha, X_gnk + beta) - betaln(alpha, beta)
-        obj = -np.sum(weights * log_pmf)
-        if prior is not None:
-            a, b = prior
-            obj += -(a - 1) * logtau + b * tau
-        return obj
+        return -np.sum(weights * log_pmf)
 
     res = minimize_scalar(
         neg_Q_logtau,

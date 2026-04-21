@@ -351,7 +351,9 @@ def plot_rdr_baf_1d_pseudobulk(
             if "tumor_purity" in anns.columns and mean_pur < 1.0:
                 rdr_g = rdr_pure if rdr_pure is not None else np.ones_like(clone_baf)
                 denom = mean_pur * rdr_g + (1 - mean_pur)
-                clone_baf = (mean_pur * rdr_g * clone_baf + 0.5 * (1 - mean_pur)) / denom
+                clone_baf = (
+                    mean_pur * rdr_g * clone_baf + 0.5 * (1 - mean_pur)
+                ) / denom
             ax_baf.add_collection(
                 LineCollection(
                     _merge_exp_lines(

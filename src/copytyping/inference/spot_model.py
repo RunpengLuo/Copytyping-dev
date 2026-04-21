@@ -36,7 +36,6 @@ class Spot_Model(Base_Model):
         prefix="copytyping",
         verbose=1,
         modality_masks=None,
-        hard_em=False,
         allele_mask_id="IMBALANCED",
         total_mask_id="ANEUPLOID",
     ):
@@ -49,17 +48,13 @@ class Spot_Model(Base_Model):
             prefix,
             verbose,
             modality_masks=modality_masks,
-            hard_em=hard_em,
             allele_mask_id=allele_mask_id,
             total_mask_id=total_mask_id,
         )
         self.K_tumor = self.K - 1
 
     def _init_params(self, fit_mode, init_fix_params, init_params):
-        ref_label = init_params.get("ref_label") if init_params.get("init_baseline_by_cell_type") else None
-        is_normal = self._identify_normal_cells(
-            init_fix_params, init_params, ref_label=ref_label
-        )
+        is_normal = self._identify_normal_cells(init_fix_params, init_params)
         params = {"pi": init_params.get("pi", np.ones(self.K) / self.K)}
         self._init_lambda(params, is_normal)
 
@@ -191,7 +186,7 @@ class Spot_Model(Base_Model):
                     np.broadcast_to(D, p_gnk.shape),
                     p_gnk,
                     gamma[None, :, :],
-                    prior=self._tau_prior,
+                    tau_bounds=self._tau_bounds,
                 )
 
             if (
@@ -213,7 +208,7 @@ class Spot_Model(Base_Model):
                     np.broadcast_to(X, mu_gnk.shape),
                     mu_gnk,
                     gamma[None, :, :],
-                    prior=self._invphi_prior,
+                    invphi_bounds=self._invphi_bounds,
                 )
 
         # Theta update (per-spot, tumor clones only)

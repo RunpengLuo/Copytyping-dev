@@ -28,7 +28,6 @@ class Cell_Model(Base_Model):
         prefix="copytyping",
         verbose=1,
         modality_masks=None,
-        hard_em=False,
         allele_mask_id="IMBALANCED",
         total_mask_id="ANEUPLOID",
     ):
@@ -41,7 +40,6 @@ class Cell_Model(Base_Model):
             prefix,
             verbose,
             modality_masks=modality_masks,
-            hard_em=hard_em,
             allele_mask_id=allele_mask_id,
             total_mask_id=total_mask_id,
         )
@@ -55,11 +53,9 @@ class Cell_Model(Base_Model):
         # from _identify_normal_cells inner sub-EM)
         is_normal = None
         if fit_mode != "allele_only":
-            ref_label = init_params.get("ref_label") if init_params.get("init_baseline_by_cell_type") else None
             is_normal = self._identify_normal_cells(
                 init_fix_params,
                 init_params,
-                ref_label=ref_label,
             )
         if fit_mode in {"total_only", "hybrid"}:
             self._init_lambda(params, is_normal)
@@ -146,18 +142,15 @@ class Cell_Model(Base_Model):
                 props_gk = clone_pi_gk(lambda_g, sx_data.C)[total_mask]
                 mu_gnk = props_gk[:, None, :] * sx_data.T[None, :, None]
                 X_gnk = sx_data.X[total_mask][:, :, None]
-                invphi_map = mle_invphi(
+                invphi_est = mle_invphi(
                     X_gnk,
                     mu_gnk,
                     gamma_gnk,
-                    prior=self._invphi_prior,
+                    invphi_bounds=self._invphi_bounds,
                 )
-                params[f"{data_type}-inv_phi"][:] = invphi_map
-                invphi_mle = mle_invphi(X_gnk, mu_gnk, gamma_gnk)
+                params[f"{data_type}-inv_phi"][:] = invphi_est
                 logging.debug(
-                    f"{data_type} inv_phi: MLE={invphi_mle:.4f} "
-                    f"MAP={invphi_map:.4f} "
-                    f"(phi: MLE={1 / invphi_mle:.2f} MAP={1 / invphi_map:.2f})"
+                    f"{data_type} inv_phi={invphi_est:.4f} (phi={1 / invphi_est:.2f})"
                 )
 
             # BB dispersion (shared across all bins)
@@ -170,16 +163,12 @@ class Cell_Model(Base_Model):
                 p_gnk = MA["BAF"][:, None, :]
                 Y_gnk = MA["Y"][:, :, None]
                 D_gnk = MA["D"][:, :, None]
-                tau_map = mle_tau(
+                tau_est = mle_tau(
                     Y_gnk,
                     D_gnk,
                     p_gnk,
                     gamma_gnk,
-                    prior=self._tau_prior,
+                    tau_bounds=self._tau_bounds,
                 )
-                params[f"{data_type}-tau"][:] = tau_map
-                tau_mle = mle_tau(Y_gnk, D_gnk, p_gnk, gamma_gnk)
-                logging.debug(
-                    f"{data_type} tau: MLE={tau_mle:.2f} MAP={tau_map:.2f} "
-                    f"ratio={tau_map / tau_mle:.2f}"
-                )
+                params[f"{data_type}-tau"][:] = tau_est
+                logging.debug(f"{data_type} tau={tau_est:.2f}")

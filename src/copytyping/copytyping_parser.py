@@ -140,34 +140,34 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="Laplace smoothing term when computing clone BAF",
     )
     parser.add_argument(
-        "--tau_prior_a",
+        "--tau_init",
         required=False,
-        default=400.0,
+        default=200.0,
         type=float,
-        help="Gamma prior shape for BB tau (default 400.0, mean=a/b=200). "
+        help="Initial BB tau (default 200). "
         "tau is a concentration parameter: larger=less dispersed (BB→Binomial as tau→∞)",
     )
     parser.add_argument(
-        "--tau_prior_b",
+        "--tau_bounds",
         required=False,
-        default=2.0,
-        type=float,
-        help="Gamma prior rate for BB tau (default 2.0, mean=a/b=200)",
+        default="1.0,1e6",
+        type=str,
+        help="Bounds for BB tau MLE optimization, comma-separated (default: 1.0,1e6)",
     )
     parser.add_argument(
-        "--invphi_prior_a",
+        "--invphi_init",
         required=False,
         default=100.0,
         type=float,
-        help="Gamma prior shape for NB inv_phi (default 100.0, mean=a/b=100). "
+        help="Initial NB inv_phi (default 100). "
         "inv_phi is a concentration parameter: larger=less dispersed (NB→Poisson as inv_phi→∞)",
     )
     parser.add_argument(
-        "--invphi_prior_b",
+        "--invphi_bounds",
         required=False,
-        default=1.0,
-        type=float,
-        help="Gamma prior rate for NB inv_phi (default 1.0, mean=a/b=100)",
+        default="1.0,1e6",
+        type=str,
+        help="Bounds for NB inv_phi MLE optimization, comma-separated (default: 1.0,1e6)",
     )
     parser.add_argument(
         "--theta_prior_a",
@@ -216,22 +216,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default=False,
         help="if set, update per-spot tumor purity (theta) "
         "in M-step (default: fixed after init, spatial only)",
-    )
-    parser.add_argument(
-        "--hard_em",
-        required=False,
-        action="store_true",
-        default=False,
-        help="if set, use hard EM (argmax clone assignment) "
-        "instead of soft EM in M-step",
-    )
-    parser.add_argument(
-        "--init_baseline_by_cell_type",
-        required=False,
-        action="store_true",
-        default=False,
-        help="if set, use reference cell type labels to identify normal "
-        "cells for RDR baseline estimation (default: infer via allele-only sub-EM)",
     )
     # post selection
     parser.add_argument(
@@ -487,11 +471,5 @@ def add_arguments_pipeline(parser):
         action="store_true",
         default=False,
         help="Update BB dispersion (tau) in M-step",
-    )
-    parser.add_argument(
-        "--init_baseline_by_cell_type",
-        action="store_true",
-        default=False,
-        help="Use reference cell type labels for RDR baseline init",
     )
     return parser

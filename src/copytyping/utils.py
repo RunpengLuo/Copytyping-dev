@@ -17,14 +17,10 @@ NA_CELLTYPE = {"Unknown", "NA"}
 
 
 def is_tumor_label(label: str) -> bool:
-    """Check if a label indicates a tumor cell/spot (tumor*, clone*, etc.)."""
-    if label in TUMOR_LABELS:
-        return True
-    return label.lower().startswith(TUMOR_PREFIXES)
+    return label.lower().startswith(TUMOR_PREFIXES) or label in TUMOR_LABELS
 
 
 def is_normal_label(label: str) -> bool:
-    """Check if a label indicates a normal cell/spot (not tumor, not invalid)."""
     return not is_tumor_label(label) and label not in INVALID_LABELS
 
 
