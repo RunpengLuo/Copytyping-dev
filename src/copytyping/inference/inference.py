@@ -35,7 +35,6 @@ from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_common import plot_crosstab
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_visium import (
-    plot_purity_histogram,
     plot_visium_iters,
     plot_visium_panel,
 )
@@ -64,12 +63,12 @@ def run(args=None):
     os.makedirs(out_dir, exist_ok=True)
     _file_handler = add_file_logging(out_dir)
     plot_dir = os.path.join(out_dir, "plots")
+    val_dir = os.path.join(out_dir, "plots", "validation")
     dirs = {
         "work": os.path.join(out_dir, "work"),
         "plots": plot_dir,
+        "validation": val_dir,
     }
-    if platform in SPATIAL_PLATFORMS:
-        dirs["visium"] = plot_dir
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
 
@@ -261,7 +260,7 @@ def run(args=None):
             anns,
             sample,
             os.path.join(
-                plot_dir,
+                val_dir,
                 f"{out_prefix}.{platform}.crosstab.png",
             ),
             metric=metric,
@@ -351,19 +350,11 @@ def run(args=None):
         plot_visium_panel(
             sample,
             visium_slices,
-            dirs["visium"],
+            plot_dir,
             spot_label=label,
             path_label=ref_label,
             dpi=args["dpi"],
             title_info=visium_title,
-        )
-        plot_purity_histogram(
-            anns,
-            sample,
-            dirs["visium"],
-            spot_label=label,
-            clones=seg_data_sources[data_types[0]].clones,
-            dpi=args["dpi"],
         )
         if hasattr(instance, "labeling_trace") and instance.labeling_trace:
             plot_visium_iters(
@@ -371,7 +362,7 @@ def run(args=None):
                 visium_slices,
                 instance.labeling_trace,
                 barcodes=barcodes,
-                out_dir=dirs["visium"],
+                out_dir=val_dir,
                 clones=seg_data_sources[data_types[0]].clones,
                 ref_label=(ref_label if ref_label in barcodes.columns else None),
                 dpi=args["dpi"],

@@ -149,7 +149,7 @@ def estimate_tumor_proportion_bin(sx_data: SX_Data, base_props: np.ndarray, u_mi
     n_loh = int(loh_mask.sum())
     logging.info(f"init theta: {n_loh} clonal LOH bins")
 
-    theta_arr = np.full(sx_data.N, u_min, dtype=np.float32)
+    theta_arr = np.zeros(sx_data.N, dtype=np.float32)
 
     if n_loh > 0:
         p_loh = sx_data.BAF[loh_mask, 1]

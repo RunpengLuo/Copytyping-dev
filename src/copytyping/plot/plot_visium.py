@@ -244,7 +244,7 @@ def plot_visium_iters(
     out_dir: str,
     clones: list = None,
     ref_label=None,
-    dpi=150,
+    dpi=100,
     size=1.5,
 ):
     """PDF with one page per EM iteration from labeling_trace.
@@ -291,9 +291,32 @@ def plot_visium_iters(
     col_w = 6
     row_h = 5
     label_col = "_iter_clone"
-    out_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
+    spatial_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
+    hist_file = os.path.join(out_dir, f"{sample}.iter_histograms.pdf")
+    from matplotlib.collections import PatchCollection as _PC
 
-    with PdfPages(out_file) as pdf:
+    def _make_title(ri, labels):
+        title = f"{sample}  iter {ri}/{niters - 1}"
+        if ri == 0 and ref_label and ref_label in barcodes.columns:
+            is_normal = labels == "normal"
+            ref_normal = (
+                barcodes[ref_label]
+                .apply(lambda x: not is_tumor_label(x) and x not in NA_CELLTYPE)
+                .to_numpy()
+            )
+            tp = int((is_normal & ref_normal).sum())
+            fp = int((is_normal & ~ref_normal).sum())
+            fn = int((~is_normal & ref_normal).sum())
+            prec = tp / max(tp + fp, 1)
+            rec = tp / max(tp + fn, 1)
+            f1 = 2 * prec * rec / max(prec + rec, 1e-10)
+            title += f"  (init normal: prec={prec:.3f} rec={rec:.3f} f1={f1:.3f})"
+        if iter_aucs and ri < len(iter_aucs):
+            title += f"  AUC={iter_aucs[ri]:.3f}"
+        return title
+
+    # --- Spatial PDF (H&E + labels) ---
+    with PdfPages(spatial_file) as pdf:
         for ri, lt in enumerate(labeling_trace):
             labels = lt["labels"]
             max_post = lt["max_posterior"]
@@ -301,35 +324,33 @@ def plot_visium_iters(
             has_purity = purity is not None
 
             unique_labels = sorted(set(labels))
-            frame_cats = [c for c in (clones or unique_labels) if c in unique_labels]
-            if not frame_cats:
+            if has_purity:
+                frame_cats = [
+                    c for c in (clones or unique_labels) if c in unique_labels
+                ]
+                if not frame_cats:
+                    frame_cats = unique_labels
+            else:
                 frame_cats = unique_labels
 
-            nrows = 3 if has_purity else 1
             fig, axes = plt.subplots(
-                nrows=nrows,
+                nrows=1,
                 ncols=ncols,
-                figsize=(col_w * ncols, row_h * nrows),
+                figsize=(col_w * ncols, row_h),
                 squeeze=False,
             )
-
             for ci, (rep_id, _anns_vis, vis_adata_orig) in enumerate(slices):
                 vis_adata = vis_adata_orig.copy()
                 idx = [bc_to_idx[bc] for bc in vis_adata.obs_names]
                 vis_adata.obs[label_col] = pd.Categorical(
                     labels[idx], categories=frame_cats
                 )
-                vis_adata.obs["max_posterior"] = max_post[idx]
                 if has_purity:
                     vis_adata.obs["tumor_purity"] = purity[idx]
 
-                # Row 0: clone x purity (or categorical for init)
                 ax0 = axes[0, ci]
                 set_clone_colors(vis_adata, label_col)
                 if has_purity:
-                    rgba = blend_clone_color_by_purity(
-                        vis_adata, label_col, "tumor_purity"
-                    )
                     sq.pl.spatial_scatter(
                         vis_adata,
                         color=label_col,
@@ -338,8 +359,9 @@ def plot_visium_iters(
                         ax=ax0,
                         edgecolors="none",
                     )
-                    from matplotlib.collections import PatchCollection as _PC
-
+                    rgba = blend_clone_color_by_purity(
+                        vis_adata, label_col, "tumor_purity"
+                    )
                     for child in ax0.get_children():
                         if isinstance(child, _PC) and len(child.get_paths()) == len(
                             rgba
@@ -361,52 +383,6 @@ def plot_visium_iters(
                 if leg is not None:
                     leg.remove()
 
-                # Row 1: max_posterior
-                if has_purity:
-                    ax1 = axes[1, ci]
-                    sq.pl.spatial_scatter(
-                        vis_adata,
-                        color="max_posterior",
-                        size=size,
-                        library_id=rep_id,
-                        ax=ax1,
-                        edgecolors="none",
-                        cmap="magma_r",
-                        vmin=0,
-                        vmax=1,
-                    )
-                    ax1.set_title(f"{rep_id} — max posterior", fontsize=10)
-                    if ci < ncols - 1:
-                        cb = ax1.collections[-1].colorbar if ax1.collections else None
-                        if cb is not None:
-                            cb.remove()
-
-            # Row 2: purity histogram (single axis spanning full width)
-            if has_purity:
-                for ci in range(1, ncols):
-                    axes[2, ci].set_visible(False)
-                ax_hist = axes[2, 0]
-                for lab in frame_cats:
-                    mask = labels == lab
-                    vals = purity[mask]
-                    if len(vals) == 0:
-                        continue
-                    ax_hist.hist(
-                        vals,
-                        bins=50,
-                        range=(0, 1),
-                        alpha=0.6,
-                        label=f"{lab} (n={len(vals)})",
-                        color=clone_rgb.get(lab, gray),
-                        edgecolor="black",
-                        linewidth=0.3,
-                    )
-                ax_hist.set_xlabel("tumor purity (θ)", fontsize=10)
-                ax_hist.set_ylabel("count", fontsize=10)
-                ax_hist.set_title("purity distribution", fontsize=10)
-                ax_hist.legend(fontsize=8)
-
-            # legend
             frame_legend = [
                 mpatches.Patch(color=clone_rgb.get(c, gray), label=c)
                 for c in frame_cats
@@ -417,88 +393,63 @@ def plot_visium_iters(
                 bbox_to_anchor=(1.0, 0.5),
                 fontsize=8,
             )
-
-            # title
-            title = f"{sample}  iter {ri}/{niters - 1}"
-            if ri == 0 and ref_label and ref_label in barcodes.columns:
-                is_normal = labels == "normal"
-                ref_normal = (
-                    barcodes[ref_label]
-                    .apply(lambda x: not is_tumor_label(x) and x not in NA_CELLTYPE)
-                    .to_numpy()
-                )
-                tp = int((is_normal & ref_normal).sum())
-                fp = int((is_normal & ~ref_normal).sum())
-                fn = int((~is_normal & ref_normal).sum())
-                prec = tp / max(tp + fp, 1)
-                rec = tp / max(tp + fn, 1)
-                f1 = 2 * prec * rec / max(prec + rec, 1e-10)
-                title += f"  (init normal: prec={prec:.3f} rec={rec:.3f} f1={f1:.3f})"
-            if iter_aucs and ri < len(iter_aucs):
-                title += f"  AUC={iter_aucs[ri]:.3f}"
-            fig.suptitle(title, fontsize=12, fontweight="bold")
+            fig.suptitle(_make_title(ri, labels), fontsize=12, fontweight="bold")
             fig.tight_layout()
             pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
             plt.close(fig)
+    logging.info(f"saved visium iterations to {spatial_file}")
 
-    logging.info(f"saved visium iterations PDF to {out_file}")
+    # --- Histogram PDF (posterior + purity per iter) ---
+    with PdfPages(hist_file) as pdf:
+        for ri, lt in enumerate(labeling_trace):
+            labels = lt["labels"]
+            max_post = lt["max_posterior"]
+            purity = lt.get("tumor_purity")
+            if purity is None:
+                continue
 
+            unique_labels = sorted(set(labels))
+            frame_cats = [c for c in (clones or unique_labels) if c in unique_labels]
+            if not frame_cats:
+                frame_cats = unique_labels
+            active = [lab for lab in frame_cats if (labels == lab).any()]
+            hist_labels = [f"{lab} (n={int((labels == lab).sum())})" for lab in active]
+            hist_colors = [clone_rgb.get(lab, gray) for lab in active]
 
-def plot_purity_histogram(
-    anns: pd.DataFrame,
-    sample: str,
-    out_dir: str,
-    spot_label: str = "copytyping-label",
-    clones: list = None,
-    bins=50,
-    dpi=200,
-):
-    """Histogram of tumor_purity per clone label."""
-    if "tumor_purity" not in anns.columns:
-        return
+            fig, (ax_post, ax_pur) = plt.subplots(1, 2, figsize=(14, 4))
 
-    plt.rcParams["pdf.fonttype"] = 42
-    plt.rcParams["ps.fonttype"] = 42
+            ax_post.hist(
+                [max_post[labels == lab] for lab in active],
+                bins=50,
+                range=(0, 1),
+                stacked=True,
+                label=hist_labels,
+                color=hist_colors,
+                edgecolor="black",
+                linewidth=0.3,
+            )
+            ax_post.set_xlabel("max posterior", fontsize=10)
+            ax_post.set_ylabel("count", fontsize=10)
+            ax_post.set_title("posterior distribution", fontsize=10)
+            ax_post.legend(fontsize=8)
 
-    gray = "#b0b0b0"
-    base = sns.color_palette("tab10", n_colors=10).as_hex()
-    clone_colors = {}
-    j = 0
-    for c in clones or []:
-        if c == "normal":
-            clone_colors[c] = gray
-        else:
-            clone_colors[c] = base[j]
-            j += 1
+            ax_pur.hist(
+                [purity[labels == lab] for lab in active],
+                bins=50,
+                range=(0, 1),
+                stacked=True,
+                label=hist_labels,
+                color=hist_colors,
+                edgecolor="black",
+                linewidth=0.3,
+            )
+            ax_pur.set_xlabel("tumor purity (θ)", fontsize=10)
+            ax_pur.set_ylabel("count", fontsize=10)
+            ax_pur.set_title("purity distribution", fontsize=10)
+            ax_pur.legend(fontsize=8)
 
-    labels = anns[spot_label].values
-    purity = anns["tumor_purity"].values
-    unique_labels = sorted(set(labels), key=lambda x: (x != "normal", x))
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    for lab in unique_labels:
-        mask = labels == lab
-        vals = purity[mask]
-        if len(vals) == 0:
-            continue
-        ax.hist(
-            vals,
-            bins=bins,
-            range=(0, 1),
-            alpha=0.6,
-            label=f"{lab} (n={len(vals)})",
-            color=clone_colors.get(lab, gray),
-            edgecolor="black",
-            linewidth=0.3,
-        )
-
-    ax.set_xlabel("Tumor purity (θ)", fontsize=11)
-    ax.set_ylabel("Count", fontsize=11)
-    ax.set_title(f"{sample} — purity distribution by clone", fontsize=12)
-    ax.legend(fontsize=9)
-    fig.tight_layout()
-
-    out_file = os.path.join(out_dir, f"{sample}.purity_histogram.pdf")
-    fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    logging.info(f"saved purity histogram to {out_file}")
+            fig.suptitle(_make_title(ri, labels), fontsize=12, fontweight="bold")
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+    logging.info(f"saved iteration histograms to {hist_file}")
