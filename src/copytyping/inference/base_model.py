@@ -116,7 +116,7 @@ class Base_Model:
             )
             # Strip pi from init_params so Cell_Model uses uniform init
             cell_init = {k: v for k, v in init_params.items() if k != "pi"}
-            allele_params = pure_model.fit(
+            allele_params, _ = pure_model.fit(
                 "allele_only",
                 fix_params=init_fix_params,
                 init_params=cell_init,
@@ -303,7 +303,7 @@ class Base_Model:
         self.param_trace = param_trace
         self.gamma_trace = gamma_trace
         self.save_param_trace(param_trace)
-        return params
+        return params, ll_trace[-1] if ll_trace else -np.inf
 
     # ------------------------------------------------------------------
     # Predict

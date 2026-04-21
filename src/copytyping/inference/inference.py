@@ -63,18 +63,13 @@ def run(args=None):
     out_prefix = args["out_prefix"] or str(sample)
     os.makedirs(out_dir, exist_ok=True)
     _file_handler = add_file_logging(out_dir)
+    plot_dir = os.path.join(out_dir, "plots")
     dirs = {
         "work": os.path.join(out_dir, "work"),
-        "plots": os.path.join(out_dir, "plots"),
-        "heatmap_agg1": os.path.join(out_dir, "plots", "heatmaps", "agg1"),
-        "heatmap_aggx": os.path.join(
-            out_dir, "plots", "heatmaps", f"agg{args['heatmap_agg']}"
-        ),
-        "scatter": os.path.join(out_dir, "plots", "scatters"),
-        "validation": os.path.join(out_dir, "plots", "validation"),
+        "plots": plot_dir,
     }
     if platform in SPATIAL_PLATFORMS:
-        dirs["visium"] = os.path.join(out_dir, "plots", "spatial_images")
+        dirs["visium"] = plot_dir
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
 
@@ -156,7 +151,7 @@ def run(args=None):
         modality_masks=modality_masks,
         hard_em=args["hard_em"],
     )
-    model_params = instance.fit(
+    model_params, final_ll = instance.fit(
         fit_mode=args["fit_mode"],
         fix_params=fix_params,
         init_params=init_params,
@@ -208,7 +203,7 @@ def run(args=None):
                 is_normal,
             )
 
-    metric = {}
+    metric = {"log_likelihood": final_ll}
     if ref_label in barcodes.columns:
         metric.update(
             evaluate_malignant_accuracy(
@@ -267,7 +262,7 @@ def run(args=None):
             anns,
             sample,
             os.path.join(
-                dirs["validation"],
+                plot_dir,
                 f"{out_prefix}.{platform}.crosstab.png",
             ),
             metric=metric,
@@ -288,10 +283,7 @@ def run(args=None):
             for val in ["BAF", "log2RDR"]:
                 if val == "log2RDR" and data_type not in seg_lambda:
                     continue
-                for agg, agg_dir in [
-                    (1, dirs["heatmap_agg1"]),
-                    (args["heatmap_agg"], dirs["heatmap_aggx"]),
-                ]:
+                for agg in [1, args["heatmap_agg"]]:
                     logging.info(f"  heatmap {val} agg={agg} {my_label}")
                     plot_cnv_heatmap(
                         sample,
@@ -306,7 +298,7 @@ def run(args=None):
                         agg_size=agg,
                         lab_type=my_label,
                         filename=os.path.join(
-                            agg_dir,
+                            plot_dir,
                             f"{out_prefix}.{platform}"
                             f".{val}_heatmap.{data_type}"
                             f".{my_label}.{args['img_type']}",
@@ -329,7 +321,7 @@ def run(args=None):
                 lab_type=my_label,
                 is_inferred=(my_label == label),
                 filename=os.path.join(
-                    dirs["scatter"],
+                    plot_dir,
                     f"{out_prefix}.{platform}.1d_scatter.{data_type}.{my_label}.pdf",
                 ),
                 subtitle=scatter_subtitle,

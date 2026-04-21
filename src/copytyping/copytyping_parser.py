@@ -144,7 +144,8 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=False,
         default=100.0,
         type=float,
-        help="Gamma prior shape for BB tau (default 100.0, mean=a/b=200)",
+        help="Gamma prior shape for BB tau (default 100.0, mean=a/b=200). "
+        "tau is a concentration parameter: larger=less dispersed (BB→Binomial as tau→∞)",
     )
     parser.add_argument(
         "--tau_prior_b",
@@ -158,7 +159,8 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         required=False,
         default=4.0,
         type=float,
-        help="Gamma prior shape for NB inv_phi (default 4.0, mean=a/b=100)",
+        help="Gamma prior shape for NB inv_phi (default 4.0, mean=a/b=100). "
+        "inv_phi is a concentration parameter: larger=less dispersed (NB→Poisson as inv_phi→∞)",
     )
     parser.add_argument(
         "--invphi_prior_b",
