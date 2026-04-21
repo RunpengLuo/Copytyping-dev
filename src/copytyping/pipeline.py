@@ -170,6 +170,10 @@ def run(args):
     extra_args = {}
     if args.get("update_purity"):
         extra_args["update_purity"] = True
+    if args.get("update_NB_dispersion"):
+        extra_args["update_NB_dispersion"] = True
+    if args.get("update_BB_dispersion"):
+        extra_args["update_BB_dispersion"] = True
     if args.get("init_baseline_by_cell_type"):
         extra_args["init_baseline_by_cell_type"] = True
 

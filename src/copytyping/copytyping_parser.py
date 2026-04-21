@@ -477,6 +477,18 @@ def add_arguments_pipeline(parser):
         help="Update per-spot purity in M-step",
     )
     parser.add_argument(
+        "--update_NB_dispersion",
+        action="store_true",
+        default=False,
+        help="Update NB dispersion (inv_phi) in M-step",
+    )
+    parser.add_argument(
+        "--update_BB_dispersion",
+        action="store_true",
+        default=False,
+        help="Update BB dispersion (tau) in M-step",
+    )
+    parser.add_argument(
         "--init_baseline_by_cell_type",
         action="store_true",
         default=False,
