@@ -158,10 +158,10 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--pi_alpha",
         required=False,
-        default=0.1,
+        default=1.0,
         type=float,
         help="symmetric Dirichlet prior alpha for pi. "
-        "1: MLE (default), <1: sparse, >1: smoothing",
+        "1: non-informative (default), <1: sparse, >1: smoothing",
     )
 
     parser.add_argument(
@@ -213,6 +213,14 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         type=float,
         help="min purity for tumor-gated spots (default: 0.1)",
         default=0.1,
+    )
+    parser.add_argument(
+        "--purity_tol",
+        required=False,
+        type=float,
+        help="tumor spots with purity <= purity_min + purity_tol "
+        "are labeled low_purity (default: 0.01)",
+        default=0.01,
     )
     parser.add_argument(
         "--min_snp_count",

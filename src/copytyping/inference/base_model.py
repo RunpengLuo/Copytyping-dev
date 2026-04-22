@@ -207,6 +207,8 @@ class Base_Model:
             )
 
         self._pi_alpha = init_params["pi_alpha"]
+        self._purity_min = init_params["purity_min"]
+        self._purity_tol = init_params["purity_tol"]
         params, fix_params, init_labeling = self._init_params(
             fit_mode, fix_params, init_params
         )

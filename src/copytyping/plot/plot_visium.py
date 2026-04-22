@@ -333,10 +333,11 @@ def plot_visium_iters(
             else:
                 frame_cats = unique_labels
 
+            nrows = 2
             fig, axes = plt.subplots(
-                nrows=1,
+                nrows=nrows,
                 ncols=ncols,
-                figsize=(col_w * ncols, row_h),
+                figsize=(col_w * ncols, row_h * nrows),
                 squeeze=False,
             )
             for ci, (rep_id, _anns_vis, vis_adata_orig) in enumerate(slices):
@@ -345,9 +346,11 @@ def plot_visium_iters(
                 vis_adata.obs[label_col] = pd.Categorical(
                     labels[idx], categories=frame_cats
                 )
+                vis_adata.obs["max_posterior"] = max_post[idx]
                 if has_purity:
                     vis_adata.obs["tumor_purity"] = purity[idx]
 
+                # Row 0: clone labels (purity-blended or alpha=0.5)
                 ax0 = axes[0, ci]
                 set_clone_colors(vis_adata, label_col)
                 if has_purity:
@@ -382,6 +385,25 @@ def plot_visium_iters(
                 leg = ax0.get_legend()
                 if leg is not None:
                     leg.remove()
+
+                # Row 1: max_posterior (darker = higher confidence)
+                ax1 = axes[1, ci]
+                sq.pl.spatial_scatter(
+                    vis_adata,
+                    color="max_posterior",
+                    size=size,
+                    library_id=rep_id,
+                    ax=ax1,
+                    edgecolors="none",
+                    cmap="magma_r",
+                    vmin=0,
+                    vmax=1,
+                )
+                ax1.set_title(f"{rep_id} — max posterior", fontsize=10)
+                if ci < ncols - 1:
+                    cb = ax1.collections[-1].colorbar if ax1.collections else None
+                    if cb is not None:
+                        cb.remove()
 
             frame_legend = [
                 mpatches.Patch(color=clone_rgb.get(c, gray), label=c)

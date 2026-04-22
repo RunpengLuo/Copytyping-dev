@@ -83,9 +83,6 @@ class Spot_Model(Base_Model):
                 if key in fix_params:
                     fix_params[key] = init_fix_params[key]
 
-        self._purity_min = init_params["purity_min"]
-        theta = params[f"{self.data_types[0]}-theta"]
-        init_labeling["tumor_purity"] = np.where(is_normal, 0.0, theta)
         return params, fix_params, init_labeling
 
     def compute_log_likelihood(self, fit_mode, params):
@@ -228,6 +225,19 @@ class Spot_Model(Base_Model):
             anns["margin_delta"] < margin_thres
         )
         anns.loc[mask_na, label] = "NA"
+
+        # relabel low-purity tumor spots as normal
+        is_tumor = ~anns[label].isin(["normal", "NA"])
+        is_low = is_tumor & (
+            anns["tumor_purity"] <= self._purity_min + self._purity_tol
+        )
+        if is_low.any():
+            logging.info(
+                f"relabel {int(is_low.sum())} low-purity tumor spots to normal "
+                f"(θ <= {self._purity_min + self._purity_tol:.3f})"
+            )
+            anns.loc[is_low, label] = "normal"
+            anns.loc[is_low, "tumor_purity"] = 0.0
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}
         self._log_posterior_stats(anns, label)
