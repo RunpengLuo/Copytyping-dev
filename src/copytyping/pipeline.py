@@ -170,6 +170,8 @@ def run(args):
     extra_args = {}
     if args.get("update_purity"):
         extra_args["update_purity"] = True
+    if args.get("smooth_k", 0) > 0:
+        extra_args["smooth_k"] = args["smooth_k"]
 
     panel = pd.read_table(panel_tsv, dtype=str).fillna("")
     required = [

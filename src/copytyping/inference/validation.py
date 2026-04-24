@@ -139,6 +139,87 @@ def joincount_zscore(labels, W):
     return results
 
 
+def _mean_delta_ll(ll_gnk, g, map_k, assigned):
+    r"""Mean discriminative score for cluster g.
+
+    .. math::
+        \Delta_{g,n} = \ell_{g,n,k^*} - \max_{k \neq k^*} \ell_{g,n,k}
+
+    .. math::
+        \bar{\Delta}_g = \frac{1}{N'} \sum_{n \in \text{assigned}} \Delta_{g,n}
+    """
+    ll_g = ll_gnk[g, assigned, :]  # (N', K)
+    k_star = map_k[assigned]
+    ll_map = ll_g[np.arange(len(k_star)), k_star]
+    ll_g_copy = ll_g.copy()
+    ll_g_copy[np.arange(len(k_star)), k_star] = -np.inf
+    ll_2nd = ll_g_copy.max(axis=1)
+    deltas = ll_map - ll_2nd
+    return float(np.mean(deltas)), float(np.median(deltas))
+
+
+def rank_clusters(ll_allele, ll_total, anns, label, clones, sx_data):
+    r"""Per-cluster discrimination scores for allele and total LL separately.
+
+    For each cluster g, computes mean \bar{\Delta}_g for allele-LL and total-LL.
+    Allele score is only computed for IMBALANCED clusters;
+    total score is only computed for ANEUPLOID clusters.
+
+    Args:
+        ll_allele: (G, N, K) per-cluster allele log-likelihood.
+        ll_total: (G, N, K) per-cluster total log-likelihood.
+        anns: annotations DataFrame.
+        label: MAP label column name.
+        clones: ordered clone names.
+        sx_data: SX_Data with cnv_blocks and MASK.
+
+    Returns:
+        DataFrame with one row per cluster (not sorted).
+    """
+    G = ll_allele.shape[0]
+    map_labels = anns[label].values
+    clone_to_k = {c: k for k, c in enumerate(clones)}
+    map_k = np.array([clone_to_k.get(lab, -1) for lab in map_labels])
+    assigned = map_k >= 0
+
+    imb = sx_data.MASK["IMBALANCED"]
+    aneu = sx_data.MASK["ANEUPLOID"]
+    cnv = sx_data.cnv_blocks
+
+    rows = []
+    for g in range(G):
+        row = {"cluster": g}
+        if "SEGMENTS" in cnv.columns:
+            row["SEGMENTS"] = cnv["SEGMENTS"].iloc[g]
+        if "#BBC" in cnv.columns:
+            row["#BBC"] = cnv["#BBC"].iloc[g]
+        if "CNP" in cnv.columns:
+            row["CNP"] = cnv["CNP"].iloc[g]
+        if "#SNPS" in cnv.columns:
+            row["#SNPS"] = cnv["#SNPS"].iloc[g]
+        if "#gene" in cnv.columns:
+            row["#gene"] = cnv["#gene"].iloc[g]
+
+        if imb[g]:
+            mean_d, med_d = _mean_delta_ll(ll_allele, g, map_k, assigned)
+            row["allele_score"] = mean_d
+            row["allele_score_med"] = med_d
+        else:
+            row["allele_score"] = ""
+            row["allele_score_med"] = ""
+
+        if aneu[g]:
+            mean_d, med_d = _mean_delta_ll(ll_total, g, map_k, assigned)
+            row["total_score"] = mean_d
+            row["total_score_med"] = med_d
+        else:
+            row["total_score"] = ""
+            row["total_score_med"] = ""
+
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def refine_labels_by_reference(anns, ref_label, cell_label, out_label):
     num_na_before = (anns[cell_label] == "NA").sum()
     anns[out_label] = anns[cell_label]

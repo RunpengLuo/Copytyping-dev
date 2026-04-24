@@ -1,3 +1,6 @@
+import logging
+import os
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -120,6 +123,63 @@ def plot_loss(losses: list, out_loss_file: str, val_type="log-likelihood", dpi=1
     fig.tight_layout()
     fig.savefig(out_loss_file, dpi=dpi)
     plt.close(fig)
+
+
+def plot_count_histograms(
+    data_sources: dict,
+    sample: str,
+    out_dir: str,
+    dpi=100,
+):
+    """Per-rep 2x2 histogram: total/aneuploid read counts, total/imbalanced allele counts."""
+    for data_type, sx in data_sources.items():
+        outfile = os.path.join(out_dir, f"{sample}.{data_type}.count_histograms.pdf")
+        aneu = sx.MASK["ANEUPLOID"]
+        imb = sx.MASK["IMBALANCED"]
+        n_aneu = int(aneu.sum())
+        n_imb = int(imb.sum())
+
+        total_x = sx.X.sum(axis=0)
+        aneu_x = sx.X[aneu].sum(axis=0) if n_aneu > 0 else np.zeros(sx.N)
+        total_d = sx.D.sum(axis=0)
+        imb_d = sx.D[imb].sum(axis=0) if n_imb > 0 else np.zeros(sx.N)
+        rep_ids = sx.barcodes["REP_ID"].unique()
+
+        def _hist(ax, vals, xlabel, title):
+            ax.hist(vals, bins=50, edgecolor="black", linewidth=0.3)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("count")
+            ax.set_title(
+                f"{title} (n={len(vals)}, med={int(np.median(vals))})", fontsize=9
+            )
+
+        with PdfPages(outfile) as pdf:
+            for rep_id in rep_ids:
+                rm = sx.barcodes["REP_ID"].values == rep_id
+                fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+                _hist(axes[0, 0], total_x[rm], "read count", "total read count")
+                _hist(
+                    axes[0, 1],
+                    aneu_x[rm],
+                    "read count",
+                    f"aneuploid read count ({n_aneu} bins)",
+                )
+                _hist(axes[1, 0], total_d[rm], "allele count", "total allele count")
+                _hist(
+                    axes[1, 1],
+                    imb_d[rm],
+                    "allele count",
+                    f"imbalanced allele count ({n_imb} bins)",
+                )
+                fig.suptitle(
+                    f"{sample} — {data_type} — {rep_id}",
+                    fontsize=12,
+                    fontweight="bold",
+                )
+                fig.tight_layout()
+                pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
+                plt.close(fig)
+        logging.info(f"saved count histograms to {outfile}")
 
 
 def _is_na_label(label):

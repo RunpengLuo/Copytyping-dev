@@ -1,11 +1,10 @@
 import argparse
+import copy
 import logging
 import os
 
-import numpy as np
 import pandas as pd
 import scanpy as sc
-import squidpy as sq
 
 from copytyping.copytyping_parser import (
     add_arguments_inference,
@@ -25,14 +24,16 @@ from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
     evaluate_malignant_accuracy,
     joincount_zscore,
+    rank_clusters,
     refine_labels_by_reference,
 )
 from copytyping.io_utils import (
     load_modality_data,
+    load_spatial_neighbors,
     union_align_barcodes,
 )
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
-from copytyping.plot.plot_common import plot_crosstab
+from copytyping.plot.plot_common import plot_count_histograms, plot_crosstab
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_visium import (
     plot_visium_iters,
@@ -63,14 +64,9 @@ def run(args=None):
     os.makedirs(out_dir, exist_ok=True)
     _file_handler = add_file_logging(out_dir)
     plot_dir = os.path.join(out_dir, "plots")
-    val_dir = os.path.join(out_dir, "plots", "validation")
-    dirs = {
-        "work": os.path.join(out_dir, "work"),
-        "plots": plot_dir,
-        "validation": val_dir,
-    }
-    for d in dirs.values():
-        os.makedirs(d, exist_ok=True)
+    val_dir = os.path.join(out_dir, "validation")
+    os.makedirs(plot_dir, exist_ok=True)
+    os.makedirs(val_dir, exist_ok=True)
 
     logging.info(f"sample={sample}, platform={platform}, data_types={data_types}")
 
@@ -82,10 +78,11 @@ def run(args=None):
 
     min_snp_agg_bbc = args["min_snp_count"]
     max_len_agg_bbc = args["max_bin_length"]
-    data_sources = {}  # used by EM (seg or clust level)
+    data_sources = {}
     seg_data_sources = {}
     agg_bbc_data_sources = {}
     adatas = {}
+    spatial_graphs = {}
     for data_type in data_types:
         barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc = (
             load_modality_data(
@@ -118,23 +115,35 @@ def run(args=None):
             max_len_agg_bbc,
         )
 
-        data_sources[data_type] = (
-            seg_sx.to_cluster_level() if args["aggr_mode"] == "clust" else seg_sx
-        )
-
         if args.get(f"{data_type}_h5ad") is not None:
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])
             if cell_type_df is not None:
                 annotate_adata_celltype(
                     adatas[data_type], cell_type_df, ref_label, data_type
                 )
+            if platform in SPATIAL_PLATFORMS and "spatial" in adatas[data_type].obsm:
+                spatial_graphs[data_type] = load_spatial_neighbors(
+                    args[f"{data_type}_h5ad"], n_neighs=args["n_neighs"]
+                )
+
+        # apply spatial smoothing — create smoothed copy for EM, keep raw for plotting
+        if data_type in spatial_graphs and args["smooth_k"] > 0:
+            seg_sx_smoothed = copy.deepcopy(seg_sx)
+            seg_sx_smoothed.apply_spatial_smoothing(
+                spatial_graphs[data_type], args["smooth_k"]
+            )
+            data_sources[data_type] = seg_sx_smoothed.to_cluster_level()
+        else:
+            data_sources[data_type] = seg_sx.to_cluster_level()
 
     save_cnp_profile(
-        seg_data_sources[data_types[0]],
+        seg_data_sources,
         os.path.join(out_dir, f"{out_prefix}.cnp_profile.tsv"),
     )
 
     barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
+
+    plot_count_histograms(seg_data_sources, sample, val_dir, dpi=args["dpi"])
 
     cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
     init_params, fix_params = prepare_params(args, cnv_blocks, platform, data_types)
@@ -144,7 +153,7 @@ def run(args=None):
         platform,
         data_types,
         data_sources,
-        dirs["work"],
+        val_dir,
         out_prefix,
         args["verbosity"],
         modality_masks=modality_masks,
@@ -161,12 +170,24 @@ def run(args=None):
         args["fit_mode"],
         model_params,
         label=label,
-        posterior_thres=args["posterior_thres"],
-        margin_thres=args["margin_thres"],
     )
     logging.info(
         "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
     )
+
+    # Cluster discrimination scores
+    for data_type in data_types:
+        cluster_df = rank_clusters(
+            model_params[f"{data_type}-ll_allele"],
+            model_params[f"{data_type}-ll_total"],
+            anns,
+            label,
+            data_sources[data_type].clones,
+            data_sources[data_type],
+        )
+        rank_file = os.path.join(val_dir, f"{out_prefix}.{data_type}.cluster_rank.tsv")
+        cluster_df.to_csv(rank_file, sep="\t", index=False, na_rep="")
+        logging.info(f"saved cluster scores to {rank_file}")
 
     # Log gate posterior trace by ref_label
     if hasattr(instance, "gamma_trace") and ref_label in barcodes.columns:
@@ -213,25 +234,20 @@ def run(args=None):
         )
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
 
-    if is_spot:
-        gex_adata = adatas.get("gex")
-        if gex_adata is not None and "spatial" in gex_adata.obsm:
-            for rep_id in anns["REP_ID"].unique():
-                anns_rep = anns[anns["REP_ID"] == rep_id]
-                adata_rep = gex_adata[
-                    gex_adata.obs_names.isin(anns_rep["BARCODE"].values)
-                ].copy()
-                anns_rep_idx = anns.set_index("BARCODE").loc[adata_rep.obs_names]
-                clone_labels = anns_rep_idx[label].to_numpy()
+    if is_spot and spatial_graphs:
+        anns_indexed = anns.set_index("BARCODE")
+        for rep_id in anns["REP_ID"].unique():
+            for data_type in data_types:
+                if data_type not in spatial_graphs:
+                    continue
+                sg_reps = spatial_graphs[data_type]
+                if rep_id not in sg_reps:
+                    continue
+                sg = sg_reps[rep_id]
+                clone_labels = anns_indexed.loc[sg["BARCODE"], label].to_numpy()
 
-                sq.gr.spatial_neighbors(adata_rep, n_neighs=6, coord_type="generic")
-                W = adata_rep.obsp["spatial_connectivities"]
-                row_sums = np.asarray(W.sum(axis=1)).flatten()
-                row_sums[row_sums == 0] = 1.0
-                W = W.multiply(1.0 / row_sums[:, None])
-
-                jc = joincount_zscore(clone_labels, W)
-                logging.info(f"joincount z-score (rep={rep_id}):")
+                jc = joincount_zscore(clone_labels, sg["W"])
+                logging.info(f"joincount z-score (rep={rep_id}, {data_type}):")
                 for lab, z in sorted(jc.items()):
                     if lab == "normal":
                         continue

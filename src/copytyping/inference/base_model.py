@@ -82,18 +82,13 @@ class Base_Model:
             "allele_only",
             allele_params,
             label="allele_only-label",
-            posterior_thres=init_params["posterior_thres"],
-            margin_thres=init_params["margin_thres"],
         )
         init_labels = allele_anns["allele_only-label"].to_numpy()
         is_normal = init_labels == "normal"
-        n_na = int((init_labels == "NA").sum())
 
         n_normal = int(is_normal.sum())
-        n_tumor = int(self.num_barcodes - n_normal - n_na)
-        logging.info(
-            f"#normal={n_normal}, #tumor={n_tumor}, #NA={n_na} / {self.num_barcodes}"
-        )
+        n_tumor = int(self.num_barcodes - n_normal)
+        logging.info(f"#normal={n_normal}, #tumor={n_tumor} / {self.num_barcodes}")
         assert n_normal > 0, "no normal cells/spots found for baseline estimation"
         init_labeling = {
             "labels": init_labels,
@@ -208,10 +203,18 @@ class Base_Model:
 
         self._pi_alpha = init_params["pi_alpha"]
         self._purity_min = init_params["purity_min"]
-        self._purity_tol = init_params["purity_tol"]
+        self._purity_cutoff = init_params["purity_cutoff"]
+        self._cq_cutoff = init_params["cq_cutoff"]
         params, fix_params, init_labeling = self._init_params(
             fit_mode, fix_params, init_params
         )
+
+        # pre-allocate LL matrices — updated in-place by compute_log_likelihood
+        for dt in self.data_types:
+            G = self.data_sources[dt].G
+            params[f"{dt}-ll_allele"] = np.zeros((G, self.N, self.K), dtype=np.float64)
+            params[f"{dt}-ll_total"] = np.zeros((G, self.N, self.K), dtype=np.float64)
+        params["ll_global"] = np.zeros((self.N, self.K), dtype=np.float64)
 
         ll_trace, gamma_trace = [], []
         self.labeling_trace = [init_labeling]
@@ -224,7 +227,12 @@ class Base_Model:
 
             ll, _, _ = self.compute_log_likelihood(fit_mode, params)
             ll_trace.append(ll)
-            self.labeling_trace.append(self._gamma_to_labels(gamma, params))
+            lt = self._map_estimation(gamma, params, "_", as_df=False)
+            theta_key = f"{self.data_types[0]}-theta"
+            if theta_key in params:
+                theta = params[theta_key]
+                lt["tumor_purity"] = np.where(lt["labels"] == "normal", 0.0, theta)
+            self.labeling_trace.append(lt)
             if self.verbose:
                 logging.info(f"iter={t:03d} log-likelihood = {ll:.6f}")
 
@@ -247,47 +255,63 @@ class Base_Model:
         self.gamma_trace = gamma_trace
         return params, ll_trace[-1] if ll_trace else -np.inf
 
-    def _gamma_to_labels(self, gamma, params):
-        """Convert gamma posteriors to MAP labels and purity. Returns dict."""
-        map_idx = gamma.argmax(axis=1)
-        labels = np.array(self.clones)[map_idx]
-        max_post = gamma[np.arange(len(gamma)), map_idx]
-        return {"labels": labels, "max_posterior": max_post}
+    def _map_estimation(self, gamma, params, label, as_df=True, eps=1e-30):
+        r"""Hierarchical MAP estimation.
+
+        1. Normal vs tumor gate: h_n = 0 if r_{n0} >= r_{nT}
+        2. Clone MAP: z_n = argmax_k r_tilde_{nk} for tumor spots
+        3. CQ score: CQ_n = -10 log10(1 - max_k r_tilde_{nk} + eps)
+        4. CQ filter: CQ < cq_cutoff to unassigned_tumor
+        """
+        N = len(gamma)
+        r_n0 = gamma[:, 0]
+        r_nT = 1 - r_n0
+        clone_names = np.array(self.clones[1:])  # exclude "normal"
+
+        labels = np.where(r_n0 >= r_nT, "normal", "")
+
+        r_tilde = gamma[:, 1:] / np.maximum(r_nT[:, None], eps)
+        map_k = r_tilde.argmax(axis=1)
+        tumor = labels != "normal"
+        labels[tumor] = clone_names[map_k[tumor]]
+
+        # Step 4: CQ score
+        max_r_tilde = r_tilde[np.arange(N), map_k]
+        cq = -10 * np.log10(1 - max_r_tilde + eps)
+
+        if self._cq_cutoff > 0:
+            low_cq = tumor & (cq < self._cq_cutoff)
+            labels[low_cq] = "unassigned_tumor"
+
+        if not as_df:
+            result = {
+                "labels": labels,
+                "max_posterior": gamma[np.arange(N), gamma.argmax(axis=1)],
+            }
+            return result
+
+        anns = self.barcodes.copy(deep=True)
+        anns.loc[:, self.clones] = gamma
+        anns["r_normal"] = r_n0
+        anns["r_tumor"] = r_nT
+        anns["CQ"] = np.where(labels != "normal", cq, np.nan)
+        anns[label] = labels
+        return anns
 
     # ------------------------------------------------------------------
     # Predict
     # ------------------------------------------------------------------
-    def predict(
-        self,
-        fit_mode: str,
-        params: dict,
-        label: str,
-        posterior_thres: float = 0.5,
-        margin_thres: float = 0.1,
-        **kwargs,
-    ):
-        """Decode MAP labels with posterior thresholds."""
-        logging.info("Decode labels with MAP estimation")
+    def predict(self, fit_mode, params, label, **kwargs):
+        """Predict clone labels via hierarchical gated inference.
+
+        1. Normal vs tumor gate
+        2. Clone MAP within tumor branch
+        3. CQ (copytyping quality) score
+        4. CQ threshold to unassigned_tumor
+        """
         gamma = self._e_step(fit_mode, params)
-        lt = self._gamma_to_labels(gamma, params)
-
-        anns = self.barcodes.copy(deep=True)
-        anns.loc[:, self.clones] = gamma
-        anns["tumor"] = 1 - anns["normal"]
-        anns["max_posterior"] = lt["max_posterior"]
-        anns[label] = lt["labels"]
-
-        probs_sorted = np.sort(gamma, axis=1)
-        anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
-
-        mask_na = (anns["max_posterior"] < posterior_thres) | (
-            anns["margin_delta"] < margin_thres
-        )
-        anns.loc[mask_na, label] = "NA"
-
-        clone_props = {
-            clone: np.mean(anns[label].to_numpy() == clone) for clone in self.clones
-        }
+        anns = self._map_estimation(gamma, params, label)
+        clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}
         self._log_posterior_stats(anns, label)
         return anns, clone_props
 
@@ -296,14 +320,8 @@ class Base_Model:
         logging.info("posterior statistics:")
         for grp, sub in anns.groupby(group_label, sort=True):
             mp = sub["max_posterior"].to_numpy()
-            md = sub["margin_delta"].to_numpy()
             logging.info(
                 f"  {grp:8s} (n={len(sub):4d}): "
                 f"max_post min={mp.min():.3f} mean={mp.mean():.3f} "
-                f"median={np.median(mp):.3f} max={mp.max():.3f}  "
-                f"margin min={md.min():.3f} mean={md.mean():.3f}"
+                f"median={np.median(mp):.3f} max={mp.max():.3f}"
             )
-
-    # ------------------------------------------------------------------
-    # Utilities
-    # ------------------------------------------------------------------

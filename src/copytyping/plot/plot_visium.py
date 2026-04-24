@@ -1,6 +1,5 @@
 import logging
 import os
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -10,61 +9,77 @@ import seaborn as sns
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 
-# Silence anndata "storing X as categorical" messages
+from copytyping.utils import is_tumor_label, INVALID_LABELS, NA_CELLTYPE
+
 logging.getLogger("anndata").setLevel(logging.WARNING)
 
-
-def set_clone_colors(adata, col, gray="#b0b0b0"):
-    adata.obs[col] = adata.obs[col].astype("category")
-    cats = list(adata.obs[col].cat.categories)
-
-    base = sns.color_palette("tab10", n_colors=max(len(cats) + 1, 10)).as_hex()
-    colors = []
-    j = 0
-    for c in cats:
-        if c == "normal":
-            colors.append(gray)
-        else:
-            colors.append(base[j])
-            j += 1
-
-    adata.uns[f"{col}_colors"] = colors
+# ── Unified color palette ──
+# normal=gray, NA=tab10[0], tumor clones=tab10[1:]
+_PALETTE = sns.color_palette("tab10", 10).as_hex()
+NORMAL_COLOR = "silver"
+NA_COLOR = _PALETTE[0]
+_TUMOR_COLORS = _PALETTE[1:]
 
 
-def blend_clone_color_by_purity(
-    adata, label_col, purity_col, out_col="clone_purity_color"
-):
-    """Blend clone color with gray based on tumor purity per spot.
+def _label_color_index(label):
+    """Stable color index for a label. clone1→0, clone2→1, etc. Others by sorted name."""
+    import re
 
-    For each spot: color = purity * clone_color + (1 - purity) * gray.
-    This shows both clone identity and tumor content in a single panel.
+    m = re.match(r"clone(\d+)", label)
+    if m:
+        return int(m.group(1)) - 1
+    return hash(label) % len(_TUMOR_COLORS)
+
+
+def build_label_colors(categories: list) -> list:
+    """Return color list for categories. Consistent regardless of subset/order.
+
+    - NA / INVALID_LABELS → NA_COLOR
+    - "normal" → NORMAL_COLOR
+    - "cloneN" → stable tab10 index by N
+    - other labels → stable hash-based index
     """
-    gray = np.array([0.69, 0.69, 0.69])  # #b0b0b0
+    colors = []
+    for c in categories:
+        if c in INVALID_LABELS or c == "NA":
+            colors.append(NA_COLOR)
+        elif c == "normal":
+            colors.append(NORMAL_COLOR)
+        else:
+            colors.append(_TUMOR_COLORS[_label_color_index(c) % len(_TUMOR_COLORS)])
+    return colors
+
+
+def set_label_colors(adata, col):
+    """Set adata.uns colors using unified scheme."""
+    adata.obs[col] = adata.obs[col].astype("category")
+    adata.uns[f"{col}_colors"] = build_label_colors(list(adata.obs[col].cat.categories))
+
+
+def build_legend(categories: list) -> list:
+    """Build legend handles using unified colors."""
+    colors = build_label_colors(categories)
+    return [mpatches.Patch(color=colors[i], label=c) for i, c in enumerate(categories)]
+
+
+def blend_purity_rgba(adata, label_col, purity_col):
+    """Blend label color with gray by purity. Returns (N, 4) RGBA."""
+    gray = np.array(mcolors.to_rgb(NORMAL_COLOR))
     labels = adata.obs[label_col].astype("category")
     cats = list(labels.cat.categories)
-
-    base = sns.color_palette("tab10", n_colors=max(len(cats) + 1, 10))
-    clone_rgb = {}
-    j = 0
-    for c in cats:
-        if c == "normal":
-            clone_rgb[c] = gray
-        else:
-            clone_rgb[c] = np.array(base[j][:3])
-            j += 1
+    colors = build_label_colors(cats)
+    cat_rgb = {c: np.array(mcolors.to_rgb(colors[i])) for i, c in enumerate(cats)}
 
     purity = adata.obs[purity_col].to_numpy(dtype=float)
     n = len(adata)
     rgba = np.ones((n, 4), dtype=float)
     for i in range(n):
-        lab = labels.iloc[i]
-        c = clone_rgb.get(lab, gray)
+        c = cat_rgb.get(labels.iloc[i], gray)
         rgba[i, :3] = purity[i] * c + (1 - purity[i]) * gray
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*categorical.*")
-        adata.obs[out_col] = [mcolors.to_hex(rgba[i, :3]) for i in range(n)]
     return rgba
+
+
+# ── Plot functions ──
 
 
 def plot_visium_panel(
@@ -77,12 +92,9 @@ def plot_visium_panel(
     size=1.5,
     title_info="",
 ):
-    """Generate a single-page PDF with all slices side by side.
-
-    Args:
-        slices: list of (rep_id, anns_df, adata) tuples.
-    """
+    """Single-page PDF: H&E, path_label, purity, copytyping per slice."""
     import squidpy as sq
+    from matplotlib.collections import PatchCollection as _PC
 
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
@@ -96,12 +108,13 @@ def plot_visium_panel(
     if has_purity:
         purity_label = f"tumor purity\n{title_info}" if title_info else "tumor purity"
         row_labels.append(purity_label)
-    row_labels.append("copytyping")
+    row_labels.append("copytyping (purity-weighted)")
+    if has_purity:
+        row_labels.append("copytyping")
     nrows = len(row_labels)
     ncols = len(slices)
 
-    col_w = 6
-    row_h = 6
+    col_w, row_h = 6, 6
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
@@ -115,9 +128,9 @@ def plot_visium_panel(
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
         if has_purity:
             vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
-        set_clone_colors(vis_adata, spot_label)
+        set_label_colors(vis_adata, spot_label)
         if has_path:
-            set_clone_colors(vis_adata, path_label)
+            set_label_colors(vis_adata, path_label)
 
         ri = 0
         sq.pl.spatial_scatter(
@@ -163,37 +176,42 @@ def plot_visium_panel(
             edgecolors="none",
         )
         if has_purity:
-            rgba = blend_clone_color_by_purity(vis_adata, spot_label, "tumor_purity")
+            rgba = blend_purity_rgba(vis_adata, spot_label, "tumor_purity")
             ax = axes[ri, ci]
-            # override PatchCollection facecolors with blended colors
-            from matplotlib.collections import PatchCollection as _PC
-
             for child in ax.get_children():
                 if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
                     child.set_facecolors(rgba)
                     break
-            # replace legend with clean clone labels
             old_legend = ax.get_legend()
             if old_legend:
                 old_legend.remove()
-            cats = list(vis_adata.obs[spot_label].cat.categories)
-            base_pal = sns.color_palette("tab10", n_colors=max(len(cats) + 1, 10))
-            handles = []
-            j = 0
-            for c in cats:
-                if c == "normal":
-                    continue
-                handles.append(mpatches.Patch(color=base_pal[j], label=c))
-                j += 1
-            ax.legend(
-                handles=handles,
-                loc="center left",
-                bbox_to_anchor=(1.0, 0.5),
-                fontsize=7,
-                framealpha=0.8,
+
+            # extra row: copytyping labels without purity weighting
+            ri += 1
+            sq.pl.spatial_scatter(
+                vis_adata,
+                color=spot_label,
+                size=size,
+                library_id=rep_id,
+                ax=axes[ri, ci],
+                alpha=0.5,
+                edgecolors="none",
             )
 
-    # only show legend on the last column, positioned outside the plot
+    # shared legend for copytyping row from all slices' categories
+    all_cats = set()
+    for _, anns_vis, vis_adata in slices:
+        all_cats.update(vis_adata.obs[spot_label].cat.categories)
+    all_cats = sorted(all_cats, key=lambda x: (x != "normal", x == "NA", x))
+    copytyping_ri = nrows - 1
+    axes[copytyping_ri, -1].legend(
+        handles=build_legend(all_cats),
+        loc="center left",
+        bbox_to_anchor=(1.0, 0.5),
+        fontsize=7,
+        framealpha=0.8,
+    )
+
     for ri in range(nrows):
         for ci in range(ncols):
             legend = axes[ri, ci].get_legend()
@@ -203,33 +221,17 @@ def plot_visium_panel(
                 legend.remove()
             else:
                 legend.set_bbox_to_anchor((1.0, 0.5))
-                legend._loc = 6  # center left
+                legend._loc = 6
 
-    # set every axes title to sample_rep_id, overriding squidpy defaults
     for ri in range(nrows):
         for ci, (rep_id, _, _) in enumerate(slices):
             axes[ri, ci].set_title(f"{sample}_{rep_id}", fontsize=10)
 
-    # row-level suptitles via figure text, centered on each row
-    fig.subplots_adjust(wspace=0.3, hspace=0.25, top=0.95)
-    fig.canvas.draw()
     for ri, rlabel in enumerate(row_labels):
-        row_top = axes[ri, 0].get_position().y1
-        row_bot = axes[ri, 0].get_position().y0
-        y_mid = (row_top + row_bot) / 2
-        fig.text(
-            0.02,
-            y_mid,
-            rlabel,
-            fontsize=13,
-            fontweight="bold",
-            ha="center",
-            va="center",
-            rotation=90,
-        )
+        axes[ri, 0].set_ylabel(rlabel, fontsize=13, fontweight="bold")
 
     fig.suptitle(sample, fontsize=14, fontweight="bold")
-
+    fig.tight_layout()
     out_file = os.path.join(out_dir, f"{sample}.visium.pdf")
     fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -247,33 +249,16 @@ def plot_visium_iters(
     dpi=100,
     size=1.5,
 ):
-    """PDF with one page per EM iteration from labeling_trace.
-
-    Page 0: normal init from allele-only sub-EM (1 row).
-    Pages 1+: Row 0 clone x purity, Row 1 max_posterior, Row 2 purity histogram.
-    """
+    """Two PDFs: spatial (H&E + labels) and histograms (posterior + purity)."""
     import squidpy as sq
     from matplotlib.backends.backend_pdf import PdfPages
     from sklearn.metrics import roc_auc_score
-    from copytyping.utils import is_tumor_label, NA_CELLTYPE
+    from matplotlib.collections import PatchCollection as _PC
 
     niters = len(labeling_trace)
     ncols = len(slices)
     bc_to_idx = {bc: i for i, bc in enumerate(barcodes["BARCODE"].values)}
 
-    # clone colors
-    gray = np.array([0.69, 0.69, 0.69])
-    base_palette = sns.color_palette("tab10", n_colors=max(len(clones or []) + 1, 10))
-    clone_rgb = {}
-    j = 0
-    for c in clones or []:
-        if c == "normal":
-            clone_rgb[c] = gray
-        else:
-            clone_rgb[c] = np.array(base_palette[j][:3])
-            j += 1
-
-    # per-iteration AUC
     iter_aucs = []
     if ref_label and ref_label in barcodes.columns:
         known = ~barcodes[ref_label].isin(NA_CELLTYPE)
@@ -287,13 +272,6 @@ def plot_visium_iters(
                 iter_aucs.append(roc_auc_score(y_true, purity[known_idx]))
             else:
                 iter_aucs.append(np.nan)
-
-    col_w = 6
-    row_h = 5
-    label_col = "_iter_clone"
-    spatial_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
-    hist_file = os.path.join(out_dir, f"{sample}.iter_histograms.pdf")
-    from matplotlib.collections import PatchCollection as _PC
 
     def _make_title(ri, labels):
         title = f"{sample}  iter {ri}/{niters - 1}"
@@ -315,44 +293,43 @@ def plot_visium_iters(
             title += f"  AUC={iter_aucs[ri]:.3f}"
         return title
 
-    # --- Spatial PDF (H&E + labels) ---
+    def _frame_cats(labels, has_purity):
+        unique = sorted(set(labels))
+        if has_purity and clones:
+            cats = [c for c in clones if c in unique]
+            return cats if cats else unique
+        return unique
+
+    col_w, row_h = 6, 5
+    label_col = "_iter_clone"
+    spatial_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
+    hist_file = os.path.join(out_dir, f"{sample}.iter_histograms.pdf")
+
+    # --- Spatial PDF ---
     with PdfPages(spatial_file) as pdf:
         for ri, lt in enumerate(labeling_trace):
             labels = lt["labels"]
             max_post = lt["max_posterior"]
             purity = lt.get("tumor_purity")
             has_purity = purity is not None
+            cats = _frame_cats(labels, has_purity)
 
-            unique_labels = sorted(set(labels))
-            if has_purity:
-                frame_cats = [
-                    c for c in (clones or unique_labels) if c in unique_labels
-                ]
-                if not frame_cats:
-                    frame_cats = unique_labels
-            else:
-                frame_cats = unique_labels
-
-            nrows = 2
             fig, axes = plt.subplots(
-                nrows=nrows,
+                nrows=2,
                 ncols=ncols,
-                figsize=(col_w * ncols, row_h * nrows),
+                figsize=(col_w * ncols, row_h * 2),
                 squeeze=False,
             )
-            for ci, (rep_id, _anns_vis, vis_adata_orig) in enumerate(slices):
+            for ci, (rep_id, _, vis_adata_orig) in enumerate(slices):
                 vis_adata = vis_adata_orig.copy()
                 idx = [bc_to_idx[bc] for bc in vis_adata.obs_names]
-                vis_adata.obs[label_col] = pd.Categorical(
-                    labels[idx], categories=frame_cats
-                )
+                vis_adata.obs[label_col] = pd.Categorical(labels[idx], categories=cats)
                 vis_adata.obs["max_posterior"] = max_post[idx]
                 if has_purity:
                     vis_adata.obs["tumor_purity"] = purity[idx]
 
-                # Row 0: clone labels (purity-blended or alpha=0.5)
                 ax0 = axes[0, ci]
-                set_clone_colors(vis_adata, label_col)
+                set_label_colors(vis_adata, label_col)
                 if has_purity:
                     sq.pl.spatial_scatter(
                         vis_adata,
@@ -361,10 +338,9 @@ def plot_visium_iters(
                         library_id=rep_id,
                         ax=ax0,
                         edgecolors="none",
+                        img=False,
                     )
-                    rgba = blend_clone_color_by_purity(
-                        vis_adata, label_col, "tumor_purity"
-                    )
+                    rgba = blend_purity_rgba(vis_adata, label_col, "tumor_purity")
                     for child in ax0.get_children():
                         if isinstance(child, _PC) and len(child.get_paths()) == len(
                             rgba
@@ -378,15 +354,32 @@ def plot_visium_iters(
                         size=size,
                         library_id=rep_id,
                         ax=ax0,
-                        alpha=0.5,
                         edgecolors="none",
+                        img=False,
                     )
-                ax0.set_title(f"{rep_id}", fontsize=10)
+                # per-slice subtitle with normal accuracy on page 0
+                subtitle = f"{rep_id}"
+                if ri == 0 and ref_label and ref_label in barcodes.columns:
+                    spot_labels = labels[idx]
+                    ref_vals = barcodes[ref_label].values[idx]
+                    pred_normal = spot_labels == "normal"
+                    ref_normal = np.array(
+                        [
+                            not is_tumor_label(x) and x not in NA_CELLTYPE
+                            for x in ref_vals
+                        ]
+                    )
+                    tp = int((pred_normal & ref_normal).sum())
+                    fp = int((pred_normal & ~ref_normal).sum())
+                    fn = int((~pred_normal & ref_normal).sum())
+                    p = tp / max(tp + fp, 1)
+                    r = tp / max(tp + fn, 1)
+                    subtitle += f"\nprec={p:.2f} rec={r:.2f}"
+                ax0.set_title(subtitle, fontsize=9)
                 leg = ax0.get_legend()
                 if leg is not None:
                     leg.remove()
 
-                # Row 1: max_posterior (darker = higher confidence)
                 ax1 = axes[1, ci]
                 sq.pl.spatial_scatter(
                     vis_adata,
@@ -398,6 +391,7 @@ def plot_visium_iters(
                     cmap="magma_r",
                     vmin=0,
                     vmax=1,
+                    img=False,
                 )
                 ax1.set_title(f"{rep_id} — max posterior", fontsize=10)
                 if ci < ncols - 1:
@@ -405,12 +399,8 @@ def plot_visium_iters(
                     if cb is not None:
                         cb.remove()
 
-            frame_legend = [
-                mpatches.Patch(color=clone_rgb.get(c, gray), label=c)
-                for c in frame_cats
-            ]
             axes[0, -1].legend(
-                handles=frame_legend,
+                handles=build_legend(cats),
                 loc="center left",
                 bbox_to_anchor=(1.0, 0.5),
                 fontsize=8,
@@ -421,7 +411,7 @@ def plot_visium_iters(
             plt.close(fig)
     logging.info(f"saved visium iterations to {spatial_file}")
 
-    # --- Histogram PDF (posterior + purity per iter) ---
+    # --- Histogram PDF ---
     with PdfPages(hist_file) as pdf:
         for ri, lt in enumerate(labeling_trace):
             labels = lt["labels"]
@@ -430,23 +420,19 @@ def plot_visium_iters(
             if purity is None:
                 continue
 
-            unique_labels = sorted(set(labels))
-            frame_cats = [c for c in (clones or unique_labels) if c in unique_labels]
-            if not frame_cats:
-                frame_cats = unique_labels
-            active = [lab for lab in frame_cats if (labels == lab).any()]
-            hist_labels = [f"{lab} (n={int((labels == lab).sum())})" for lab in active]
-            hist_colors = [clone_rgb.get(lab, gray) for lab in active]
+            cats = _frame_cats(labels, True)
+            active = [c for c in cats if (labels == c).any()]
+            colors = build_label_colors(active)
+            hlabels = [f"{c} (n={int((labels == c).sum())})" for c in active]
 
             fig, (ax_post, ax_pur) = plt.subplots(1, 2, figsize=(14, 4))
-
             ax_post.hist(
-                [max_post[labels == lab] for lab in active],
+                [max_post[labels == c] for c in active],
                 bins=50,
                 range=(0, 1),
                 stacked=True,
-                label=hist_labels,
-                color=hist_colors,
+                label=hlabels,
+                color=colors,
                 edgecolor="black",
                 linewidth=0.3,
             )
@@ -456,12 +442,12 @@ def plot_visium_iters(
             ax_post.legend(fontsize=8)
 
             ax_pur.hist(
-                [purity[labels == lab] for lab in active],
+                [purity[labels == c] for c in active],
                 bins=50,
                 range=(0, 1),
                 stacked=True,
-                label=hist_labels,
-                color=hist_colors,
+                label=hlabels,
+                color=colors,
                 edgecolor="black",
                 linewidth=0.3,
             )

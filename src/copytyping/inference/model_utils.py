@@ -26,11 +26,10 @@ def prepare_params(args, cnv_blocks, platform, data_types):
         "tau_bounds": tau_bounds,
         "invphi_bounds": invphi_bounds,
         "purity_min": args["purity_min"],
-        "purity_tol": args["purity_tol"],
+        "purity_cutoff": args["purity_cutoff"],
         "ref_label": args["ref_label"],
         "niters": args["niters"],
-        "posterior_thres": args["posterior_thres"],
-        "margin_thres": args["margin_thres"],
+        "cq_cutoff": args["cq_cutoff"],
     }
     fix_params = {"pi": False}
     for data_type in data_types:

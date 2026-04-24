@@ -289,6 +289,10 @@ def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=""):
         Y_seg = sparse.csr_matrix(agg_matrix @ Y_bbc)
         D_seg = sparse.csr_matrix(agg_matrix @ D_bbc)
 
+    # count BBC bins per segment
+    bbc_per_seg = pd.Series(mapped_seg_ids).value_counts()
+    seg_df["#BBC"] = bbc_per_seg.reindex(range(n_seg)).fillna(0).astype(int).values
+
     # aggregate #SNPS and #gene from bbc if available
     for col in ("#SNPS", "#gene"):
         if col in bbc_df.columns:
@@ -303,6 +307,50 @@ def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=""):
         f"X={X_seg.shape}, Y={Y_seg.shape}, D={D_seg.shape}"
     )
     return seg_df, X_seg, Y_seg, D_seg
+
+
+##################################################
+# spatial coordinates
+##################################################
+
+
+def load_spatial_neighbors(h5ad_path, n_neighs=6):
+    """Load spatial coordinates from h5ad and compute per-rep neighbor graphs.
+
+    Args:
+        h5ad_path: path to h5ad file with spatial coordinates in obsm['spatial'].
+        n_neighs: number of neighbors (default 6 for Visium hexagonal).
+
+    Returns:
+        dict[rep_id -> {"BARCODE": array, "coords": (N,2), "W": sparse}]
+    """
+    import scanpy as sc
+    import squidpy as sq
+
+    adata = sc.read_h5ad(h5ad_path)
+    assert "spatial" in adata.obsm, f"no spatial coordinates in {h5ad_path}"
+
+    # extract rep_id from barcode suffix
+    rep_ids = np.array([bc.rsplit("_", 1)[-1] for bc in adata.obs_names])
+    result = {}
+    for rep_id in np.unique(rep_ids):
+        mask = rep_ids == rep_id
+        adata_rep = adata[mask].copy()
+        sq.gr.spatial_neighbors(adata_rep, n_neighs=n_neighs, coord_type="generic")
+        W = adata_rep.obsp["spatial_connectivities"]
+        row_sums = np.asarray(W.sum(axis=1)).flatten()
+        row_sums[row_sums == 0] = 1.0
+        W = W.multiply(1.0 / row_sums[:, None])
+        result[rep_id] = {
+            "BARCODE": adata_rep.obs_names.to_numpy(),
+            "coords": adata_rep.obsm["spatial"],
+            "W": W,
+        }
+        logging.info(
+            f"spatial neighbors rep={rep_id}: {mask.sum()} spots, "
+            f"n_neighs={n_neighs}, edges={W.nnz}"
+        )
+    return result
 
 
 ##################################################

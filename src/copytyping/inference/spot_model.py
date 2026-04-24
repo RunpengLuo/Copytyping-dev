@@ -86,13 +86,9 @@ class Spot_Model(Base_Model):
         return params, fix_params, init_labeling
 
     def compute_log_likelihood(self, fit_mode, params):
-        """Compute log-likelihood for all K clones (normal + tumor).
-
-        Normal clone (k=0) has CN=(1,1), so theta-mixing naturally gives
-        BAF=0.5 and RDR=1 regardless of theta. No separate normal branch needed.
-        """
-        N = self.N
-        global_lls = np.zeros((N, self.K), dtype=np.float64)
+        """Compute log-likelihood, updating per-cluster matrices in params in-place."""
+        global_lls = params["ll_global"]
+        global_lls[:] = 0.0
 
         for dt in self.data_types:
             sx = self.data_sources[dt]
@@ -101,12 +97,16 @@ class Spot_Model(Base_Model):
             rdrs = params[f"{dt}-rdrs"]
             allele_mask = params[f"{dt}-allele_mask"]
             total_mask = params[f"{dt}-total_mask"]
+            ll_a = params[f"{dt}-ll_allele"]
+            ll_t = params[f"{dt}-ll_total"]
+            ll_a[:] = 0.0
+            ll_t[:] = 0.0
 
             if fit_mode in {"allele_only", "hybrid"} and allele_mask.any():
                 MA, _ = sx.apply_mask_shallow(
                     self.allele_mask_id, additional_mask=params[f"{dt}-lambda"] > 0
                 )
-                ll = cond_betabin_logpmf_theta(
+                ll_a[allele_mask] = cond_betabin_logpmf_theta(
                     MA["Y"],
                     MA["D"],
                     params[f"{dt}-tau"],
@@ -114,12 +114,11 @@ class Spot_Model(Base_Model):
                     rdrs[allele_mask],
                     theta,
                 )
-                contrib = ll.sum(axis=0)  # (N, K)
-                contrib[~mask_n, :] = 0.0
-                global_lls += contrib
+                ll_a[:, ~mask_n, :] = 0.0
+                global_lls += ll_a.sum(axis=0)
 
             if fit_mode in {"total_only", "hybrid"} and total_mask.any():
-                ll = cond_negbin_logpmf_theta(
+                ll_t[total_mask] = cond_negbin_logpmf_theta(
                     sx.X[total_mask],
                     sx.T,
                     params[f"{dt}-lambda"][total_mask],
@@ -127,9 +126,8 @@ class Spot_Model(Base_Model):
                     rdrs[total_mask],
                     theta,
                 )
-                contrib = ll.sum(axis=0)
-                contrib[~mask_n, :] = 0.0
-                global_lls += contrib
+                ll_t[:, ~mask_n, :] = 0.0
+                global_lls += ll_t.sum(axis=0)
 
         # Gated pi: π_0=ρ, π_k=(1-ρ)·ω_k
         pi = params["pi"]
@@ -198,46 +196,29 @@ class Spot_Model(Base_Model):
                     neg_Q, bounds=purity_bounds, method="bounded"
                 ).x
 
-    def _gamma_to_labels(self, gamma, params):
-        result = super()._gamma_to_labels(gamma, params)
-        theta = params[f"{self.data_types[0]}-theta"]
-        result["tumor_purity"] = np.where(result["labels"] == "normal", 0.0, theta)
-        return result
+    def predict(self, fit_mode, params, label, **kwargs):
+        """Predict clone labels with purity filter.
 
-    def predict(
-        self, fit_mode, params, label, posterior_thres=0.5, margin_thres=0.1, **kwargs
-    ):
-        logging.info("Decode labels with MAP estimation")
+        1. Normal vs tumor gate
+        2. Purity filter: tumor spots with θ <= purity_cutoff to normal
+        3. Clone MAP within tumor branch
+        4. CQ score
+        5. CQ threshold to unassigned_tumor
+        """
         gamma = self._e_step(fit_mode, params)
-        lt = self._gamma_to_labels(gamma, params)
+        theta = params[f"{self.data_types[0]}-theta"]
 
-        anns = self.barcodes.copy(deep=True)
-        anns.loc[:, self.clones] = gamma
-        anns["tumor"] = 1 - anns["normal"]
-        anns["max_posterior"] = lt["max_posterior"]
-        anns["tumor_purity"] = lt["tumor_purity"]
-        anns[label] = lt["labels"]
-
-        probs_sorted = np.sort(gamma, axis=1)
-        anns["margin_delta"] = probs_sorted[:, -1] - probs_sorted[:, -2]
-
-        mask_na = (anns["max_posterior"] < posterior_thres) | (
-            anns["margin_delta"] < margin_thres
-        )
-        anns.loc[mask_na, label] = "NA"
-
-        # relabel low-purity tumor spots as normal
-        is_tumor = ~anns[label].isin(["normal", "NA"])
-        is_low = is_tumor & (
-            anns["tumor_purity"] <= self._purity_min + self._purity_tol
-        )
-        if is_low.any():
+        anns = self._map_estimation(gamma, params, label)
+        anns["tumor_purity_raw"] = theta
+        low_pur = (anns[label] != "normal") & (theta <= self._purity_cutoff)
+        n_low = int(low_pur.sum())
+        if n_low > 0:
             logging.info(
-                f"relabel {int(is_low.sum())} low-purity tumor spots to normal "
-                f"(θ <= {self._purity_min + self._purity_tol:.3f})"
+                f"purity filter: {n_low} spots relabeled to normal (θ <= {self._purity_cutoff})"
             )
-            anns.loc[is_low, label] = "normal"
-            anns.loc[is_low, "tumor_purity"] = 0.0
+            anns.loc[low_pur, label] = "normal"
+            anns.loc[low_pur, "CQ"] = np.nan
+        anns["tumor_purity"] = np.where(anns[label] == "normal", 0.0, theta)
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}
         self._log_posterior_stats(anns, label)

@@ -87,34 +87,38 @@ class Cell_Model(Base_Model):
         return params, fix_params, init_labeling
 
     def compute_log_likelihood(self, fit_mode: str, params: dict):
-        global_lls = np.zeros((self.N, self.K), dtype=np.float32)
+        global_lls = params["ll_global"]
+        global_lls[:] = 0.0
 
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
             mask_n = self.modality_masks[data_type]
+            allele_mask = sx_data.MASK[self.allele_mask_id]
+            ll_a = params[f"{data_type}-ll_allele"]
+            ll_t = params[f"{data_type}-ll_total"]
+            ll_a[:] = 0.0
+            ll_t[:] = 0.0
 
             if fit_mode in {"allele_only", "hybrid"}:
                 MA, _ = sx_data.apply_mask_shallow(mask_id=self.allele_mask_id)
-                allele_ll = cond_betabin_logpmf(
+                ll_a[allele_mask] = cond_betabin_logpmf(
                     MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
                 )
-                contrib = allele_ll.sum(axis=0)
-                contrib[~mask_n, :] = 0.0
-                global_lls += contrib
+                ll_a[:, ~mask_n, :] = 0.0
+                global_lls += ll_a.sum(axis=0)
 
             if fit_mode in {"total_only", "hybrid"}:
                 lambda_g = params[f"{data_type}-lambda"]
                 total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
                 props_gk = clone_pi_gk(lambda_g, sx_data.C)[total_mask, :]
-                total_ll = cond_negbin_logpmf(
+                ll_t[total_mask] = cond_negbin_logpmf(
                     sx_data.X[total_mask],
                     sx_data.T,
                     props_gk,
                     params[f"{data_type}-inv_phi"],
                 )
-                contrib = total_ll.sum(axis=0)
-                contrib[~mask_n, :] = 0.0
-                global_lls += contrib
+                ll_t[:, ~mask_n, :] = 0.0
+                global_lls += ll_t.sum(axis=0)
 
         global_lls += np.log(np.maximum(params["pi"], 1e-30))[None, :]
         log_marg = logsumexp(global_lls, axis=1)

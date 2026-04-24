@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from scipy import sparse
+
 from copytyping.io_utils import parse_cnv_profile
 
 
@@ -72,6 +74,52 @@ class SX_Data:
             "cnv_blocks": self.cnv_blocks[mask],
         }
         return M, mask
+
+    def apply_spatial_smoothing(self, W_per_rep, k):
+        r"""k-hop additive spatial smoothing, in-place.
+
+        For each spot n, sum counts from all spots within k hops (each
+        neighbor counted once). Builds binary k-hop reachability:
+
+        .. math::
+            R = \mathbb{1}[(I + W)^k > 0], \quad X \leftarrow X \cdot R^T
+
+        Args:
+            W_per_rep: dict[rep_id -> {"BARCODE": array, "W": sparse}].
+            k: smoothing level. 0=no-op.
+        """
+        if k <= 0:
+            return
+        T_before = self.T.copy()
+        D_before = self.D.sum(axis=0).copy()
+        bc_arr = self.barcodes["BARCODE"].values
+        for rep_id, sg in W_per_rep.items():
+            W = sg["W"]
+            sg_bcs = sg["BARCODE"]
+            N_rep = len(sg_bcs)
+            A = sparse.eye(N_rep, format="csr") + sparse.csr_matrix(W > 0).astype(
+                np.int8
+            )
+            reach = A
+            for _ in range(k - 1):
+                reach = reach @ A
+            reach = (reach > 0).astype(np.int8)
+            bc_set = set(sg_bcs)
+            col_idx = np.array([i for i, bc in enumerate(bc_arr) if bc in bc_set])
+            if len(col_idx) != N_rep:
+                continue
+            self.X[:, col_idx] = self.X[:, col_idx] @ reach.T
+            self.Y[:, col_idx] = self.Y[:, col_idx] @ reach.T
+            self.D[:, col_idx] = self.D[:, col_idx] @ reach.T
+        self.T = np.sum(self.X, axis=0)
+        D_after = self.D.sum(axis=0)
+        logging.info(
+            f"apply_spatial_smoothing k={k}: "
+            f"read count median {int(np.median(T_before))}->{int(np.median(self.T))}, "
+            f"mean {int(np.mean(T_before))}->{int(np.mean(self.T))}; "
+            f"allele count median {int(np.median(D_before))}->{int(np.median(D_after))}, "
+            f"mean {int(np.mean(D_before))}->{int(np.mean(D_after))}"
+        )
 
     def to_cluster_level(self):
         """Return a new SX_Data-like object at CNP-cluster level.
@@ -168,6 +216,22 @@ class SX_Data:
             return M, mask
 
         clust.apply_mask_shallow = _apply_mask_shallow
+
+        # build cluster-level cnv_blocks with SEGMENTS column
+        clust_rows = []
+        for cid in range(G_c):
+            members = np.where(cluster_ids == cid)[0]
+            segs = ";".join(
+                f"{self.cnv_blocks['#CHR'].iloc[m]}:{self.cnv_blocks['START'].iloc[m]}-{self.cnv_blocks['END'].iloc[m]}"
+                for m in members
+            )
+            row = {"cluster": cid, "SEGMENTS": segs}
+            row["CNP"] = self.cnv_blocks["CNP"].iloc[members[0]]
+            for col in ("#BBC", "#SNPS", "#gene"):
+                if col in self.cnv_blocks.columns:
+                    row[col] = int(self.cnv_blocks[col].iloc[members].sum())
+            clust_rows.append(row)
+        clust.cnv_blocks = pd.DataFrame(clust_rows)
 
         logging.info(
             f"aggregated {self.G} segments -> {G_c} CNP clusters, "

@@ -118,14 +118,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         "allele_only (BAF only), total_only (RDR only)",
     )
     parser.add_argument(
-        "--aggr_mode",
-        required=False,
-        default="clust",
-        choices=["seg", "clust"],
-        help="Aggregation mode: 'clust' merges segments "
-        "with identical CNP (default), 'seg' uses raw segments.",
-    )
-    parser.add_argument(
         "--niters",
         required=False,
         type=int,
@@ -174,18 +166,11 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     )
     # post selection
     parser.add_argument(
-        "--posterior_thres",
+        "--cq_cutoff",
         required=False,
-        default=0.50,
+        default=0.0,
         type=float,
-        help="Assign cells/spots to NA if posterior < threshold",
-    )
-    parser.add_argument(
-        "--margin_thres",
-        required=False,
-        default=0.10,
-        type=float,
-        help="Assign cells/spots to NA if top-2 margin < threshold",
+        help="CQ score cutoff: tumor spots with CQ < cutoff become unassigned_tumor (default: 0)",
     )
     ##################################################
     # plot parameters
@@ -208,6 +193,20 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default="pdf",
     )
     parser.add_argument(
+        "--n_neighs",
+        required=False,
+        type=int,
+        default=6,
+        help="number of spatial neighbors (default: 6 for Visium hexagonal)",
+    )
+    parser.add_argument(
+        "--smooth_k",
+        required=False,
+        type=int,
+        default=0,
+        help="spatial smoothing level: 0=none, 1=add neighbor counts, 2=2-hop, etc.",
+    )
+    parser.add_argument(
         "--purity_min",
         required=False,
         type=float,
@@ -215,12 +214,12 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default=0.1,
     )
     parser.add_argument(
-        "--purity_tol",
+        "--purity_cutoff",
         required=False,
         type=float,
-        help="tumor spots with purity <= purity_min + purity_tol "
-        "are labeled low_purity (default: 0.01)",
-        default=0.01,
+        help="tumor spots with purity <= purity_cutoff "
+        "are relabeled to normal (default: 0.3)",
+        default=0.3,
     )
     parser.add_argument(
         "--min_snp_count",
@@ -422,5 +421,11 @@ def add_arguments_pipeline(parser):
         action="store_true",
         default=False,
         help="Update per-spot purity in M-step",
+    )
+    parser.add_argument(
+        "--smooth_k",
+        type=int,
+        default=0,
+        help="Spatial smoothing level (default: 0)",
     )
     return parser
