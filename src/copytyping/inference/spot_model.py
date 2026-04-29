@@ -197,28 +197,46 @@ class Spot_Model(Base_Model):
                 ).x
 
     def predict(self, fit_mode, params, label, **kwargs):
-        """Predict clone labels with purity filter.
+        """Predict clone labels with purity filter at multiple cutoffs.
 
         1. Normal vs tumor gate
-        2. Purity filter: tumor spots with θ <= purity_cutoff to normal
+        2. Purity filter: tumor spots with θ <= cutoff to normal (per cutoff)
         3. Clone MAP within tumor branch
         4. CQ score
-        5. CQ threshold to unassigned_tumor
         """
         gamma = self._e_step(fit_mode, params)
         theta = params[f"{self.data_types[0]}-theta"]
 
         anns = self._map_estimation(gamma, params, label)
         anns["tumor_purity_raw"] = theta
-        low_pur = (anns[label] != "normal") & (theta <= self._purity_cutoff)
-        n_low = int(low_pur.sum())
-        if n_low > 0:
-            logging.info(
-                f"purity filter: {n_low} spots relabeled to normal (θ <= {self._purity_cutoff})"
+        base_labels = anns[label].values.copy()
+        base_cq = anns["CQ"].values.copy()
+
+        pcut_labels = []
+        for pcut in self._purity_cutoffs:
+            col = f"{label}_pcut{pcut}"
+            labels_pcut = base_labels.copy()
+            cq_pcut = base_cq.copy()
+            low_pur = (labels_pcut != "normal") & (theta <= pcut)
+            n_low = int(low_pur.sum())
+            if n_low > 0:
+                logging.info(
+                    f"purity filter (pcut={pcut}): {n_low} spots relabeled to normal"
+                )
+                labels_pcut[low_pur] = "normal"
+                cq_pcut[low_pur] = 0
+            anns[col] = labels_pcut
+            anns[f"tumor_purity_pcut{pcut}"] = np.where(
+                labels_pcut == "normal", 0.0, theta
             )
-            anns.loc[low_pur, label] = "normal"
-            anns.loc[low_pur, "CQ"] = np.nan
-        anns["tumor_purity"] = np.where(anns[label] == "normal", 0.0, theta)
+            pcut_labels.append(col)
+
+        # Use first cutoff as the main label
+        anns[label] = anns[pcut_labels[0]].values
+        anns["tumor_purity"] = anns[
+            f"tumor_purity_pcut{self._purity_cutoffs[0]}"
+        ].values
+        anns["CQ"] = np.where(anns[label] == "normal", 0, base_cq)
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}
         self._log_posterior_stats(anns, label)

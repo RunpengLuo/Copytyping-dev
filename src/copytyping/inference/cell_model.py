@@ -6,6 +6,8 @@ from copytyping.inference.model_utils import (
     clone_pi_gk,
     cond_betabin_logpmf,
     cond_negbin_logpmf,
+    mle_invphi,
+    mle_tau,
 )
 
 
@@ -126,3 +128,32 @@ class Cell_Model(Base_Model):
 
     def _m_step(self, fit_mode, gamma, params, fix_params, t=0, eps=1e-10):
         self._update_pi(gamma, params, fix_params, self.N, self.K)
+
+        gamma_gnk = gamma[None, :, :]  # (1, N, K)
+        for data_type in self.data_types:
+            sx_data = self.data_sources[data_type]
+
+            if fit_mode in {"allele_only", "hybrid"} and not fix_params.get(
+                f"{data_type}-tau", True
+            ):
+                MA, _ = sx_data.apply_mask_shallow(mask_id=self.allele_mask_id)
+                params[f"{data_type}-tau"] = mle_tau(
+                    MA["Y"][:, :, None],
+                    MA["D"][:, :, None],
+                    MA["BAF"][:, None, :],
+                    gamma_gnk,
+                    tau_bounds=self._tau_bounds,
+                )
+
+            if fit_mode in {"total_only", "hybrid"} and not fix_params.get(
+                f"{data_type}-inv_phi", True
+            ):
+                lambda_g = params[f"{data_type}-lambda"]
+                total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
+                props_gk = clone_pi_gk(lambda_g, sx_data.C)[total_mask, :]
+                params[f"{data_type}-inv_phi"] = mle_invphi(
+                    sx_data.X[total_mask][:, :, None],
+                    props_gk[:, None, :] * sx_data.T[None, :, None],
+                    gamma_gnk,
+                    invphi_bounds=self._invphi_bounds,
+                )

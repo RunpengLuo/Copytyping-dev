@@ -391,6 +391,7 @@ def plot_cluster_observed_data(
     outfile: str,
     label_col: str,
     base_props=None,
+    baf_metrics=None,
     dpi=100,
 ):
     """Per-cluster observed B-allele count, BAF, RDR. One page per cluster, one row per label."""
@@ -484,9 +485,17 @@ def plot_cluster_observed_data(
                 med_rdr = np.median(rdr_valid) if len(rdr_valid) > 0 else np.nan
                 ax.set_title(f"RDR median={med_rdr:.3f}", fontsize=9)
 
+            metric_str = ""
+            if baf_metrics and g in baf_metrics:
+                m = baf_metrics[g]
+                parts = []
+                if not np.isnan(m["silhouette"]):
+                    parts.append(f"Sil={m['silhouette']:.3f}")
+                parts.append(f"WVar={m['within_var']:.4f}")
+                metric_str = "  " + " ".join(parts)
             fig.suptitle(
-                f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — {'/'.join(tag)}\n"
-                f"CN: {cn_str}",
+                f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
+                f"{'/'.join(tag)}{metric_str}\nCN: {cn_str}",
                 fontsize=10,
                 fontweight="bold",
             )

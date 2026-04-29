@@ -50,12 +50,20 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="Reference label colname in --cell_type, (default: cell_type)",
     )
     parser.add_argument(
+        "--exclude",
+        required=False,
+        type=str,
+        default="Doublet,doublet,Unknown,NA",
+        help="comma-separated ref_label values to exclude from analysis "
+        "(default: 'Doublet,doublet,Unknown,NA'). Requires --cell_type.",
+    )
+    parser.add_argument(
         "--method",
         required=False,
         type=str,
         default="copytyping",
-        choices=["copytyping", "kmeans", "ward", "leiden"],
-        help="copytyping, kmeans, ward, leiden",
+        choices=["copytyping", "kmeans"],
+        help="copytyping (EM model) or kmeans (feature-based clustering)",
     )
     parser.add_argument("-o", "--out_dir", required=True, type=str)
     parser.add_argument(
@@ -125,11 +133,12 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="num_iters=100",
     )
     parser.add_argument(
-        "--laplace",
+        "--baf_clip",
         required=False,
-        default=0.01,
+        default=0.1,
         type=float,
-        help="Laplace smoothing term when computing clone BAF",
+        help="Clip expected clone BAF to [baf_clip, 1-baf_clip] "
+        "to avoid log(0) in BB likelihood at LOH segments (default: 0.1)",
     )
     parser.add_argument(
         "--tau_bounds",
@@ -164,13 +173,19 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="if set, update per-spot tumor purity (theta) "
         "in M-step (default: fixed after init, spatial only)",
     )
-    # post selection
     parser.add_argument(
-        "--cq_cutoff",
+        "--update_tau",
         required=False,
-        default=0.0,
-        type=float,
-        help="CQ score cutoff: tumor spots with CQ < cutoff become unassigned_tumor (default: 0)",
+        action="store_true",
+        default=False,
+        help="if set, update BB dispersion (tau) in M-step (cell model only)",
+    )
+    parser.add_argument(
+        "--update_invphi",
+        required=False,
+        action="store_true",
+        default=False,
+        help="if set, update NB dispersion (inv_phi) in M-step (cell model only)",
     )
     ##################################################
     # plot parameters
@@ -216,10 +231,10 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--purity_cutoff",
         required=False,
-        type=float,
-        help="tumor spots with purity <= purity_cutoff "
-        "are relabeled to normal (default: 0.3)",
-        default=0.3,
+        type=str,
+        help="comma-separated purity cutoffs for labeling, "
+        "e.g. '0.5,0.6,0.7' (default: 0.5)",
+        default="0.5",
     )
     parser.add_argument(
         "--min_snp_count",

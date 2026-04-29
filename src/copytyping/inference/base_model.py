@@ -8,7 +8,6 @@ from scipy.special import logsumexp
 
 from copytyping.inference.model_utils import mle_invphi, mle_tau
 from copytyping.inference.model_utils import compute_baseline_proportions
-from copytyping.plot.plot_common import plot_loss
 from copytyping.sx_data.sx_data import SX_Data
 
 allowed_fit_mode = {"hybrid", "allele_only", "total_only"}
@@ -203,8 +202,9 @@ class Base_Model:
 
         self._pi_alpha = init_params["pi_alpha"]
         self._purity_min = init_params["purity_min"]
-        self._purity_cutoff = init_params["purity_cutoff"]
-        self._cq_cutoff = init_params["cq_cutoff"]
+        self._purity_cutoffs = init_params["purity_cutoffs"]
+        self._tau_bounds = init_params["tau_bounds"]
+        self._invphi_bounds = init_params["invphi_bounds"]
         params, fix_params, init_labeling = self._init_params(
             fit_mode, fix_params, init_params
         )
@@ -245,56 +245,42 @@ class Base_Model:
                     break
             prev_ll = ll
 
-        if self.verbose and self.work_dir:
-            plot_loss(
-                ll_trace,
-                os.path.join(self.work_dir, f"{self.prefix}.log_likelihoods.png"),
-                val_type="log-likelihood",
-            )
-
         self.gamma_trace = gamma_trace
         return params, ll_trace[-1] if ll_trace else -np.inf
 
-    def _map_estimation(self, gamma, params, label, as_df=True, eps=1e-30):
-        r"""Hierarchical MAP estimation.
+    def _map_estimation(self, gamma, params, label, as_df=True, eps=1e-10):
+        r"""Flat MAP estimation.
 
-        1. Normal vs tumor gate: h_n = 0 if r_{n0} >= r_{nT}
-        2. Clone MAP: z_n = argmax_k r_tilde_{nk} for tumor spots
-        3. CQ score: CQ_n = -10 log10(1 - max_k r_tilde_{nk} + eps)
-        4. CQ filter: CQ < cq_cutoff to unassigned_tumor
+        1. Flat MAP: z_n = argmax_k γ_nk (k=0 is normal)
+        2. CQ score: conditional clone confidence for tumor-labeled spots
         """
         N = len(gamma)
+        clone_names = np.array(self.clones)  # ["normal", "clone1", ...]
+        map_k = gamma.argmax(axis=1)
+        labels = clone_names[map_k]
+        max_post = gamma[np.arange(N), map_k]
+
         r_n0 = gamma[:, 0]
         r_nT = 1 - r_n0
-        clone_names = np.array(self.clones[1:])  # exclude "normal"
 
-        labels = np.where(r_n0 >= r_nT, "normal", "")
-
+        # CQ for tumor-labeled spots (conditional clone confidence)
         r_tilde = gamma[:, 1:] / np.maximum(r_nT[:, None], eps)
-        map_k = r_tilde.argmax(axis=1)
+        clone_map_k = r_tilde.argmax(axis=1)
+        max_r_tilde = r_tilde[np.arange(N), clone_map_k]
         tumor = labels != "normal"
-        labels[tumor] = clone_names[map_k[tumor]]
-
-        # Step 4: CQ score
-        max_r_tilde = r_tilde[np.arange(N), map_k]
-        cq = -10 * np.log10(1 - max_r_tilde + eps)
-
-        if self._cq_cutoff > 0:
-            low_cq = tumor & (cq < self._cq_cutoff)
-            labels[low_cq] = "unassigned_tumor"
+        cq = np.rint(
+            np.where(tumor, -10 * np.log10(1 - max_r_tilde + eps), 0.0)
+        ).astype(int)
 
         if not as_df:
-            result = {
-                "labels": labels,
-                "max_posterior": gamma[np.arange(N), gamma.argmax(axis=1)],
-            }
-            return result
+            return {"labels": labels, "max_posterior": max_post}
 
         anns = self.barcodes.copy(deep=True)
         anns.loc[:, self.clones] = gamma
         anns["r_normal"] = r_n0
         anns["r_tumor"] = r_nT
-        anns["CQ"] = np.where(labels != "normal", cq, np.nan)
+        anns["max_posterior"] = max_post
+        anns["CQ"] = cq
         anns[label] = labels
         return anns
 
@@ -306,8 +292,7 @@ class Base_Model:
 
         1. Normal vs tumor gate
         2. Clone MAP within tumor branch
-        3. CQ (copytyping quality) score
-        4. CQ threshold to unassigned_tumor
+        3. CQ score
         """
         gamma = self._e_step(fit_mode, params)
         anns = self._map_estimation(gamma, params, label)

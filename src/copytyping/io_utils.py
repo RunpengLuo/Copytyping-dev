@@ -80,11 +80,39 @@ def load_modality_data(
     seg_df, X_sp, Y_sp, D_sp = aggregate_bbc_to_seg(
         bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=data_type
     )
+    seg_df["LENGTH"] = seg_df["END"] - seg_df["START"]
     X_seg = X_sp.toarray().astype(np.int32)
     Y_seg = Y_sp.toarray().astype(np.int32)
     D_seg = D_sp.toarray().astype(np.int32)
 
     return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc
+
+
+def exclude_barcodes(
+    barcodes_df, exclude_labels, ref_label, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
+):
+    """Exclude barcodes whose ref_label is in exclude_labels.
+
+    Returns filtered (barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc).
+    """
+    if ref_label not in barcodes_df.columns:
+        return barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
+    keep = ~barcodes_df[ref_label].isin(exclude_labels)
+    n_excl = int((~keep).sum())
+    if n_excl == 0:
+        return barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
+    idx = np.where(keep.values)[0]
+    barcodes_df = barcodes_df[keep].reset_index(drop=True)
+    X_seg = X_seg[:, idx]
+    Y_seg = Y_seg[:, idx]
+    D_seg = D_seg[:, idx]
+    X_bbc = X_bbc[:, idx]
+    Y_bbc = Y_bbc[:, idx]
+    D_bbc = D_bbc[:, idx]
+    logging.info(
+        f"excluded {n_excl} cells with ref_label in {exclude_labels}, {len(barcodes_df)} remaining"
+    )
+    return barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
 
 
 def union_align_barcodes(data_dict, data_types):
@@ -358,7 +386,7 @@ def load_spatial_neighbors(h5ad_path, n_neighs=6):
 ##################################################
 
 
-def parse_cnv_profile(haplo_blocks: pd.DataFrame, laplace=0.01):
+def parse_cnv_profile(haplo_blocks: pd.DataFrame, baf_clip=0.01):
     num_clones = len(str(haplo_blocks["CNP"].iloc[0]).split(";"))
     clones = ["normal"] + [f"clone{i}" for i in range(1, num_clones)]
     A = np.zeros((len(haplo_blocks), num_clones), dtype=np.int32)
@@ -377,7 +405,7 @@ def parse_cnv_profile(haplo_blocks: pd.DataFrame, laplace=0.01):
         out=np.zeros_like(C, dtype=np.float32),
         where=(C > 0),
     )
-    BAF = np.clip(BAF, laplace, 1 - laplace)
+    BAF = np.clip(BAF, baf_clip, 1 - baf_clip)
 
     # assign the CNP group id
     return clones, A, B, C, BAF

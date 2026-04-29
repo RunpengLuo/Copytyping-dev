@@ -18,7 +18,7 @@ class SX_Data:
         X: np.ndarray,
         Y: np.ndarray,
         D: np.ndarray,
-        laplace=0.01,
+        baf_clip=0.01,
         verbose=1,
     ) -> None:
         """Construct from pre-loaded segment-level data.
@@ -27,7 +27,7 @@ class SX_Data:
             barcodes_df: DataFrame with BARCODE, REP_ID columns.
             seg_df: Segment DataFrame with CNP, PROPS columns.
             X, Y, D: Dense int32 count matrices (G, N).
-            laplace: BAF clipping parameter.
+            baf_clip: BAF clipping parameter.
         """
         self.barcodes = barcodes_df
         self.N = len(self.barcodes)
@@ -38,7 +38,7 @@ class SX_Data:
         self.D = D
 
         self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
-            self.cnv_blocks, laplace=laplace
+            self.cnv_blocks, baf_clip=baf_clip
         )
         self.G = len(self.cnv_blocks)
         self.K = len(self.clones)
@@ -227,15 +227,24 @@ class SX_Data:
             )
             row = {"cluster": cid, "SEGMENTS": segs}
             row["CNP"] = self.cnv_blocks["CNP"].iloc[members[0]]
-            for col in ("#BBC", "#SNPS", "#gene"):
+            for col in ("#BBC", "#SNPS", "#gene", "LENGTH"):
                 if col in self.cnv_blocks.columns:
                     row[col] = int(self.cnv_blocks[col].iloc[members].sum())
             clust_rows.append(row)
         clust.cnv_blocks = pd.DataFrame(clust_rows)
 
+        x_zero = (clust.X == 0).sum()
+        y_zero = (clust.Y == 0).sum()
+        d_zero = (clust.D == 0).sum()
+        total = clust.G * clust.N
         logging.info(
             f"aggregated {self.G} segments -> {G_c} CNP clusters, "
             f"#imbalanced={clust.nrows_imbalanced}, #aneuploid={clust.nrows_aneuploid}"
+        )
+        logging.info(
+            f"cluster-level sparsity: X={x_zero}/{total} ({100 * x_zero / total:.1f}%), "
+            f"Y={y_zero}/{total} ({100 * y_zero / total:.1f}%), "
+            f"D={d_zero}/{total} ({100 * d_zero / total:.1f}%)"
         )
         return clust
 

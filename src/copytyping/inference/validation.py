@@ -8,9 +8,47 @@ from sklearn.metrics import (
     adjusted_rand_score,
     precision_recall_fscore_support,
     roc_auc_score,
+    silhouette_score,
 )
 
 from copytyping.utils import NA_CELLTYPE, is_tumor_label
+
+
+def compute_cluster_baf_metrics(sx_data, labels):
+    """Compute per-cluster BAF silhouette and within-cluster variance.
+
+    For each informative cluster g, computes:
+    - silhouette: penalizes both mixing and over-fragmentation
+    - within_var: weighted mean within-cluster BAF variance (only penalizes mixing)
+
+    Returns dict: cluster_index -> {"silhouette": float, "within_var": float}.
+    """
+    results = {}
+    for g in range(sx_data.G):
+        if not (sx_data.MASK["IMBALANCED"][g] or sx_data.MASK["ANEUPLOID"][g]):
+            continue
+        D_g = sx_data.D[g].astype(float)
+        Y_g = sx_data.Y[g].astype(float)
+        valid = D_g > 0
+        baf = Y_g[valid] / D_g[valid]
+        lab = labels[valid]
+
+        # Within-cluster BAF variance
+        n_total = len(baf)
+        within_var = 0.0
+        for l in np.unique(lab):
+            m = lab == l
+            if m.sum() > 1:
+                within_var += m.sum() * np.var(baf[m])
+        within_var /= max(n_total, 1)
+
+        # Silhouette
+        sil = np.nan
+        if len(set(lab)) >= 2:
+            sil = silhouette_score(baf.reshape(-1, 1), lab)
+
+        results[g] = {"silhouette": sil, "within_var": within_var}
+    return results
 
 
 def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
@@ -36,11 +74,19 @@ def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
     if has_both and tumor_post in anns_known:
         auc_soft = roc_auc_score(y_true, anns_known[tumor_post])
 
-    ari = np.nan
-    tumor_mask = anns_known[ref_label].apply(is_tumor_label)
-    gt_tumor = anns_known[tumor_mask]
-    if gt_tumor[ref_label].nunique() > 1:
-        ari = adjusted_rand_score(gt_tumor[ref_label], gt_tumor[qry_label])
+    # ARI_binary: ref/pred both mapped to {normal, tumor}
+    ari_binary = np.nan
+    if has_both:
+        ref_binary = np.where(y_true, "tumor", "normal")
+        pred_binary = np.where(
+            anns_known[qry_label].apply(is_tumor_label).to_numpy(), "tumor", "normal"
+        )
+        ari_binary = adjusted_rand_score(ref_binary, pred_binary)
+
+    # ARI_clone: ref={normal,clone_1,...} vs pred={normal,clone1,...}
+    ari_clone = np.nan
+    if len(anns_known) > 0 and anns_known[ref_label].nunique() > 1:
+        ari_clone = adjusted_rand_score(anns_known[ref_label], anns_known[qry_label])
 
     label_counts = anns_sub[qry_label].value_counts()
     clone_cols = sorted([c for c in label_counts.index if c.startswith("clone")])
@@ -52,7 +98,8 @@ def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
         "accuracy": accuracy,
         "AUC_hard": auc_hard,
         "AUC_soft": auc_soft,
-        "ARI": ari,
+        "ARI_binary": ari_binary,
+        "ARI_clone": ari_clone,
         "#normal": int(label_counts.get("normal", 0)),
     }
     for c in clone_cols:
@@ -95,7 +142,8 @@ def evaluate_malignant_accuracy(
     logging.info(f"  accuracy  = {_fmt(metric['accuracy'])}")
     logging.info(f"  AUC_hard  = {_fmt(metric['AUC_hard'])}")
     logging.info(f"  AUC_soft  = {_fmt(metric['AUC_soft'])}")
-    logging.info(f"  ARI       = {_fmt(metric['ARI'])}")
+    logging.info(f"  ARI_binary= {_fmt(metric['ARI_binary'])}")
+    logging.info(f"  ARI_clone = {_fmt(metric['ARI_clone'])}")
     logging.info(f"  #NA       = {metric['#NA']}/{metric['total']}")
     logging.info(f"  crosstab (rows=ref {ref_label}, cols=pred {qry_label}):")
     for line in ct.to_string().splitlines():
@@ -139,85 +187,25 @@ def joincount_zscore(labels, W):
     return results
 
 
-def _mean_delta_ll(ll_gnk, g, map_k, assigned):
-    r"""Mean discriminative score for cluster g.
-
-    .. math::
-        \Delta_{g,n} = \ell_{g,n,k^*} - \max_{k \neq k^*} \ell_{g,n,k}
-
-    .. math::
-        \bar{\Delta}_g = \frac{1}{N'} \sum_{n \in \text{assigned}} \Delta_{g,n}
-    """
-    ll_g = ll_gnk[g, assigned, :]  # (N', K)
-    k_star = map_k[assigned]
-    ll_map = ll_g[np.arange(len(k_star)), k_star]
-    ll_g_copy = ll_g.copy()
-    ll_g_copy[np.arange(len(k_star)), k_star] = -np.inf
-    ll_2nd = ll_g_copy.max(axis=1)
-    deltas = ll_map - ll_2nd
-    return float(np.mean(deltas)), float(np.median(deltas))
-
-
-def rank_clusters(ll_allele, ll_total, anns, label, clones, sx_data):
-    r"""Per-cluster discrimination scores for allele and total LL separately.
-
-    For each cluster g, computes mean \bar{\Delta}_g for allele-LL and total-LL.
-    Allele score is only computed for IMBALANCED clusters;
-    total score is only computed for ANEUPLOID clusters.
-
-    Args:
-        ll_allele: (G, N, K) per-cluster allele log-likelihood.
-        ll_total: (G, N, K) per-cluster total log-likelihood.
-        anns: annotations DataFrame.
-        label: MAP label column name.
-        clones: ordered clone names.
-        sx_data: SX_Data with cnv_blocks and MASK.
-
-    Returns:
-        DataFrame with one row per cluster (not sorted).
-    """
-    G = ll_allele.shape[0]
-    map_labels = anns[label].values
-    clone_to_k = {c: k for k, c in enumerate(clones)}
-    map_k = np.array([clone_to_k.get(lab, -1) for lab in map_labels])
-    assigned = map_k >= 0
-
-    imb = sx_data.MASK["IMBALANCED"]
-    aneu = sx_data.MASK["ANEUPLOID"]
-    cnv = sx_data.cnv_blocks
-
-    rows = []
-    for g in range(G):
-        row = {"cluster": g}
-        if "SEGMENTS" in cnv.columns:
-            row["SEGMENTS"] = cnv["SEGMENTS"].iloc[g]
-        if "#BBC" in cnv.columns:
-            row["#BBC"] = cnv["#BBC"].iloc[g]
-        if "CNP" in cnv.columns:
-            row["CNP"] = cnv["CNP"].iloc[g]
-        if "#SNPS" in cnv.columns:
-            row["#SNPS"] = cnv["#SNPS"].iloc[g]
-        if "#gene" in cnv.columns:
-            row["#gene"] = cnv["#gene"].iloc[g]
-
-        if imb[g]:
-            mean_d, med_d = _mean_delta_ll(ll_allele, g, map_k, assigned)
-            row["allele_score"] = mean_d
-            row["allele_score_med"] = med_d
-        else:
-            row["allele_score"] = ""
-            row["allele_score_med"] = ""
-
-        if aneu[g]:
-            mean_d, med_d = _mean_delta_ll(ll_total, g, map_k, assigned)
-            row["total_score"] = mean_d
-            row["total_score_med"] = med_d
-        else:
-            row["total_score"] = ""
-            row["total_score_med"] = ""
-
-        rows.append(row)
-    return pd.DataFrame(rows)
+def evaluate_init_normal(init_is_normal, barcodes, ref_label):
+    """Log precision/recall/f1 for init normal identification vs ref_label."""
+    if ref_label not in barcodes.columns:
+        return
+    ref_vals = barcodes[ref_label].values
+    known = ~np.isin(ref_vals, list(NA_CELLTYPE))
+    ref_normal = np.array([not is_tumor_label(x) for x in ref_vals])
+    tp = int((init_is_normal[known] & ref_normal[known]).sum())
+    fp = int((init_is_normal[known] & ~ref_normal[known]).sum())
+    fn = int((~init_is_normal[known] & ref_normal[known]).sum())
+    tn = int((~init_is_normal[known] & ~ref_normal[known]).sum())
+    prec = tp / max(tp + fp, 1)
+    rec = tp / max(tp + fn, 1)
+    f1 = 2 * prec * rec / max(prec + rec, 1e-10)
+    logging.info(
+        f"init normal vs ref_label={ref_label}: "
+        f"TP={tp} FP={fp} FN={fn} TN={tn} "
+        f"prec={prec:.3f} rec={rec:.3f} f1={f1:.3f}"
+    )
 
 
 def refine_labels_by_reference(anns, ref_label, cell_label, out_label):
