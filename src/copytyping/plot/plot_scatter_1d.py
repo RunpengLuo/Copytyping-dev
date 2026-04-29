@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -94,6 +96,7 @@ def plot_rdr_baf_1d_pseudobulk(
     figsize=(20, 4),
     filename=None,
     log2=True,
+    rdr_ylim=(-5, 5),
     markersize=20,
     **kwargs,
 ):
@@ -180,14 +183,14 @@ def plot_rdr_baf_1d_pseudobulk(
         1,
         figure=fig,
         height_ratios=outer_ratios,
-        hspace=0.20,
+        hspace=0.35,
         top=0.97,
     )
 
     axes = []
     for ci in range(n_clones):
         inner = GridSpecFromSubplotSpec(
-            2, 1, subplot_spec=outer[ci], height_ratios=[1, 1], hspace=0.08
+            2, 1, subplot_spec=outer[ci], height_ratios=[1, 1], hspace=0.25
         )
         axes.append(fig.add_subplot(inner[0]))
         axes.append(fig.add_subplot(inner[1]))
@@ -286,18 +289,21 @@ def plot_rdr_baf_1d_pseudobulk(
                     )
                 )
             if log2:
-                y_lo = min(val_rdr.min() * 1.1, -1.0) if len(val_rdr) else -1.0
-                y_hi = max(val_rdr.max() * 1.1, 1.0) if len(val_rdr) else 1.0
-                if exp_vals is not None:
-                    y_lo = min(y_lo, float(exp_vals.min()) - 0.1)
-                    y_hi = max(y_hi, float(exp_vals.max()) + 0.1)
-                ax_rdr.set_ylim([y_lo, y_hi])
+                ax_rdr.set_ylim(rdr_ylim)
+                if len(val_rdr) > 0:
+                    n_below = int((val_rdr < rdr_ylim[0]).sum())
+                    n_above = int((val_rdr > rdr_ylim[1]).sum())
+                    if n_below + n_above > 0:
+                        logging.info(
+                            f"  {cell_label} log2RDR: {n_below} bins < {rdr_ylim[0]}, "
+                            f"{n_above} bins > {rdr_ylim[1]}"
+                        )
             else:
                 exp_max = float(exp_vals.max()) if exp_vals is not None else 1.0
                 ax_rdr.set_ylim(
                     [-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)]
                 )
-        ax_rdr.set_ylabel(rdr_label, fontsize=8)
+        ax_rdr.set_ylabel(rdr_label, fontsize=12, fontweight="bold")
         feat_label = {"atac": "fragment", "gex": "umi"}.get(data_type, "count")
         total_counts = int(np.sum(X[:, barcode_idxs]))
         snp_counts = int(np.sum(D[:, barcode_idxs]))
@@ -305,7 +311,7 @@ def plot_rdr_baf_1d_pseudobulk(
             f"{cell_label} (n={num_bcs},"
             f" {data_type}-{feat_label}={total_counts:,},"
             f" snp-{feat_label}={snp_counts:,})",
-            fontsize=9,
+            fontsize=12,
             fontweight="bold",
             loc="left",
         )
@@ -364,13 +370,9 @@ def plot_rdr_baf_1d_pseudobulk(
                 )
             )
         ax_baf.set_ylim([-0.05, 1.05])
-        ax_baf.set_ylabel("BAF", fontsize=8)
+        ax_baf.set_ylabel("BAF", fontsize=12, fontweight="bold")
         plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
-        if ci == n_clones - 1:
-            ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=8)
-        else:
-            ax_baf.set_xticklabels([])
-            ax_baf.tick_params(axis="x", bottom=False)
+        ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=11, fontweight="bold")
         ax_baf.grid(False)
 
     # ── Bottom rows: CNP profile + legend ──

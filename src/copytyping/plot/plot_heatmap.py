@@ -97,7 +97,7 @@ def plot_heatmap(
                 for i in range(len(ch_coords) - 1)
             ]
         )
-        ax.set_xticklabels(chs, rotation=60, fontsize=8)
+        ax.set_xticklabels(chs, rotation=60, fontsize=11, fontweight="bold")
         ax.tick_params(
             axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
         )
@@ -133,7 +133,7 @@ def plot_heatmap(
         yticklabels.append(f"{label} ({proportion}%)")
 
     ax.set_yticks(yticks)
-    ax.set_yticklabels(yticklabels)
+    ax.set_yticklabels(yticklabels, fontsize=11, fontweight="bold")
     ax.tick_params(axis="y", length=0)
 
     if ylabel is not None:

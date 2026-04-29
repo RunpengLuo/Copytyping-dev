@@ -128,32 +128,33 @@ def plot_loss(losses: list, out_loss_file: str, val_type="log-likelihood", dpi=1
 def plot_count_histograms(
     data_sources: dict,
     sample: str,
-    out_dir: str,
+    outfile: str,
     dpi=100,
 ):
-    """Per-rep 2x2 histogram: total/aneuploid read counts, total/imbalanced allele counts."""
-    for data_type, sx in data_sources.items():
-        outfile = os.path.join(out_dir, f"{sample}.{data_type}.count_histograms.pdf")
-        aneu = sx.MASK["ANEUPLOID"]
-        imb = sx.MASK["IMBALANCED"]
-        n_aneu = int(aneu.sum())
-        n_imb = int(imb.sum())
+    """Per-rep 2x2 histogram: total/aneuploid read counts, total/imbalanced allele counts.
 
-        total_x = sx.X.sum(axis=0)
-        aneu_x = sx.X[aneu].sum(axis=0) if n_aneu > 0 else np.zeros(sx.N)
-        total_d = sx.D.sum(axis=0)
-        imb_d = sx.D[imb].sum(axis=0) if n_imb > 0 else np.zeros(sx.N)
-        rep_ids = sx.barcodes["REP_ID"].unique()
+    All data_types in a single PDF, one page per (data_type, rep_id).
+    """
 
-        def _hist(ax, vals, xlabel, title):
-            ax.hist(vals, bins=50, edgecolor="black", linewidth=0.3)
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("count")
-            ax.set_title(
-                f"{title} (n={len(vals)}, med={int(np.median(vals))})", fontsize=9
-            )
+    def _hist(ax, vals, xlabel, title):
+        ax.hist(vals, bins=50, edgecolor="black", linewidth=0.3)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("count")
+        ax.set_title(f"{title} (n={len(vals)}, med={int(np.median(vals))})", fontsize=9)
 
-        with PdfPages(outfile) as pdf:
+    with PdfPages(outfile) as pdf:
+        for data_type, sx in data_sources.items():
+            aneu = sx.MASK["ANEUPLOID"]
+            imb = sx.MASK["IMBALANCED"]
+            n_aneu = int(aneu.sum())
+            n_imb = int(imb.sum())
+
+            total_x = sx.X.sum(axis=0)
+            aneu_x = sx.X[aneu].sum(axis=0) if n_aneu > 0 else np.zeros(sx.N)
+            total_d = sx.D.sum(axis=0)
+            imb_d = sx.D[imb].sum(axis=0) if n_imb > 0 else np.zeros(sx.N)
+            rep_ids = sx.barcodes["REP_ID"].unique()
+
             for rep_id in rep_ids:
                 rm = sx.barcodes["REP_ID"].values == rep_id
                 fig, axes = plt.subplots(2, 2, figsize=(12, 8))
@@ -179,7 +180,72 @@ def plot_count_histograms(
                 fig.tight_layout()
                 pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
                 plt.close(fig)
-        logging.info(f"saved count histograms to {outfile}")
+    logging.info(f"saved count histograms to {outfile}")
+
+
+def plot_init_baf_histograms(
+    data_sources: dict,
+    is_normal: np.ndarray,
+    sample: str,
+    out_dir: str,
+    dpi=100,
+):
+    """Per-LOH-cluster BAF histogram, colored by init normal/tumor label.
+
+    One page per cluster, title shows cluster index and (A,B) CN state.
+    Only plots clusters in CLONAL_LOH mask.
+    """
+    for data_type, sx in data_sources.items():
+        loh_mask = sx.MASK.get("CLONAL_LOH", np.zeros(sx.G, dtype=bool))
+        if not loh_mask.any():
+            continue
+        outfile = os.path.join(out_dir, f"{sample}.{data_type}.init_baf.pdf")
+        loh_idx = np.where(loh_mask)[0]
+
+        with PdfPages(outfile) as pdf:
+            for g in loh_idx:
+                D_g = sx.D[g]
+                valid = D_g > 0
+                if valid.sum() == 0:
+                    continue
+                baf_g = sx.Y[g, valid].astype(float) / D_g[valid].astype(float)
+                labels_g = is_normal[valid]
+
+                fig, ax = plt.subplots(figsize=(8, 4))
+                baf_normal = baf_g[labels_g]
+                baf_tumor = baf_g[~labels_g]
+                ax.hist(
+                    [baf_normal, baf_tumor],
+                    bins=50,
+                    range=(0, 1),
+                    stacked=True,
+                    label=[
+                        f"normal (n={len(baf_normal)})",
+                        f"tumor (n={len(baf_tumor)})",
+                    ],
+                    color=["silver", "#d62728"],
+                    edgecolor="black",
+                    linewidth=0.3,
+                )
+                ax.set_xlabel("BAF", fontsize=10)
+                ax.set_ylabel("count", fontsize=10)
+                ax.legend(fontsize=8)
+
+                # title with cluster CN state
+                a_str = f"{sx.A[g, 1]}|{sx.B[g, 1]}"
+                if sx.K > 2:
+                    a_str = ";".join(
+                        f"{sx.A[g, k]}|{sx.B[g, k]}" for k in range(1, sx.K)
+                    )
+                fig.suptitle(
+                    f"{sample} — {data_type} cluster {g} — CN: {a_str}",
+                    fontsize=11,
+                    fontweight="bold",
+                )
+                fig.tight_layout()
+                pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
+                plt.close(fig)
+        logging.info(f"saved init BAF histograms to {outfile}")
 
 
 def _is_na_label(label):
@@ -283,6 +349,211 @@ def plot_crosstab(
     plt.tight_layout()
     plt.savefig(outfile, dpi=300, bbox_inches="tight")
     plt.close()
+
+
+def plot_purity_histograms(
+    anns: pd.DataFrame,
+    sample: str,
+    outfile: str,
+    label_col: str,
+    purity_col="tumor_purity",
+    dpi=100,
+):
+    """Per-label purity histogram. One page per label in a PDF."""
+    if purity_col not in anns.columns:
+        return
+    labels = sorted(anns[label_col].unique(), key=lambda x: (x != "normal", x))
+    with PdfPages(outfile) as pdf:
+        for lab in labels:
+            mask = anns[label_col] == lab
+            vals = anns.loc[mask, purity_col].dropna().values
+            if len(vals) == 0:
+                continue
+            fig, ax = plt.subplots(figsize=(8, 4))
+            ax.hist(vals, bins=50, range=(0, 1), edgecolor="black", linewidth=0.3)
+            ax.set_xlabel("tumor purity", fontsize=10)
+            ax.set_ylabel("count", fontsize=10)
+            ax.set_title(
+                f"{sample} — {lab} (n={len(vals)}, "
+                f"median={np.median(vals):.2f}, mean={np.mean(vals):.2f})",
+                fontsize=11,
+            )
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi)
+            plt.close(fig)
+    logging.info(f"saved purity histograms to {outfile}")
+
+
+def plot_cluster_observed_data(
+    seg_sx,
+    anns: pd.DataFrame,
+    sample: str,
+    outfile: str,
+    label_col: str,
+    base_props=None,
+    dpi=100,
+):
+    """Per-cluster observed B-allele count, BAF, RDR. One page per cluster, one row per label."""
+    labels = sorted(anns[label_col].unique(), key=lambda x: (x != "normal", x))
+    n_labels = len(labels)
+    label_idx = {lab: np.where(anns[label_col].values == lab)[0] for lab in labels}
+
+    if base_props is None:
+        base_props = seg_sx.X.sum(axis=1) / max(seg_sx.T.sum(), 1)
+
+    informative = seg_sx.MASK["IMBALANCED"] | seg_sx.MASK["ANEUPLOID"]
+    cluster_indices = np.where(informative)[0]
+
+    with PdfPages(outfile) as pdf:
+        for g in cluster_indices:
+            row = seg_sx.cnv_blocks.iloc[g]
+            cnp_str = row.get("CNP", "")
+            length_mb = row["LENGTH"] / 1e6 if "LENGTH" in row.index else np.nan
+            n_bbc = int(row["#BBC"]) if "#BBC" in row.index else 0
+            is_imb = seg_sx.MASK["IMBALANCED"][g]
+            is_ane = seg_sx.MASK["ANEUPLOID"][g]
+            tag = []
+            if is_imb:
+                tag.append("IMB")
+            if is_ane:
+                tag.append("ANE")
+
+            cn_parts = []
+            for k in range(1, seg_sx.K):
+                cn_parts.append(f"{seg_sx.clones[k]}={seg_sx.A[g, k]}|{seg_sx.B[g, k]}")
+            cn_str = ", ".join(cn_parts)
+
+            fig, axes = plt.subplots(
+                n_labels,
+                3,
+                figsize=(18, 3 * n_labels),
+                squeeze=False,
+            )
+            for ri, lab in enumerate(labels):
+                idx = label_idx[lab]
+                D_g = seg_sx.D[g, idx].astype(float)
+                Y_g = seg_sx.Y[g, idx].astype(float)
+                X_g = seg_sx.X[g, idx].astype(float)
+                T_i = seg_sx.T[idx].astype(float)
+                lam_g = base_props[g]
+
+                valid_d = D_g > 0
+                baf = np.divide(Y_g, D_g, out=np.full_like(D_g, np.nan), where=valid_d)
+                mu = T_i * lam_g
+                valid_x = mu > 0
+                rdr = np.divide(X_g, mu, out=np.full_like(X_g, np.nan), where=valid_x)
+
+                # B-allele count
+                ax = axes[ri, 0]
+                ax.hist(Y_g[valid_d], bins=50, edgecolor="black", linewidth=0.3)
+                ax.set_xlabel("B-allele count")
+                ax.set_ylabel("count")
+                ax.set_title(f"{lab} (n={len(idx)})", fontsize=9)
+
+                # BAF
+                ax = axes[ri, 1]
+                baf_valid = baf[valid_d]
+                d_valid = D_g[valid_d]
+                baf_lo = baf_valid[d_valid <= 3]
+                baf_hi = baf_valid[d_valid > 3]
+                ax.hist(
+                    [baf_hi, baf_lo],
+                    bins=50,
+                    range=(0, 1),
+                    stacked=True,
+                    label=[f"D>3 (n={len(baf_hi)})", f"D<=3 (n={len(baf_lo)})"],
+                    color=["#1f77b4", "#d3d3d3"],
+                    edgecolor="black",
+                    linewidth=0.3,
+                )
+                ax.legend(fontsize=6)
+                ax.set_xlabel("BAF")
+                ax.set_ylabel("count")
+                med_baf = np.median(baf_valid) if len(baf_valid) > 0 else np.nan
+                ax.set_title(f"BAF median={med_baf:.3f}", fontsize=9)
+
+                # RDR
+                ax = axes[ri, 2]
+                rdr_valid = rdr[valid_x & np.isfinite(rdr)]
+                rdr_clip = np.clip(rdr_valid, 0, 5)
+                ax.hist(
+                    rdr_clip, bins=50, range=(0, 5), edgecolor="black", linewidth=0.3
+                )
+                ax.set_xlabel("RDR")
+                ax.set_ylabel("count")
+                med_rdr = np.median(rdr_valid) if len(rdr_valid) > 0 else np.nan
+                ax.set_title(f"RDR median={med_rdr:.3f}", fontsize=9)
+
+            fig.suptitle(
+                f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — {'/'.join(tag)}\n"
+                f"CN: {cn_str}",
+                fontsize=10,
+                fontweight="bold",
+            )
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi)
+            plt.close(fig)
+
+        # LOH pages: one page per clone label, aggregated across LOH clusters
+        clones = seg_sx.clones
+        for lab in labels:
+            idx = label_idx[lab]
+            if len(idx) == 0:
+                continue
+            if lab == "normal":
+                k = 0
+            elif lab in clones:
+                k = clones.index(lab)
+            else:
+                continue
+
+            loh_mask = (seg_sx.B[:, k] == 0) & (seg_sx.A[:, k] > 0)
+            n_loh = int(loh_mask.sum())
+            if n_loh == 0:
+                continue
+
+            loh_length_mb = 0
+            if "LENGTH" in seg_sx.cnv_blocks.columns:
+                loh_length_mb = seg_sx.cnv_blocks.loc[loh_mask, "LENGTH"].sum() / 1e6
+
+            Y_loh = seg_sx.Y[loh_mask][:, idx].sum(axis=0).astype(float)
+            D_loh = seg_sx.D[loh_mask][:, idx].sum(axis=0).astype(float)
+            valid = D_loh > 0
+            baf_loh = np.divide(
+                Y_loh, D_loh, out=np.full_like(Y_loh, np.nan), where=valid
+            )
+
+            fig, axes = plt.subplots(1, 3, figsize=(18, 4))
+            axes[0].hist(Y_loh, bins=50, edgecolor="black", linewidth=0.3)
+            axes[0].set_xlabel("Y_loh (B-allele count)")
+            axes[0].set_ylabel("count")
+            axes[0].set_title(f"Y_loh  median={np.median(Y_loh):.0f}", fontsize=9)
+
+            axes[1].hist(D_loh, bins=50, edgecolor="black", linewidth=0.3)
+            axes[1].set_xlabel("D_loh (total allele count)")
+            axes[1].set_ylabel("count")
+            axes[1].set_title(f"D_loh  median={np.median(D_loh):.0f}", fontsize=9)
+
+            baf_valid = baf_loh[valid]
+            axes[2].hist(
+                baf_valid, bins=50, range=(0, 1), edgecolor="black", linewidth=0.3
+            )
+            axes[2].set_xlabel("BAF_loh")
+            axes[2].set_ylabel("count")
+            med_baf = np.median(baf_valid) if len(baf_valid) > 0 else np.nan
+            axes[2].set_title(f"BAF_loh  median={med_baf:.3f}", fontsize=9)
+
+            fig.suptitle(
+                f"{sample} — {lab} (n={len(idx)}) — "
+                f"{n_loh} LOH clusters ({loh_length_mb:.1f}Mb)",
+                fontsize=11,
+                fontweight="bold",
+            )
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi)
+            plt.close(fig)
+
+    logging.info(f"saved cluster observed data to {outfile}")
 
 
 def plot_metrics_barplot(

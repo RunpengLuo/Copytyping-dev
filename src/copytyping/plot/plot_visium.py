@@ -31,29 +31,35 @@ def _label_color_index(label):
     return hash(label) % len(_TUMOR_COLORS)
 
 
-def build_label_colors(categories: list) -> list:
+def build_label_colors(categories: list, clone_indexed=True) -> list:
     """Return color list for categories. Consistent regardless of subset/order.
 
-    - NA / INVALID_LABELS → NA_COLOR
+    - INVALID_LABELS → NA_COLOR
     - "normal" → NORMAL_COLOR
-    - "cloneN" → stable tab10 index by N
-    - other labels → stable hash-based index
+    - clone_indexed=True: "cloneN" → stable tab10 index by N, others by hash
+    - clone_indexed=False: non-normal labels get sequential distinct colors
     """
     colors = []
+    tumor_i = 0
     for c in categories:
-        if c in INVALID_LABELS or c == "NA":
+        if c in INVALID_LABELS:
             colors.append(NA_COLOR)
         elif c == "normal":
             colors.append(NORMAL_COLOR)
-        else:
+        elif clone_indexed:
             colors.append(_TUMOR_COLORS[_label_color_index(c) % len(_TUMOR_COLORS)])
+        else:
+            colors.append(_TUMOR_COLORS[tumor_i % len(_TUMOR_COLORS)])
+            tumor_i += 1
     return colors
 
 
-def set_label_colors(adata, col):
+def set_label_colors(adata, col, clone_indexed=True):
     """Set adata.uns colors using unified scheme."""
     adata.obs[col] = adata.obs[col].astype("category")
-    adata.uns[f"{col}_colors"] = build_label_colors(list(adata.obs[col].cat.categories))
+    adata.uns[f"{col}_colors"] = build_label_colors(
+        list(adata.obs[col].cat.categories), clone_indexed=clone_indexed
+    )
 
 
 def build_legend(categories: list) -> list:
@@ -87,30 +93,60 @@ def plot_visium_panel(
     slices: list,
     out_dir: str,
     spot_label="spot_label",
+    spot_labels_pcut=None,
     path_label="Microregion_annotation",
     dpi=300,
     size=1.5,
+    alpha=0.8,
     title_info="",
 ):
-    """Single-page PDF: H&E, path_label, purity, copytyping per slice."""
+    """Single-page PDF: H&E, path_label, purity, copytyping (per pcut), CQ per slice."""
     import squidpy as sq
-    from matplotlib.collections import PatchCollection as _PC
 
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
     plt.rcParams["svg.fonttype"] = "none"
 
-    has_purity = "tumor_purity" in slices[0][1].columns
+    has_purity = "tumor_purity_raw" in slices[0][1].columns
     has_path = path_label in slices[0][1].columns
+    has_cq = "CQ" in slices[0][1].columns
+
     row_labels = ["H&E"]
     if has_path:
         row_labels.append(path_label)
     if has_purity:
         purity_label = f"tumor purity\n{title_info}" if title_info else "tumor purity"
         row_labels.append(purity_label)
-    row_labels.append("copytyping (purity-weighted)")
-    if has_purity:
-        row_labels.append("copytyping")
+
+    # pcut label rows (or fallback to single spot_label)
+    if spot_labels_pcut:
+        label_rows = spot_labels_pcut
+    else:
+        label_rows = [spot_label]
+
+    # compute per-cutoff metrics if ref_label available
+    first_label_ri = len(row_labels)
+    all_anns = pd.concat([a for _, a, _ in slices], axis=0)
+    for col in label_rows:
+        pcut_val = col.rsplit("_pcut", 1)[-1] if "_pcut" in col else ""
+        rlabel = f"pcut={pcut_val}" if pcut_val else "copytyping"
+        if has_path and col in all_anns.columns:
+            ref = all_anns[path_label].values
+            pred = all_anns[col].values
+            ref_tum = np.array([is_tumor_label(str(x)) for x in ref])
+            pred_tum = pred != "normal"
+            known = ~pd.isnull(ref)
+            tp = int((pred_tum[known] & ref_tum[known]).sum())
+            fp = int((pred_tum[known] & ~ref_tum[known]).sum())
+            fn = int((~pred_tum[known] & ref_tum[known]).sum())
+            p = tp / max(tp + fp, 1)
+            r = tp / max(tp + fn, 1)
+            f = 2 * p * r / max(p + r, 1e-10)
+            rlabel += f"\nP={p:.2f} R={r:.2f} F1={f:.2f}"
+        row_labels.append(rlabel)
+
+    if has_cq:
+        row_labels.append("CQ score")
     nrows = len(row_labels)
     ncols = len(slices)
 
@@ -123,14 +159,15 @@ def plot_visium_panel(
     )
 
     for ci, (rep_id, anns_vis, vis_adata) in enumerate(slices):
-        vis_adata.obs[spot_label] = anns_vis[spot_label].astype("category")
+        # Set up obs columns and colors
+        for col in label_rows:
+            vis_adata.obs[col] = anns_vis[col].astype("category")
+            set_label_colors(vis_adata, col)
         if has_path:
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
+            set_label_colors(vis_adata, path_label, clone_indexed=False)
         if has_purity:
-            vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
-        set_label_colors(vis_adata, spot_label)
-        if has_path:
-            set_label_colors(vis_adata, path_label)
+            vis_adata.obs["tumor_purity_raw"] = anns_vis["tumor_purity_raw"].values
 
         ri = 0
         sq.pl.spatial_scatter(
@@ -148,7 +185,8 @@ def plot_visium_panel(
                 size=size,
                 library_id=rep_id,
                 ax=axes[ri, ci],
-                alpha=0.5,
+                img=False,
+                alpha=alpha,
                 edgecolors="none",
             )
 
@@ -156,7 +194,7 @@ def plot_visium_panel(
             ri += 1
             sq.pl.spatial_scatter(
                 vis_adata,
-                color="tumor_purity",
+                color="tumor_purity_raw",
                 size=size,
                 library_id=rep_id,
                 cmap="magma_r",
@@ -166,45 +204,45 @@ def plot_visium_panel(
                 edgecolors="none",
             )
 
-        ri += 1
-        sq.pl.spatial_scatter(
-            vis_adata,
-            color=spot_label,
-            size=size,
-            library_id=rep_id,
-            ax=axes[ri, ci],
-            edgecolors="none",
-        )
-        if has_purity:
-            rgba = blend_purity_rgba(vis_adata, spot_label, "tumor_purity")
-            ax = axes[ri, ci]
-            for child in ax.get_children():
-                if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
-                    child.set_facecolors(rgba)
-                    break
-            old_legend = ax.get_legend()
-            if old_legend:
-                old_legend.remove()
-
-            # extra row: copytyping labels without purity weighting
+        for col in label_rows:
             ri += 1
             sq.pl.spatial_scatter(
                 vis_adata,
-                color=spot_label,
+                color=col,
                 size=size,
                 library_id=rep_id,
                 ax=axes[ri, ci],
-                alpha=0.5,
+                img=False,
+                alpha=alpha,
                 edgecolors="none",
             )
 
-    # shared legend for copytyping row from all slices' categories
+        if has_cq:
+            ri += 1
+            cq_vals = anns_vis["CQ"].values.copy().astype(float)
+            cq_vals = np.clip(cq_vals, 0, 30)
+            vis_adata.obs["CQ_clipped"] = cq_vals
+            sq.pl.spatial_scatter(
+                vis_adata,
+                color="CQ_clipped",
+                size=size,
+                library_id=rep_id,
+                ax=axes[ri, ci],
+                img=False,
+                alpha=alpha,
+                edgecolors="none",
+                cmap="RdYlGn",
+                vmin=0,
+                vmax=30,
+            )
+
+    # shared legend on the first label row from all slices' categories
     all_cats = set()
+    first_label_col = label_rows[0]
     for _, anns_vis, vis_adata in slices:
-        all_cats.update(vis_adata.obs[spot_label].cat.categories)
+        all_cats.update(vis_adata.obs[first_label_col].cat.categories)
     all_cats = sorted(all_cats, key=lambda x: (x != "normal", x == "NA", x))
-    copytyping_ri = nrows - 1
-    axes[copytyping_ri, -1].legend(
+    axes[first_label_ri, -1].legend(
         handles=build_legend(all_cats),
         loc="center left",
         bbox_to_anchor=(1.0, 0.5),
@@ -230,7 +268,6 @@ def plot_visium_panel(
     for ri, rlabel in enumerate(row_labels):
         axes[ri, 0].set_ylabel(rlabel, fontsize=13, fontweight="bold")
 
-    fig.suptitle(sample, fontsize=14, fontweight="bold")
     fig.tight_layout()
     out_file = os.path.join(out_dir, f"{sample}.visium.pdf")
     fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
