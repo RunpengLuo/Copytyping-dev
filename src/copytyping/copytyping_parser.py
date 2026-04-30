@@ -222,13 +222,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="spatial smoothing level: 0=none, 1=add neighbor counts, 2=2-hop, etc.",
     )
     parser.add_argument(
-        "--purity_min",
-        required=False,
-        type=float,
-        help="min purity for tumor-gated spots (default: 0.1)",
-        default=0.1,
-    )
-    parser.add_argument(
         "--purity_cutoff",
         required=False,
         type=str,

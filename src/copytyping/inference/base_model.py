@@ -201,7 +201,6 @@ class Base_Model:
             )
 
         self._pi_alpha = init_params["pi_alpha"]
-        self._purity_min = init_params["purity_min"]
         self._purity_cutoffs = init_params["purity_cutoffs"]
         self._tau_bounds = init_params["tau_bounds"]
         self._invphi_bounds = init_params["invphi_bounds"]
@@ -210,11 +209,12 @@ class Base_Model:
         )
 
         # pre-allocate LL matrices — updated in-place by compute_log_likelihood
+        K_em = getattr(self, "_K_em", self.K)
         for dt in self.data_types:
             G = self.data_sources[dt].G
-            params[f"{dt}-ll_allele"] = np.zeros((G, self.N, self.K), dtype=np.float64)
-            params[f"{dt}-ll_total"] = np.zeros((G, self.N, self.K), dtype=np.float64)
-        params["ll_global"] = np.zeros((self.N, self.K), dtype=np.float64)
+            params[f"{dt}-ll_allele"] = np.zeros((G, self.N, K_em), dtype=np.float64)
+            params[f"{dt}-ll_total"] = np.zeros((G, self.N, K_em), dtype=np.float64)
+        params["ll_global"] = np.zeros((self.N, K_em), dtype=np.float64)
 
         ll_trace, gamma_trace = [], []
         self.labeling_trace = [init_labeling]

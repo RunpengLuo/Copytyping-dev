@@ -25,7 +25,6 @@ def prepare_params(args, cnv_blocks, platform, data_types):
         "pi_alpha": args["pi_alpha"],
         "tau_bounds": tau_bounds,
         "invphi_bounds": invphi_bounds,
-        "purity_min": args["purity_min"],
         "purity_cutoffs": [float(x) for x in str(args["purity_cutoff"]).split(",")],
         "ref_label": args["ref_label"],
         "niters": args["niters"],
@@ -132,7 +131,7 @@ def _fit_theta_spots(Y_bins, D_bins, p_k, mu_k, N, theta_arr, spot_mask):
     return n_fitted
 
 
-def estimate_tumor_proportion_bin(sx_data: SX_Data, base_props: np.ndarray, u_min=0.1):
+def estimate_tumor_proportion_bin(sx_data: SX_Data, base_props: np.ndarray, u_min=0.0):
     """Estimate per-spot tumor purity from clonal LOH segments.
 
     Spots without LOH coverage get theta=u_min.
