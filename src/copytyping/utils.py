@@ -146,3 +146,16 @@ def save_cnp_profile(seg_data_sources, out_file):
         cnp_df[f"{dt}_med_allele"] = np.median(sx.D, axis=1).astype(int)
 
     cnp_df.to_csv(out_file, sep="\t", index=False)
+
+
+def save_phased_bbc(bbc_df, X_bbc, Y_bbc, D_bbc, prefix):
+    """Save phase-corrected BBC data (DataFrame + sparse matrices).
+
+    Files: {prefix}.tsv.gz, {prefix}.X.npz, {prefix}.Y.npz, {prefix}.D.npz
+    """
+    from scipy import sparse
+
+    bbc_df.to_csv(f"{prefix}.tsv.gz", sep="\t", index=False, compression="gzip")
+    sparse.save_npz(f"{prefix}.X.npz", X_bbc)
+    sparse.save_npz(f"{prefix}.Y.npz", Y_bbc)
+    sparse.save_npz(f"{prefix}.D.npz", D_bbc)

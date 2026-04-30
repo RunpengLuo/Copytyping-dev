@@ -6,6 +6,7 @@ import os
 import numpy as np
 import pandas as pd
 import scanpy as sc
+from scipy import sparse
 
 from copytyping.copytyping_parser import (
     add_arguments_inference,
@@ -29,6 +30,7 @@ from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
     save_cnp_profile,
+    save_phased_bbc,
     setup_logging,
 )
 
@@ -90,13 +92,13 @@ def run(args=None):
         )
         seg_data_sources[data_type] = seg_sx
         agg_bbc_data_sources[data_type] = adaptive_bin_bbc(
-            bbc_df,
-            X_bbc,
-            Y_bbc,
-            D_bbc,
-            seg_sx,
-            min_snp_agg_bbc,
-            max_len_agg_bbc,
+            bbc_df, X_bbc, Y_bbc, D_bbc, seg_sx, min_snp_agg_bbc, max_len_agg_bbc,
+        )
+
+        # Save BBC-level data for validate to recompute agg_bbc
+        save_phased_bbc(
+            bbc_df, X_bbc, Y_bbc, D_bbc,
+            os.path.join(proc_dir, f"{out_prefix}.{data_type}.bbc"),
         )
 
         if args.get(f"{data_type}_h5ad") is not None:
@@ -194,8 +196,6 @@ def run(args=None):
 
     is_spot = platform in SPATIAL_PLATFORMS
     # ---- Save outputs to processed_data ----
-    from scipy import sparse
-
     anns.to_csv(
         os.path.join(out_dir, f"{out_prefix}.{platform}.annotations.tsv"),
         sep="\t",
