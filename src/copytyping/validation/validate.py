@@ -42,56 +42,6 @@ from copytyping.validation.metrics import (
 )
 
 
-def add_arguments_validate(parser):
-    parser.add_argument(
-        "--processed_data",
-        required=True,
-        type=str,
-        help="Directory with cnp_profile.tsv and X/Y/D.npz files",
-    )
-    parser.add_argument(
-        "--pred_labels",
-        required=True,
-        type=str,
-        help="TSV with BARCODE + predicted label columns",
-    )
-    parser.add_argument(
-        "--pred_label",
-        required=False,
-        type=str,
-        default="label",
-        help="Column name for predicted labels (default: label)",
-    )
-    parser.add_argument(
-        "--ref_labels",
-        required=False,
-        type=str,
-        default=None,
-        help="TSV with BARCODE + reference label columns",
-    )
-    parser.add_argument(
-        "--ref_label",
-        required=False,
-        type=str,
-        default="path_label",
-        help="Column name for reference labels (default: path_label)",
-    )
-    parser.add_argument("--sample", required=True, type=str)
-    parser.add_argument("--data_type", required=False, type=str, default="gex")
-    parser.add_argument("--genome_size", required=False, type=str, default=None)
-    parser.add_argument("--region_bed", required=False, type=str, default=None)
-    parser.add_argument(
-        "--h5ad",
-        required=False,
-        type=str,
-        default=None,
-        help="h5ad for spatial neighbors (joincount)",
-    )
-    parser.add_argument("--n_neighs", required=False, type=int, default=6)
-    parser.add_argument("-o", "--out_dir", required=True, type=str)
-    parser.add_argument("--dpi", required=False, type=int, default=200)
-    parser.add_argument("-v", "--verbosity", required=False, type=int, default=1)
-
 
 def run(args=None):
     if isinstance(args, argparse.Namespace):
@@ -267,6 +217,8 @@ def run(args=None):
 
 
 if __name__ == "__main__":
+    from copytyping.copytyping_parser import add_arguments_validate
+
     parser = argparse.ArgumentParser(description="Validate clone labels")
     add_arguments_validate(parser)
     args = parser.parse_args()

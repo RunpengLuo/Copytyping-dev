@@ -1,13 +1,14 @@
 import argparse
 
-from copytyping.copytyping_parser import add_arguments_inference, add_arguments_pipeline
+from copytyping.copytyping_parser import (
+    add_arguments_inference,
+    add_arguments_pipeline,
+    add_arguments_validate,
+)
 from copytyping.inference.inference import run as copytyping_inference
 from copytyping.pipeline import run as copytyping_pipeline
 from copytyping.utils import log_arguments, setup_logging
-from copytyping.validation.validate import (
-    add_arguments_validate,
-    run as copytyping_validate,
-)
+from copytyping.validation.validate import run as copytyping_validate
 
 
 def main(argv=None):

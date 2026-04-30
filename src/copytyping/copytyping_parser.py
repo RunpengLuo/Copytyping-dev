@@ -444,3 +444,91 @@ def add_arguments_pipeline(parser):
         help="Spatial smoothing level (default: 0)",
     )
     return parser
+
+
+def add_arguments_validate(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--processed_data",
+        required=True,
+        type=str,
+        help="Directory with cnp_profile.tsv, X/Y/D.npz, model_params.npz",
+    )
+    parser.add_argument(
+        "--pred_labels",
+        required=True,
+        type=str,
+        help="TSV with BARCODE + predicted label columns",
+    )
+    parser.add_argument(
+        "--pred_label",
+        required=False,
+        type=str,
+        default="label",
+        help="Column name for predicted labels (default: label)",
+    )
+    parser.add_argument(
+        "--ref_labels",
+        required=False,
+        type=str,
+        default=None,
+        help="TSV with BARCODE + reference label columns",
+    )
+    parser.add_argument(
+        "--ref_label",
+        required=False,
+        type=str,
+        default="path_label",
+        help="Column name for reference labels (default: path_label)",
+    )
+    parser.add_argument("--sample", required=True, type=str, help="sample name")
+    parser.add_argument(
+        "--data_type",
+        required=False,
+        type=str,
+        default="gex",
+        help="Data type for count matrices (default: gex)",
+    )
+    parser.add_argument(
+        "--genome_size",
+        required=False,
+        type=str,
+        default=None,
+        help="Chromosome sizes file (for 1d scatter)",
+    )
+    parser.add_argument(
+        "--region_bed",
+        required=False,
+        type=str,
+        default=None,
+        help="Chromosome regions BED file (for heatmap/scatter)",
+    )
+    parser.add_argument(
+        "--h5ad",
+        required=False,
+        type=str,
+        default=None,
+        help="h5ad file for spatial neighbors (joincount + visium plots)",
+    )
+    parser.add_argument(
+        "--n_neighs",
+        required=False,
+        type=int,
+        default=6,
+        help="Number of spatial neighbors (default: 6)",
+    )
+    parser.add_argument("-o", "--out_dir", required=True, type=str, help="output directory")
+    parser.add_argument(
+        "--dpi",
+        required=False,
+        type=int,
+        default=200,
+        help="DPI for plots (default: 200)",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbosity",
+        required=False,
+        type=int,
+        default=1,
+        help="Verbose level (default: 1)",
+    )
