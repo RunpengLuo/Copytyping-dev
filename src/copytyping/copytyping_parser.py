@@ -187,12 +187,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default=False,
         help="if set, update NB dispersion (inv_phi) in M-step (cell model only)",
     )
-    parser.add_argument(
-        "--export_counts",
-        action="store_true",
-        default=False,
-        help="export segment-level X/Y/D count matrices as NPZ files",
-    )
     ##################################################
     # plot parameters
     parser.add_argument(
