@@ -527,6 +527,18 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         help="DPI for plots (default: 200)",
     )
     parser.add_argument(
+        "--min_snp_count", required=False, type=int, default=300,
+        help="min SNP count per adaptive BBC bin for 1d scatter (default: 300)",
+    )
+    parser.add_argument(
+        "--max_bin_length", required=False, type=int, default=5_000_000,
+        help="max bin length (bp) for adaptive BBC binning (default: 5000000)",
+    )
+    parser.add_argument(
+        "--heatmap_agg", required=False, type=int, default=10,
+        help="aggregate observations in heatmap (default: 10)",
+    )
+    parser.add_argument(
         "--purity_cutoff",
         required=False,
         type=str,
