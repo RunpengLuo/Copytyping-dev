@@ -24,10 +24,7 @@ from copytyping.inference.model_utils import (
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
     compute_cluster_baf_metrics,
-    compute_joincount_zscores,
     evaluate_init_normal,
-    evaluate_malignant_accuracy,
-    refine_labels_by_reference,
 )
 from copytyping.io_utils import (
     load_modality_data,
@@ -38,7 +35,6 @@ from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_common import (
     plot_cluster_observed_data,
     plot_count_histograms,
-    plot_crosstab,
     plot_init_baf_histograms,
     plot_purity_histograms,
 )
@@ -237,50 +233,6 @@ def run(args=None):
                 is_normal,
             )
 
-    eval_rows = []
-    base_meta = {"SAMPLE": sample, "PLATFORM": platform, "log_likelihood": final_ll}
-
-    # Joincount z-scores (shared across labels)
-    jc_metric = {}
-    if is_spot and spatial_graphs:
-        jc_metric = compute_joincount_zscores(anns, label, spatial_graphs, data_types)
-
-    # Evaluate
-    if ref_label in barcodes.columns:
-        purity_col = "tumor_purity" if is_spot else "tumor"
-        m = evaluate_malignant_accuracy(
-            anns,
-            qry_label=label,
-            ref_label=ref_label,
-            tumor_post=purity_col if purity_col in anns.columns else "tumor",
-        )
-        eval_rows.append({**base_meta, **m, **jc_metric})
-        anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
-    else:
-        eval_rows.append({**base_meta, **jc_metric})
-
-    # Compare inferred purity vs reference purity if available
-    ref_purity_col = f"{ref_label}-tumor_purity"
-    if ref_purity_col in anns.columns and "tumor_purity" in anns.columns:
-        ref_pur = anns[ref_purity_col].dropna().values
-        inf_pur = anns.loc[anns[ref_purity_col].notna(), "tumor_purity"].values
-        corr = np.corrcoef(ref_pur, inf_pur)[0, 1]
-        mae = np.mean(np.abs(ref_pur - inf_pur))
-        logging.info(
-            f"purity comparison vs {ref_purity_col}: "
-            f"corr={corr:.4f}, MAE={mae:.4f}, n={len(ref_pur)}"
-        )
-
-    eval_df = pd.DataFrame(eval_rows)
-    metric = eval_rows[0] if eval_rows else base_meta
-    eval_df.to_csv(
-        os.path.join(out_dir, f"{out_prefix}.{platform}.evaluation.tsv"),
-        sep="\t",
-        header=True,
-        index=False,
-        na_rep="",
-    )
-
     anns.to_csv(
         os.path.join(out_dir, f"{out_prefix}.{platform}.annotations.tsv"),
         sep="\t",
@@ -304,18 +256,6 @@ def run(args=None):
             )
 
     # ---- Plotting (all reps combined per data_type) ----
-    if ref_label in anns.columns:
-        plot_crosstab(
-            anns,
-            sample,
-            os.path.join(
-                val_dir,
-                f"{out_prefix}.{platform}.crosstab.png",
-            ),
-            metric=metric,
-            acol=label,
-            bcol=ref_label,
-        )
     scatter_subtitle = f"min_snp_count={min_snp_agg_bbc}  max_bin_length={max_len_agg_bbc / 1e6:.1f}Mbp"
     plot_labels = [lb for lb in [label, ref_label] if lb in anns]
 
@@ -462,9 +402,6 @@ def run(args=None):
             if ref_label not in anns_vis.columns:
                 anns_vis[ref_label] = "Unknown"
             visium_slices.append((rep_id, anns_vis, vis_adata))
-        visium_title = ""
-        if metric.get("AUC_soft") is not None:
-            visium_title += f"AUC={metric['AUC_soft']:.3f}"
         plot_visium_panel(
             sample,
             visium_slices,
@@ -472,7 +409,6 @@ def run(args=None):
             spot_label=label,
             path_label=ref_label,
             dpi=args["dpi"],
-            title_info=visium_title,
         )
         if hasattr(instance, "labeling_trace") and instance.labeling_trace:
             plot_visium_iters(
