@@ -51,25 +51,13 @@ def _load_proc_data(proc_dir, data_type):
 
     # Segment-level X/Y/D
     seg_files = [f for f in os.listdir(proc_dir) if f.endswith(f".{data_type}.seg.X.npz")]
-    seg_sx = None
-    barcodes_df = None
+    X = Y = D = None
     if seg_files:
         prefix = os.path.join(proc_dir, seg_files[0].rsplit(".seg.X.npz", 1)[0])
         X = sparse.load_npz(f"{prefix}.seg.X.npz").toarray()
         Y = sparse.load_npz(f"{prefix}.seg.Y.npz").toarray()
         D = sparse.load_npz(f"{prefix}.seg.D.npz").toarray()
         logging.info(f"loaded seg matrices: X/Y/D shape={X.shape}")
-    else:
-        # Try old format without .seg. prefix
-        old_files = [f for f in os.listdir(proc_dir) if f.endswith(f".{data_type}.X.npz")]
-        if old_files:
-            prefix = os.path.join(proc_dir, old_files[0].rsplit(".X.npz", 1)[0])
-            X = sparse.load_npz(f"{prefix}.X.npz").toarray()
-            Y = sparse.load_npz(f"{prefix}.Y.npz").toarray()
-            D = sparse.load_npz(f"{prefix}.D.npz").toarray()
-            logging.info(f"loaded seg matrices (old format): X/Y/D shape={X.shape}")
-        else:
-            X = Y = D = None
 
     # BBC-level data for agg_bbc
     bbc_files = [f for f in os.listdir(proc_dir) if f.endswith(f".{data_type}.bbc.X.npz")]
