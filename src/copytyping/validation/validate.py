@@ -84,7 +84,13 @@ def _load_proc_data(proc_dir, data_type):
     if trace_files:
         trace = dict(np.load(os.path.join(proc_dir, trace_files[0]), allow_pickle=True))
 
-    return cnp_df, X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc, params, trace
+    # Barcodes
+    barcodes_df = None
+    bc_files = [f for f in os.listdir(proc_dir) if f.endswith(".barcodes.tsv")]
+    if bc_files:
+        barcodes_df = pd.read_csv(os.path.join(proc_dir, bc_files[0]), sep="\t")
+
+    return cnp_df, X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc, params, trace, barcodes_df
 
 
 def run(args=None):
@@ -106,7 +112,7 @@ def run(args=None):
     _file_handler = add_file_logging(out_dir)
 
     # ── Load processed data ──
-    cnp_df, X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc, params, trace = _load_proc_data(proc_dir, data_type)
+    cnp_df, X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc, params, trace, barcodes_df = _load_proc_data(proc_dir, data_type)
 
     # ── Load predictions ──
     pred_df = pd.read_csv(args["pred_labels"], sep="\t")
@@ -122,14 +128,28 @@ def run(args=None):
         assert "BARCODE" in ref_df.columns
         assert ref_label in ref_df.columns
 
-    # ── Build SX_Data ──
+    # ── Build SX_Data (use saved barcodes to match matrix dimensions) ──
     seg_sx = None
     raw_clust = None
     if X is not None:
-        barcodes_df = pred_df[["BARCODE"]].copy()
-        barcodes_df["REP_ID"] = pred_df["REP_ID"] if "REP_ID" in pred_df.columns else "R1"
+        if barcodes_df is None:
+            barcodes_df = pred_df[["BARCODE"]].copy()
+            barcodes_df["REP_ID"] = pred_df["REP_ID"] if "REP_ID" in pred_df.columns else "R1"
         seg_sx = SX_Data(barcodes_df, cnp_df, X, Y, D, baf_clip=0.1)
         raw_clust = seg_sx.to_cluster_level()
+
+    # ── Align pred_df to proc barcodes ──
+    if barcodes_df is not None and len(pred_df) != len(barcodes_df):
+        proc_bcs = set(barcodes_df["BARCODE"])
+        anns_base = barcodes_df.copy()
+        pred_map = pred_df.set_index("BARCODE")
+        for col in pred_df.columns:
+            if col == "BARCODE":
+                continue
+            anns_base[col] = anns_base["BARCODE"].map(pred_map[col].to_dict())
+        anns_base[pred_label] = anns_base[pred_label].fillna("NA").astype(str)
+        pred_df = anns_base
+        logging.info(f"aligned pred_df to proc barcodes: {len(pred_df)} spots")
 
     # ── Init normal evaluation ──
     init_file = [f for f in os.listdir(proc_dir) if f.endswith(".init_labels.tsv")]

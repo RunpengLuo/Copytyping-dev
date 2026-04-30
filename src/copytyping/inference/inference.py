@@ -203,13 +203,16 @@ def run(args=None):
         index=False,
     )
 
+    # Save barcodes
+    barcodes.to_csv(os.path.join(proc_dir, f"{out_prefix}.barcodes.tsv"), sep="\t", index=False)
+
     # Save segment-level count matrices
     for data_type in data_types:
         sx = seg_data_sources[data_type]
         prefix = os.path.join(proc_dir, f"{out_prefix}.{data_type}")
-        sparse.save_npz(f"{prefix}.X.npz", sparse.csr_matrix(sx.X))
-        sparse.save_npz(f"{prefix}.Y.npz", sparse.csr_matrix(sx.Y))
-        sparse.save_npz(f"{prefix}.D.npz", sparse.csr_matrix(sx.D))
+        sparse.save_npz(f"{prefix}.seg.X.npz", sparse.csr_matrix(sx.X))
+        sparse.save_npz(f"{prefix}.seg.Y.npz", sparse.csr_matrix(sx.Y))
+        sparse.save_npz(f"{prefix}.seg.D.npz", sparse.csr_matrix(sx.D))
         logging.info(f"saved {data_type} count matrices: X/Y/D shape=({sx.G}, {sx.N})")
 
     # Save model params
