@@ -42,7 +42,6 @@ from copytyping.validation.metrics import (
 )
 
 
-
 def run(args=None):
     if isinstance(args, argparse.Namespace):
         args = vars(args)
@@ -79,6 +78,7 @@ def run(args=None):
     pred_df = pd.read_csv(args["pred_labels"], sep="\t")
     assert "BARCODE" in pred_df.columns, "pred_labels must have BARCODE column"
     assert pred_label in pred_df.columns, f"pred_labels must have {pred_label} column"
+    pred_df[pred_label] = pred_df[pred_label].fillna("NA").astype(str)
     logging.info(
         f"predictions: {len(pred_df)} spots, labels: {pred_df[pred_label].value_counts().to_dict()}"
     )
@@ -95,7 +95,11 @@ def run(args=None):
     if init_file and ref_df is not None:
         init_df = pd.read_csv(os.path.join(proc_dir, init_file[0]), sep="\t")
         init_is_normal = (init_df["init_label"] == "normal").values
-        evaluate_init_normal(init_is_normal, pred_df.merge(ref_df[["BARCODE", ref_label]], on="BARCODE", how="left"), ref_label)
+        evaluate_init_normal(
+            init_is_normal,
+            pred_df.merge(ref_df[["BARCODE", ref_label]], on="BARCODE", how="left"),
+            ref_label,
+        )
 
     # ── Merge ──
     anns = pred_df.copy()

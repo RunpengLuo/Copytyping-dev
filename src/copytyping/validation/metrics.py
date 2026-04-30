@@ -57,10 +57,10 @@ def compute_cluster_baf_metrics(sx_data, labels):
 
 
 def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
-    """Compute metrics for a subset of annotations."""
-    known_mask = ~anns_sub[ref_label].isin(NA_CELLTYPE)
+    """Compute metrics for a subset of annotations. NA labels excluded."""
+    known_mask = ~anns_sub[ref_label].isin(NA_CELLTYPE) & ~anns_sub[qry_label].isin(NA_CELLTYPE)
     anns_known = anns_sub[known_mask]
-    na_count = int((anns_sub[qry_label] == "NA").sum())
+    na_count = int(anns_sub[qry_label].isin(NA_CELLTYPE).sum())
     total = len(anns_sub)
 
     y_true = anns_known[ref_label].apply(is_tumor_label).to_numpy(dtype=int)
