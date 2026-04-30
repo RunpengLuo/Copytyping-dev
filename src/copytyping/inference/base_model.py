@@ -201,7 +201,6 @@ class Base_Model:
             )
 
         self._pi_alpha = init_params["pi_alpha"]
-        self._purity_cutoffs = init_params["purity_cutoffs"]
         self._tau_bounds = init_params["tau_bounds"]
         self._invphi_bounds = init_params["invphi_bounds"]
         params, fix_params, init_labeling = self._init_params(

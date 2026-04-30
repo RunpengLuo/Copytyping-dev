@@ -25,7 +25,6 @@ def prepare_params(args, cnv_blocks, platform, data_types):
         "pi_alpha": args["pi_alpha"],
         "tau_bounds": tau_bounds,
         "invphi_bounds": invphi_bounds,
-        "purity_cutoffs": [float(x) for x in str(args["purity_cutoff"]).split(",")],
         "ref_label": args["ref_label"],
         "niters": args["niters"],
     }

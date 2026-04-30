@@ -13,9 +13,13 @@ def merge_celltype_into_barcodes(barcodes_df, cell_type_df, ref_label, data_type
 
     Drops the ref_label column if all labels are uninformative (NA_CELLTYPE).
     """
+    merge_cols = ["BARCODE", ref_label]
+    ref_purity_col = f"{ref_label}-tumor_purity"
+    if ref_purity_col in cell_type_df.columns:
+        merge_cols.append(ref_purity_col)
     barcodes_df = pd.merge(
         left=barcodes_df,
-        right=cell_type_df[["BARCODE", ref_label]],
+        right=cell_type_df[merge_cols],
         on="BARCODE",
         how="left",
         validate="1:1",

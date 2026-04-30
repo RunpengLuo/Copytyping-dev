@@ -239,26 +239,31 @@ def run(args=None):
     if is_spot and spatial_graphs:
         jc_metric = compute_joincount_zscores(anns, label, spatial_graphs, data_types)
 
-    # Evaluate main label + all pcut labels
-    pcut_cols = [c for c in anns.columns if c.startswith(f"{label}_pcut")]
-    eval_labels = pcut_cols if pcut_cols else [label]
+    # Evaluate
     if ref_label in barcodes.columns:
         purity_col = "tumor_purity" if is_spot else "tumor"
-        for eval_label in eval_labels:
-            if "_pcut" in eval_label:
-                row_label = f"pcut{eval_label.rsplit('_pcut', 1)[-1]}"
-            else:
-                row_label = "default"
-            m = evaluate_malignant_accuracy(
-                anns,
-                qry_label=eval_label,
-                ref_label=ref_label,
-                tumor_post=purity_col if purity_col in anns.columns else "tumor",
-            )
-            eval_rows.append({**base_meta, "label": row_label, **m, **jc_metric})
+        m = evaluate_malignant_accuracy(
+            anns,
+            qry_label=label,
+            ref_label=ref_label,
+            tumor_post=purity_col if purity_col in anns.columns else "tumor",
+        )
+        eval_rows.append({**base_meta, **m, **jc_metric})
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
     else:
-        eval_rows.append({**base_meta, "label": "default", **jc_metric})
+        eval_rows.append({**base_meta, **jc_metric})
+
+    # Compare inferred purity vs reference purity if available
+    ref_purity_col = f"{ref_label}-tumor_purity"
+    if ref_purity_col in anns.columns and "tumor_purity" in anns.columns:
+        ref_pur = anns[ref_purity_col].dropna().values
+        inf_pur = anns.loc[anns[ref_purity_col].notna(), "tumor_purity"].values
+        corr = np.corrcoef(ref_pur, inf_pur)[0, 1]
+        mae = np.mean(np.abs(ref_pur - inf_pur))
+        logging.info(
+            f"purity comparison vs {ref_purity_col}: "
+            f"corr={corr:.4f}, MAE={mae:.4f}, n={len(ref_pur)}"
+        )
 
     eval_df = pd.DataFrame(eval_rows)
     metric = eval_rows[0] if eval_rows else base_meta
@@ -312,28 +317,22 @@ def run(args=None):
             if is_normal.sum() > 0
             else None
         )
-        pcut_cols = [c for c in anns.columns if c.startswith(f"{label}_pcut")]
-        obs_labels = pcut_cols if pcut_cols else [label]
+        obs_labels = [label]
         if ref_label in anns.columns:
             obs_labels = [ref_label] + obs_labels
         for obs_label in obs_labels:
-            if "_pcut" in obs_label:
-                suffix = obs_label.rsplit("_", 1)[-1]
-            else:
-                suffix = obs_label
             baf_metrics = compute_cluster_baf_metrics(raw_clust, anns[obs_label].values)
             for g, m in sorted(baf_metrics.items()):
                 logging.info(
-                    f"  [{data_type}] cluster {g} ({suffix}): "
-                    f"silhouette={m['silhouette']:.4f} within_var={m['within_var']:.4f} "
-                    f"silhouette_tumor={m['silhouette_tumor']:.4f} within_var_tumor={m['within_var_tumor']:.4f}"
+                    f"  [{data_type}] cluster {g} ({obs_label}): "
+                    f"within_var={m['within_var']:.4f} within_var_tumor={m['within_var_tumor']:.4f}"
                 )
             plot_cluster_observed_data(
                 raw_clust,
                 anns,
                 sample,
                 os.path.join(
-                    val_dir, f"{out_prefix}.{data_type}.cluster_obs.{suffix}.pdf"
+                    val_dir, f"{out_prefix}.{data_type}.cluster_obs.{obs_label}.pdf"
                 ),
                 label_col=obs_label,
                 baf_metrics=baf_metrics,
@@ -445,13 +444,11 @@ def run(args=None):
         visium_title = ""
         if metric.get("AUC_soft") is not None:
             visium_title += f"AUC={metric['AUC_soft']:.3f}"
-        pcut_labels = [c for c in anns.columns if c.startswith(f"{label}_pcut")]
         plot_visium_panel(
             sample,
             visium_slices,
             plot_dir,
             spot_label=label,
-            spot_labels_pcut=pcut_labels if pcut_labels else None,
             path_label=ref_label,
             dpi=args["dpi"],
             title_info=visium_title,

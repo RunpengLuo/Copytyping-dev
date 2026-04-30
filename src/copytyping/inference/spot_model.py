@@ -217,48 +217,29 @@ class Spot_Model(Base_Model):
         return anns
 
     def predict(self, fit_mode, params, label, **kwargs):
-        """Predict clone labels by thresholding purity.
+        """Predict clone labels via MAP. Purity reported but does not affect labels.
 
         1. Clone MAP: z_n = argmax_k gamma_nk (over tumor clones)
-        2. Purity threshold: θ_n <= cutoff → "normal"
+        2. CQ score
         """
         gamma = self._e_step(fit_mode, params)
         theta = params[f"{self.data_types[0]}-theta"]
 
-        # Clone MAP over tumor clones
         clone_names = np.array(self.tumor_clones)
         map_k = gamma.argmax(axis=1)
-        base_labels = clone_names[map_k]
+        labels = clone_names[map_k]
         max_post = gamma[np.arange(self.N), map_k]
 
-        # CQ: conditional clone confidence
+        # CQ
         eps = 1e-10
-        max_r = gamma[np.arange(self.N), map_k]
-        cq = np.rint(-10 * np.log10(1 - max_r + eps)).astype(int)
+        cq = np.rint(-10 * np.log10(1 - max_post + eps)).astype(int)
 
         anns = self.barcodes.copy(deep=True)
         anns.loc[:, self.tumor_clones] = gamma
         anns["max_posterior"] = max_post
         anns["tumor_purity"] = theta
         anns["CQ"] = cq
-
-        # Apply purity cutoffs
-        pcut_labels = []
-        for pcut in self._purity_cutoffs:
-            col = f"{label}_pcut{pcut}"
-            labels_pcut = base_labels.copy()
-            low_pur = theta <= pcut
-            n_low = int(low_pur.sum())
-            if n_low > 0:
-                logging.info(
-                    f"purity filter (pcut={pcut}): {n_low} spots labeled normal"
-                )
-                labels_pcut[low_pur] = "normal"
-            anns[col] = labels_pcut
-            pcut_labels.append(col)
-
-        # Main label = first cutoff
-        anns[label] = anns[pcut_labels[0]].values
+        anns[label] = labels
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}
         self._log_posterior_stats(anns, label)

@@ -8,35 +8,30 @@ from sklearn.metrics import (
     adjusted_rand_score,
     precision_recall_fscore_support,
     roc_auc_score,
-    silhouette_score,
 )
 
 from copytyping.utils import NA_CELLTYPE, is_tumor_label
 
 
-def _baf_wvar_sil(baf, lab):
-    """Compute within-cluster BAF variance and silhouette for given baf/labels."""
+def _baf_within_var(baf, lab):
+    """Compute within-cluster BAF variance."""
     n_total = len(baf)
     within_var = 0.0
     for l in np.unique(lab):
         m = lab == l
         if m.sum() > 1:
             within_var += m.sum() * np.var(baf[m])
-    within_var /= max(n_total, 1)
-    sil = np.nan
-    if len(set(lab)) >= 2:
-        sil = silhouette_score(baf.reshape(-1, 1), lab)
-    return sil, within_var
+    return within_var / max(n_total, 1)
 
 
 def compute_cluster_baf_metrics(sx_data, labels):
-    """Compute per-cluster BAF silhouette and within-cluster variance.
+    """Compute per-cluster within-cluster BAF variance.
 
-    For each informative cluster g, computes metrics for:
-    - all cells (silhouette, within_var)
-    - tumor cells only, excluding "normal" label (silhouette_tumor, within_var_tumor)
+    For each informative cluster g, computes:
+    - within_var: all cells
+    - within_var_tumor: tumor cells only (excluding "normal" label)
 
-    Returns dict: cluster_index -> {silhouette, within_var, silhouette_tumor, within_var_tumor}.
+    Returns dict: cluster_index -> {within_var, within_var_tumor}.
     """
     results = {}
     for g in range(sx_data.G):
@@ -48,20 +43,16 @@ def compute_cluster_baf_metrics(sx_data, labels):
         baf = Y_g[valid] / D_g[valid]
         lab = labels[valid]
 
-        sil, wvar = _baf_wvar_sil(baf, lab)
+        wvar = _baf_within_var(baf, lab)
 
-        # Tumor only
         tumor_mask = lab != "normal"
-        sil_t, wvar_t = np.nan, np.nan
-        if tumor_mask.sum() > 0:
-            sil_t, wvar_t = _baf_wvar_sil(baf[tumor_mask], lab[tumor_mask])
+        wvar_t = (
+            _baf_within_var(baf[tumor_mask], lab[tumor_mask])
+            if tumor_mask.sum() > 0
+            else np.nan
+        )
 
-        results[g] = {
-            "silhouette": sil,
-            "within_var": wvar,
-            "silhouette_tumor": sil_t,
-            "within_var_tumor": wvar_t,
-        }
+        results[g] = {"within_var": wvar, "within_var_tumor": wvar_t}
     return results
 
 

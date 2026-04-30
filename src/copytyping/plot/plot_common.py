@@ -488,14 +488,10 @@ def plot_cluster_observed_data(
             metric_str = ""
             if baf_metrics and g in baf_metrics:
                 m = baf_metrics[g]
-                parts = []
-                if not np.isnan(m["silhouette"]):
-                    parts.append(f"silhouette={m['silhouette']:.3f}")
-                parts.append(f"within_var={m['within_var']:.4f}")
-                if not np.isnan(m["silhouette_tumor"]):
-                    parts.append(f"silhouette_tumor={m['silhouette_tumor']:.3f}")
-                parts.append(f"within_var_tumor={m['within_var_tumor']:.4f}")
-                metric_str = "\n" + "  ".join(parts)
+                metric_str = (
+                    f"\nwithin_var={m['within_var']:.4f}"
+                    f"  within_var_tumor={m['within_var_tumor']:.4f}"
+                )
             fig.suptitle(
                 f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
                 f"{'/'.join(tag)}{metric_str}\nCN: {cn_str}",

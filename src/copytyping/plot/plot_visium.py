@@ -93,14 +93,16 @@ def plot_visium_panel(
     slices: list,
     out_dir: str,
     spot_label="spot_label",
-    spot_labels_pcut=None,
     path_label="Microregion_annotation",
     dpi=300,
     size=1.5,
     alpha=0.8,
     title_info="",
 ):
-    """Single-page PDF: H&E, path_label, purity, copytyping (per pcut), CQ per slice."""
+    """Single-page PDF visium panel per slice.
+
+    Rows: H&E, path_label, ref purity, inferred purity, clone x purity, CQ.
+    """
     import squidpy as sq
     from matplotlib.collections import PatchCollection as _PC
 
@@ -109,73 +111,47 @@ def plot_visium_panel(
     plt.rcParams["svg.fonttype"] = "none"
 
     has_path = path_label in slices[0][1].columns
+    ref_purity_col = f"{path_label}-tumor_purity"
+    has_ref_purity = ref_purity_col in slices[0][1].columns
     has_cq = "CQ" in slices[0][1].columns
 
     row_labels = ["H&E"]
     if has_path:
         row_labels.append(path_label)
+    if has_ref_purity:
+        row_labels.append("ref purity")
     purity_label = f"tumor purity\n{title_info}" if title_info else "tumor purity"
     row_labels.append(purity_label)
+    clone_purity_ri = len(row_labels)
     row_labels.append("clone x purity")
-
-    # pcut label rows (or fallback to single spot_label)
-    if spot_labels_pcut:
-        label_rows = spot_labels_pcut
-    else:
-        label_rows = [spot_label]
-
-    # compute per-cutoff metrics if ref_label available
-    first_label_ri = len(row_labels)
-    all_anns = pd.concat([a for _, a, _ in slices], axis=0)
-    for col in label_rows:
-        pcut_val = col.rsplit("_pcut", 1)[-1] if "_pcut" in col else ""
-        rlabel = f"pcut={pcut_val}" if pcut_val else "copytyping"
-        if has_path and col in all_anns.columns:
-            ref = all_anns[path_label].values
-            pred = all_anns[col].values
-            ref_tum = np.array([is_tumor_label(str(x)) for x in ref])
-            pred_tum = pred != "normal"
-            known = ~pd.isnull(ref)
-            tp = int((pred_tum[known] & ref_tum[known]).sum())
-            fp = int((pred_tum[known] & ~ref_tum[known]).sum())
-            fn = int((~pred_tum[known] & ref_tum[known]).sum())
-            p = tp / max(tp + fp, 1)
-            r = tp / max(tp + fn, 1)
-            f = 2 * p * r / max(p + r, 1e-10)
-            rlabel += f"\nP={p:.2f} R={r:.2f} F1={f:.2f}"
-        row_labels.append(rlabel)
-
     if has_cq:
         row_labels.append("CQ score")
+
     nrows = len(row_labels)
     ncols = len(slices)
 
-    col_w, row_h = 6, 6
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
-        figsize=(col_w * ncols, row_h * nrows),
+        figsize=(6 * ncols, 6 * nrows),
         squeeze=False,
     )
 
     for ci, (rep_id, anns_vis, vis_adata) in enumerate(slices):
-        # Set up obs columns and colors
-        for col in label_rows:
-            vis_adata.obs[col] = anns_vis[col].astype("category")
-            set_label_colors(vis_adata, col)
+        vis_adata.obs[spot_label] = anns_vis[spot_label].astype("category")
+        set_label_colors(vis_adata, spot_label)
         if has_path:
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
             set_label_colors(vis_adata, path_label, clone_indexed=False)
+        if has_ref_purity:
+            vis_adata.obs[ref_purity_col] = anns_vis[ref_purity_col].values
         vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
 
         ri = 0
-        sq.pl.spatial_scatter(
-            vis_adata,
-            color=None,
-            library_id=rep_id,
-            ax=axes[ri, ci],
-        )
+        # 1. H&E
+        sq.pl.spatial_scatter(vis_adata, color=None, library_id=rep_id, ax=axes[ri, ci])
 
+        # 2. path_label (no H&E)
         if has_path:
             ri += 1
             sq.pl.spatial_scatter(
@@ -189,32 +165,47 @@ def plot_visium_panel(
                 edgecolors="none",
             )
 
+        # 3. ref purity (H&E)
+        if has_ref_purity:
+            ri += 1
+            sq.pl.spatial_scatter(
+                vis_adata,
+                color=ref_purity_col,
+                size=size,
+                library_id=rep_id,
+                ax=axes[ri, ci],
+                cmap="magma_r",
+                vmin=0,
+                vmax=1,
+                edgecolors="none",
+            )
+
+        # 4. inferred purity (H&E)
         ri += 1
         sq.pl.spatial_scatter(
             vis_adata,
             color="tumor_purity",
             size=size,
             library_id=rep_id,
+            ax=axes[ri, ci],
             cmap="magma_r",
             vmin=0,
             vmax=1,
-            ax=axes[ri, ci],
             edgecolors="none",
         )
 
-        # Clone x purity: clone color blended with lightgrey by purity
+        # 5. clone x purity (no H&E)
         ri += 1
-        first_label = label_rows[0] if label_rows else spot_label
         sq.pl.spatial_scatter(
             vis_adata,
-            color=first_label,
+            color=spot_label,
             size=size,
             library_id=rep_id,
             ax=axes[ri, ci],
             img=False,
             edgecolors="none",
         )
-        rgba = blend_purity_rgba(vis_adata, first_label, "tumor_purity")
+        rgba = blend_purity_rgba(vis_adata, spot_label, "tumor_purity")
         for child in axes[ri, ci].get_children():
             if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
                 child.set_facecolors(rgba)
@@ -223,26 +214,7 @@ def plot_visium_panel(
         if old_legend:
             old_legend.remove()
 
-        for col in label_rows:
-            ri += 1
-            sq.pl.spatial_scatter(
-                vis_adata,
-                color=col,
-                size=size,
-                library_id=rep_id,
-                ax=axes[ri, ci],
-                img=False,
-                edgecolors="none",
-            )
-            rgba = blend_purity_rgba(vis_adata, col, "tumor_purity")
-            for child in axes[ri, ci].get_children():
-                if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
-                    child.set_facecolors(rgba)
-                    break
-            old_leg = axes[ri, ci].get_legend()
-            if old_leg:
-                old_leg.remove()
-
+        # 6. CQ score (no H&E)
         if has_cq:
             ri += 1
             cq_vals = anns_vis["CQ"].values.copy().astype(float)
@@ -262,13 +234,12 @@ def plot_visium_panel(
                 vmax=30,
             )
 
-    # shared legend on the first label row from all slices' categories
+    # Shared legend on clone x purity row
     all_cats = set()
-    first_label_col = label_rows[0]
     for _, anns_vis, vis_adata in slices:
-        all_cats.update(vis_adata.obs[first_label_col].cat.categories)
+        all_cats.update(vis_adata.obs[spot_label].cat.categories)
     all_cats = sorted(all_cats, key=lambda x: (x != "normal", x == "NA", x))
-    axes[first_label_ri, -1].legend(
+    axes[clone_purity_ri, -1].legend(
         handles=build_legend(all_cats),
         loc="center left",
         bbox_to_anchor=(1.0, 0.5),
@@ -290,7 +261,6 @@ def plot_visium_panel(
     for ri in range(nrows):
         for ci, (rep_id, _, _) in enumerate(slices):
             axes[ri, ci].set_title(f"{sample}_{rep_id}", fontsize=10)
-
     for ri, rlabel in enumerate(row_labels):
         axes[ri, 0].set_ylabel(rlabel, fontsize=13, fontweight="bold")
 

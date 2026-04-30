@@ -222,14 +222,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="spatial smoothing level: 0=none, 1=add neighbor counts, 2=2-hop, etc.",
     )
     parser.add_argument(
-        "--purity_cutoff",
-        required=False,
-        type=str,
-        help="comma-separated purity cutoffs for labeling, "
-        "e.g. '0.5,0.6,0.7' (default: 0.5)",
-        default="0.5",
-    )
-    parser.add_argument(
         "--min_snp_count",
         required=False,
         type=int,
