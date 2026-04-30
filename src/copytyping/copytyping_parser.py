@@ -516,13 +516,23 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         default=6,
         help="Number of spatial neighbors (default: 6)",
     )
-    parser.add_argument("-o", "--out_dir", required=True, type=str, help="output directory")
+    parser.add_argument(
+        "-o", "--out_dir", required=True, type=str, help="output directory"
+    )
     parser.add_argument(
         "--dpi",
         required=False,
         type=int,
         default=200,
         help="DPI for plots (default: 200)",
+    )
+    parser.add_argument(
+        "--purity_cutoff",
+        required=False,
+        type=str,
+        default="0.5,0.6,0.7",
+        help="comma-separated purity cutoffs for hard label evaluation "
+        "(default: 0.5,0.6,0.7). Spots with purity <= cutoff labeled normal.",
     )
     parser.add_argument(
         "-v",

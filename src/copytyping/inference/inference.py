@@ -154,13 +154,16 @@ def run(args=None):
     # Save init normal labels
     if instance.labeling_trace:
         init_labels = instance.labeling_trace[0]["labels"]
-        init_df = pd.DataFrame({
-            "BARCODE": barcodes["BARCODE"].values,
-            "init_label": init_labels,
-        })
+        init_df = pd.DataFrame(
+            {
+                "BARCODE": barcodes["BARCODE"].values,
+                "init_label": init_labels,
+            }
+        )
         init_df.to_csv(
             os.path.join(proc_dir, f"{out_prefix}.init_labels.tsv"),
-            sep="\t", index=False,
+            sep="\t",
+            index=False,
         )
 
     label = f"{args['method']}-label"

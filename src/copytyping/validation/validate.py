@@ -110,61 +110,85 @@ def run(args=None):
             merge_cols.append(ref_purity_col)
         anns = anns.merge(ref_df[merge_cols], on="BARCODE", how="left")
 
+    # ── Purity cutoff sweep ──
+    pcuts = [float(x) for x in args["purity_cutoff"].split(",")] if args.get("purity_cutoff") else []
+    has_purity = "tumor_purity" in anns.columns
+
+    if has_purity and pcuts:
+        base_labels = anns[pred_label].values.copy()
+        purity = anns["tumor_purity"].values
+        for pcut in pcuts:
+            col = f"{pred_label}_pcut{pcut}"
+            labels_pcut = base_labels.copy()
+            low_pur = (labels_pcut != "NA") & (~np.isnan(purity)) & (purity <= pcut)
+            labels_pcut[low_pur] = "normal"
+            anns[col] = labels_pcut
+
     # ── Evaluate ──
-    metric = {"SAMPLE": sample}
+    eval_rows = []
+    base_meta = {"SAMPLE": sample}
+
+    # Purity comparison (shared across pcuts)
+    ref_purity_col = f"{ref_label}-tumor_purity"
+    if ref_df is not None and ref_purity_col in anns.columns and has_purity:
+        valid = anns[ref_purity_col].notna() & anns["tumor_purity"].notna()
+        if valid.sum() > 10:
+            rp = anns.loc[valid, ref_purity_col].values
+            ip = anns.loc[valid, "tumor_purity"].values
+            corr = np.corrcoef(rp, ip)[0, 1]
+            mae = np.mean(np.abs(rp - ip))
+            base_meta["purity_corr"] = corr
+            base_meta["purity_MAE"] = mae
+            logging.info(f"purity: corr={corr:.4f}, MAE={mae:.4f}")
+
+    # Evaluate raw labels + each pcut
+    eval_labels = [pred_label]
+    if has_purity and pcuts:
+        eval_labels += [f"{pred_label}_pcut{pcut}" for pcut in pcuts]
+
     if ref_df is not None and ref_label in anns.columns:
-        purity_col = "tumor_purity" if "tumor_purity" in anns.columns else None
-        m = evaluate_malignant_accuracy(
-            anns,
-            qry_label=pred_label,
-            ref_label=ref_label,
-            tumor_post=purity_col if purity_col else "tumor",
-        )
-        metric.update(m)
+        purity_col = "tumor_purity" if has_purity else "tumor"
+        for eval_label in eval_labels:
+            m = evaluate_malignant_accuracy(
+                anns,
+                qry_label=eval_label,
+                ref_label=ref_label,
+                tumor_post=purity_col if purity_col in anns.columns else "tumor",
+            )
+            eval_rows.append({**base_meta, "label": eval_label, **m})
 
-        # Purity comparison
-        ref_purity_col = f"{ref_label}-tumor_purity"
-        if ref_purity_col in anns.columns and "tumor_purity" in anns.columns:
-            valid = anns[ref_purity_col].notna() & anns["tumor_purity"].notna()
-            if valid.sum() > 10:
-                rp = anns.loc[valid, ref_purity_col].values
-                ip = anns.loc[valid, "tumor_purity"].values
-                corr = np.corrcoef(rp, ip)[0, 1]
-                mae = np.mean(np.abs(rp - ip))
-                metric["purity_corr"] = corr
-                metric["purity_MAE"] = mae
-                logging.info(f"purity: corr={corr:.4f}, MAE={mae:.4f}")
-
-        # Crosstab
+        # Crosstab for best f1 pcut
+        best_row = max(eval_rows, key=lambda r: r.get("f1", 0) if not np.isnan(r.get("f1", 0)) else 0)
+        best_label = best_row["label"]
         plot_crosstab(
-            anns,
-            sample,
+            anns, sample,
             os.path.join(out_dir, f"{sample}.crosstab.png"),
-            metric=metric,
-            acol=pred_label,
-            bcol=ref_label,
+            metric=best_row, acol=best_label, bcol=ref_label,
         )
 
-        # Refine
         anns = refine_labels_by_reference(
             anns, ref_label, pred_label, f"{pred_label}-refined"
         )
+    else:
+        eval_rows.append(base_meta)
 
     # ── Joincount ──
     if args.get("h5ad") and "REP_ID" in anns.columns:
         spatial_graphs = load_spatial_neighbors(args["h5ad"], n_neighs=args["n_neighs"])
         jc = compute_joincount_zscores(anns, pred_label, spatial_graphs, [data_type])
-        metric.update(jc)
+        for row in eval_rows:
+            row.update(jc)
 
     # ── Save evaluation ──
-    eval_df = pd.DataFrame([metric])
+    eval_df = pd.DataFrame(eval_rows)
     eval_df.to_csv(
         os.path.join(out_dir, f"{sample}.evaluation.tsv"),
-        sep="\t",
-        index=False,
-        na_rep="",
+        sep="\t", index=False, na_rep="",
     )
     logging.info(f"saved evaluation to {out_dir}/{sample}.evaluation.tsv")
+    cols = [c for c in ["label", "f1", "precision", "recall", "AUC_hard", "AUC_soft", "ARI_binary", "ARI_clone"] if c in eval_df.columns]
+    if cols:
+        logging.info(f"\n{eval_df[cols].to_string(index=False)}")
 
     # ── Cluster obs + BAF metrics ──
     if x_file and sx_data is None:
@@ -212,6 +236,35 @@ def run(args=None):
             sample,
             os.path.join(out_dir, f"{sample}.purity_histograms.pdf"),
             label_col=pred_label,
+            dpi=args["dpi"],
+        )
+
+    # ── Visium spatial panel ──
+    if args.get("h5ad") and "REP_ID" in anns.columns:
+        import scanpy as sc
+        from copytyping.plot.plot_visium import plot_visium_panel
+
+        h5ad_adata = sc.read_h5ad(args["h5ad"])
+
+        # Use best pcut label for the visium panel spot_label
+        best_label = pred_label
+        if eval_rows:
+            best_row = max(eval_rows, key=lambda r: r.get("f1", 0) if not np.isnan(r.get("f1", 0)) else 0)
+            best_label = best_row.get("label", pred_label)
+
+        anns_indexed = anns.set_index("BARCODE")
+        visium_slices = []
+        for rep_id in sorted(anns["REP_ID"].unique()):
+            anns_rep = anns[anns["REP_ID"] == rep_id]
+            vis_adata = h5ad_adata[h5ad_adata.obs_names.isin(anns_rep["BARCODE"].values)].copy()
+            anns_vis = anns_indexed.reindex(vis_adata.obs_names)
+            if ref_label not in anns_vis.columns:
+                anns_vis[ref_label] = "Unknown"
+            visium_slices.append((rep_id, anns_vis, vis_adata))
+
+        plot_visium_panel(
+            sample, visium_slices, out_dir,
+            spot_label=best_label, path_label=ref_label,
             dpi=args["dpi"],
         )
 
