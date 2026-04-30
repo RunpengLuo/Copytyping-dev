@@ -75,13 +75,15 @@ def blend_purity_rgba(adata, label_col, purity_col):
     colors = build_label_colors(cats)
     cat_rgb = {c: np.array(mcolors.to_rgb(colors[i])) for i, c in enumerate(cats)}
 
-    purity = np.nan_to_num(adata.obs[purity_col].to_numpy(dtype=float), nan=0.0)
-    purity = np.clip(purity, 0.0, 1.0)
+    raw_purity = adata.obs[purity_col].to_numpy(dtype=float)
+    na_mask = np.isnan(raw_purity)
+    purity = np.clip(np.nan_to_num(raw_purity, nan=0.0), 0.0, 1.0)
     n = len(adata)
     rgba = np.ones((n, 4), dtype=float)
     for i in range(n):
         c = cat_rgb.get(labels.iloc[i], gray)
         rgba[i, :3] = purity[i] * c + (1 - purity[i]) * gray
+    rgba[na_mask, 3] = 0.0  # NA purity → transparent
     return rgba
 
 
