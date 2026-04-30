@@ -4,6 +4,7 @@ from copytyping.copytyping_parser import add_arguments_inference, add_arguments_
 from copytyping.inference.inference import run as copytyping_inference
 from copytyping.pipeline import run as copytyping_pipeline
 from copytyping.utils import log_arguments, setup_logging
+from copytyping.validation.validate import add_arguments_validate, run as copytyping_validate
 
 
 def main(argv=None):
@@ -17,6 +18,10 @@ def main(argv=None):
     p_pipe = subparsers.add_parser("run_pipeline", help="batch run from a panel TSV")
     add_arguments_pipeline(p_pipe)
     p_pipe.set_defaults(func=copytyping_pipeline)
+
+    p_val = subparsers.add_parser("validate", help="evaluate labels against reference")
+    add_arguments_validate(p_val)
+    p_val.set_defaults(func=copytyping_validate)
 
     args = parser.parse_args(argv)
     setup_logging(args)

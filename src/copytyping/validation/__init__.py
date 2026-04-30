@@ -1,5 +1,4 @@
-# Re-export from copytyping.validation for backward compatibility
-from copytyping.validation.metrics import (  # noqa: F401
+from copytyping.validation.metrics import (
     compute_cluster_baf_metrics,
     compute_joincount_zscores,
     evaluate_init_normal,
