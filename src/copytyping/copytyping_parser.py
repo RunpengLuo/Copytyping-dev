@@ -187,6 +187,12 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         default=False,
         help="if set, update NB dispersion (inv_phi) in M-step (cell model only)",
     )
+    parser.add_argument(
+        "--export_counts",
+        action="store_true",
+        default=False,
+        help="export segment-level X/Y/D count matrices as NPZ files",
+    )
     ##################################################
     # plot parameters
     parser.add_argument(
@@ -215,11 +221,26 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="number of spatial neighbors (default: 6 for Visium hexagonal)",
     )
     parser.add_argument(
-        "--smooth_k",
+        "--max_smooth_k",
+        required=False,
+        type=int,
+        default=1,
+        help="max adaptive smoothing level (0=none). Low-count spots get "
+        "progressively smoothed k=1..max_smooth_k until thresholds met.",
+    )
+    parser.add_argument(
+        "--min_umi_per_spot",
         required=False,
         type=int,
         default=0,
-        help="spatial smoothing level: 0=none, 1=add neighbor counts, 2=2-hop, etc.",
+        help="minimum total UMI per spot for adaptive smoothing (default: 0=disabled)",
+    )
+    parser.add_argument(
+        "--min_snp_umi_per_spot",
+        required=False,
+        type=int,
+        default=0,
+        help="minimum total allele UMI per spot for adaptive smoothing (default: 0=disabled)",
     )
     parser.add_argument(
         "--min_snp_count",

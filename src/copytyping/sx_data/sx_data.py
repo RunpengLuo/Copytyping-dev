@@ -75,51 +75,93 @@ class SX_Data:
         }
         return M, mask
 
-    def apply_spatial_smoothing(self, W_per_rep, k):
-        r"""k-hop additive spatial smoothing, in-place.
+    def apply_adaptive_smoothing(self, W_per_rep, max_k, min_umi, min_snp_umi):
+        r"""Adaptive per-spot spatial smoothing, in-place.
 
-        For each spot n, sum counts from all spots within k hops (each
-        neighbor counted once). Builds binary k-hop reachability:
-
-        .. math::
-            R = \mathbb{1}[(I + W)^k > 0], \quad X \leftarrow X \cdot R^T
+        For each spot, progressively smooth k=1,2,...,max_k until per-spot
+        total UMI >= min_umi AND total allele >= min_snp_umi, or max_k reached.
+        Spots already meeting thresholds are not smoothed.
 
         Args:
             W_per_rep: dict[rep_id -> {"BARCODE": array, "W": sparse}].
-            k: smoothing level. 0=no-op.
+            max_k: maximum smoothing level.
+            min_umi: minimum total UMI threshold per spot.
+            min_snp_umi: minimum total allele (D) threshold per spot.
         """
-        if k <= 0:
+        if max_k <= 0:
             return
         T_before = self.T.copy()
         D_before = self.D.sum(axis=0).copy()
         bc_arr = self.barcodes["BARCODE"].values
+        spot_k = np.zeros(self.N, dtype=int)  # smoothing level per spot
+
         for rep_id, sg in W_per_rep.items():
             W = sg["W"]
             sg_bcs = sg["BARCODE"]
             N_rep = len(sg_bcs)
-            A = sparse.eye(N_rep, format="csr") + sparse.csr_matrix(W > 0).astype(
-                np.int8
-            )
-            reach = A
-            for _ in range(k - 1):
-                reach = reach @ A
-            reach = (reach > 0).astype(np.int8)
+            A = sparse.eye(N_rep, format="csr") + sparse.csr_matrix(W > 0).astype(np.int8)
+
             bc_set = set(sg_bcs)
             col_idx = np.array([i for i, bc in enumerate(bc_arr) if bc in bc_set])
             if len(col_idx) != N_rep:
                 continue
-            self.X[:, col_idx] = self.X[:, col_idx] @ reach.T
-            self.Y[:, col_idx] = self.Y[:, col_idx] @ reach.T
-            self.D[:, col_idx] = self.D[:, col_idx] @ reach.T
+
+            # Precompute reachability matrices for k=1..max_k
+            reach_list = []
+            reach = A
+            for kk in range(max_k):
+                if kk > 0:
+                    reach = reach @ A
+                reach_list.append((reach > 0).astype(np.int8))
+
+            # Original counts for this rep
+            X_orig = self.X[:, col_idx].copy()
+            Y_orig = self.Y[:, col_idx].copy()
+            D_orig = self.D[:, col_idx].copy()
+
+            for kk in range(max_k):
+                # Check which spots still need smoothing
+                cur_T = self.X[:, col_idx].sum(axis=0)
+                cur_D = self.D[:, col_idx].sum(axis=0)
+                # Flatten to 1D if matrix
+                cur_T = np.asarray(cur_T).ravel()
+                cur_D = np.asarray(cur_D).ravel()
+                needs_smooth = (cur_T < min_umi) | (cur_D < min_snp_umi)
+                if not needs_smooth.any():
+                    break
+
+                # Apply k=(kk+1) smoothing to spots that need it
+                R = reach_list[kk]
+                X_smooth = X_orig @ R.T
+                Y_smooth = Y_orig @ R.T
+                D_smooth = D_orig @ R.T
+
+                for j in range(N_rep):
+                    if needs_smooth[j]:
+                        self.X[:, col_idx[j]] = np.asarray(X_smooth[:, j]).ravel()
+                        self.Y[:, col_idx[j]] = np.asarray(Y_smooth[:, j]).ravel()
+                        self.D[:, col_idx[j]] = np.asarray(D_smooth[:, j]).ravel()
+                        spot_k[col_idx[j]] = kk + 1
+
         self.T = np.sum(self.X, axis=0)
         D_after = self.D.sum(axis=0)
+
+        n_smoothed = (spot_k > 0).sum()
+        smoothed = spot_k > 0
+        k_counts = {k: int((spot_k == k).sum()) for k in range(max_k + 1) if (spot_k == k).any()}
         logging.info(
-            f"apply_spatial_smoothing k={k}: "
-            f"read count median {int(np.median(T_before))}->{int(np.median(self.T))}, "
-            f"mean {int(np.mean(T_before))}->{int(np.mean(self.T))}; "
-            f"allele count median {int(np.median(D_before))}->{int(np.median(D_after))}, "
-            f"mean {int(np.mean(D_before))}->{int(np.mean(D_after))}"
+            f"adaptive smoothing (max_k={max_k}, min_umi={min_umi}, min_snp_umi={min_snp_umi}): "
+            f"{n_smoothed}/{self.N} spots smoothed, k distribution: {k_counts}"
         )
+        logging.info(
+            f"  all spots: UMI median {int(np.median(T_before))}->{int(np.median(self.T))}, "
+            f"allele median {int(np.median(D_before))}->{int(np.median(D_after))}"
+        )
+        if n_smoothed > 0:
+            logging.info(
+                f"  smoothed spots: UMI median {int(np.median(T_before[smoothed]))}->{int(np.median(self.T[smoothed]))}, "
+                f"allele median {int(np.median(D_before[smoothed]))}->{int(np.median(D_after[smoothed]))}"
+            )
 
     def to_cluster_level(self):
         """Return a new SX_Data-like object at CNP-cluster level.

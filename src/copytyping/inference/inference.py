@@ -73,8 +73,10 @@ def run(args=None):
     _file_handler = add_file_logging(out_dir)
     plot_dir = os.path.join(out_dir, "plots")
     val_dir = os.path.join(out_dir, "validation")
+    proc_dir = os.path.join(out_dir, "processed_data")
     os.makedirs(plot_dir, exist_ok=True)
     os.makedirs(val_dir, exist_ok=True)
+    os.makedirs(proc_dir, exist_ok=True)
 
     logging.info(f"sample={sample}, platform={platform}, data_types={data_types}")
 
@@ -137,10 +139,14 @@ def run(args=None):
                 )
 
         raw_data_sources[data_type] = seg_sx.to_cluster_level()
-        if data_type in spatial_graphs and args["smooth_k"] > 0:
+        max_k = args.get("max_smooth_k", 0)
+        if data_type in spatial_graphs and max_k > 0:
             seg_sx_smoothed = copy.deepcopy(seg_sx)
-            seg_sx_smoothed.apply_spatial_smoothing(
-                spatial_graphs[data_type], args["smooth_k"]
+            seg_sx_smoothed.apply_adaptive_smoothing(
+                spatial_graphs[data_type],
+                max_k=max_k,
+                min_umi=args.get("min_umi_per_spot", 0),
+                min_snp_umi=args.get("min_snp_umi_per_spot", 0),
             )
             data_sources[data_type] = seg_sx_smoothed.to_cluster_level()
         else:
@@ -148,7 +154,7 @@ def run(args=None):
 
     save_cnp_profile(
         seg_data_sources,
-        os.path.join(out_dir, f"{out_prefix}.cnp_profile.tsv"),
+        os.path.join(proc_dir, f"{out_prefix}.cnp_profile.tsv"),
     )
 
     barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
@@ -281,6 +287,21 @@ def run(args=None):
         header=True,
         index=False,
     )
+
+    # ---- Export segment-level count matrices ----
+    if args.get("export_counts"):
+        from scipy import sparse
+
+        for data_type in data_types:
+            sx = seg_data_sources[data_type]
+            prefix = os.path.join(proc_dir, f"{out_prefix}.{data_type}")
+            sparse.save_npz(f"{prefix}.X.npz", sparse.csr_matrix(sx.X))
+            sparse.save_npz(f"{prefix}.Y.npz", sparse.csr_matrix(sx.Y))
+            sparse.save_npz(f"{prefix}.D.npz", sparse.csr_matrix(sx.D))
+            logging.info(
+                f"exported {data_type} count matrices: "
+                f"X/Y/D shape=({sx.G}, {sx.N}) to {prefix}.{{X,Y,D}}.npz"
+            )
 
     # ---- Plotting (all reps combined per data_type) ----
     if ref_label in anns.columns:

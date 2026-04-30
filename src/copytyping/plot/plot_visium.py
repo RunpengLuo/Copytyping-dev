@@ -15,10 +15,9 @@ logging.getLogger("anndata").setLevel(logging.WARNING)
 
 # ── Unified color palette ──
 # normal=gray, NA=tab10[0], tumor clones=tab10[1:]
-_PALETTE = sns.color_palette("tab10", 10).as_hex()
 NORMAL_COLOR = "lightgray"
-NA_COLOR = _PALETTE[0]
-_TUMOR_COLORS = _PALETTE[1:]
+NA_COLOR = "darkgray"
+_TUMOR_COLORS = sns.color_palette("tab10", 10).as_hex()
 
 
 def _label_color_index(label):
@@ -76,7 +75,8 @@ def blend_purity_rgba(adata, label_col, purity_col):
     colors = build_label_colors(cats)
     cat_rgb = {c: np.array(mcolors.to_rgb(colors[i])) for i, c in enumerate(cats)}
 
-    purity = adata.obs[purity_col].to_numpy(dtype=float)
+    purity = np.nan_to_num(adata.obs[purity_col].to_numpy(dtype=float), nan=0.0)
+    purity = np.clip(purity, 0.0, 1.0)
     n = len(adata)
     rgba = np.ones((n, 4), dtype=float)
     for i in range(n):
