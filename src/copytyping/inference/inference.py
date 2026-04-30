@@ -19,7 +19,6 @@ from copytyping.inference.inference_utils import (
 )
 from copytyping.inference.model_utils import prepare_params
 from copytyping.inference.spot_model import Spot_Model
-from copytyping.inference.validation import evaluate_init_normal
 from copytyping.io_utils import (
     load_modality_data,
     load_spatial_neighbors,
@@ -152,10 +151,17 @@ def run(args=None):
         max_iter=args["niters"],
     )
 
-    # init normal diagnostics
+    # Save init normal labels
     if instance.labeling_trace:
-        init_is_normal = instance.labeling_trace[0]["labels"] == "normal"
-        evaluate_init_normal(init_is_normal, barcodes, ref_label)
+        init_labels = instance.labeling_trace[0]["labels"]
+        init_df = pd.DataFrame({
+            "BARCODE": barcodes["BARCODE"].values,
+            "init_label": init_labels,
+        })
+        init_df.to_csv(
+            os.path.join(proc_dir, f"{out_prefix}.init_labels.tsv"),
+            sep="\t", index=False,
+        )
 
     label = f"{args['method']}-label"
     if args["method"] == "kmeans":

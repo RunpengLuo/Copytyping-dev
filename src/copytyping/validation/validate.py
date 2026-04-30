@@ -36,6 +36,7 @@ from copytyping.utils import add_file_logging, setup_logging
 from copytyping.validation.metrics import (
     compute_cluster_baf_metrics,
     compute_joincount_zscores,
+    evaluate_init_normal,
     evaluate_malignant_accuracy,
     refine_labels_by_reference,
 )
@@ -138,6 +139,13 @@ def run(args=None):
         ref_df = pd.read_csv(args["ref_labels"], sep="\t")
         assert "BARCODE" in ref_df.columns
         assert ref_label in ref_df.columns
+
+    # ── Evaluate init normal labels if available ──
+    init_file = [f for f in os.listdir(proc_dir) if f.endswith(".init_labels.tsv")]
+    if init_file and ref_df is not None:
+        init_df = pd.read_csv(os.path.join(proc_dir, init_file[0]), sep="\t")
+        init_is_normal = (init_df["init_label"] == "normal").values
+        evaluate_init_normal(init_is_normal, pred_df.merge(ref_df[["BARCODE", ref_label]], on="BARCODE", how="left"), ref_label)
 
     # ── Merge ──
     anns = pred_df.copy()
