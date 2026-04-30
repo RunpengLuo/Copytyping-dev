@@ -15,6 +15,7 @@ Optional columns: tumor_purity, REP_ID
 Required columns in ref_labels: BARCODE, <ref_label>
 Optional columns: <ref_label>-tumor_purity
 """
+
 import argparse
 import logging
 import os
@@ -30,7 +31,6 @@ from copytyping.plot.plot_common import (
     plot_crosstab,
     plot_purity_histograms,
 )
-from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import add_file_logging, setup_logging
 from copytyping.validation.metrics import (
@@ -42,22 +42,50 @@ from copytyping.validation.metrics import (
 
 
 def add_arguments_validate(parser):
-    parser.add_argument("--processed_data", required=True, type=str,
-                        help="Directory with cnp_profile.tsv and X/Y/D.npz files")
-    parser.add_argument("--pred_labels", required=True, type=str,
-                        help="TSV with BARCODE + predicted label columns")
-    parser.add_argument("--pred_label", required=False, type=str, default="label",
-                        help="Column name for predicted labels (default: label)")
-    parser.add_argument("--ref_labels", required=False, type=str, default=None,
-                        help="TSV with BARCODE + reference label columns")
-    parser.add_argument("--ref_label", required=False, type=str, default="path_label",
-                        help="Column name for reference labels (default: path_label)")
+    parser.add_argument(
+        "--processed_data",
+        required=True,
+        type=str,
+        help="Directory with cnp_profile.tsv and X/Y/D.npz files",
+    )
+    parser.add_argument(
+        "--pred_labels",
+        required=True,
+        type=str,
+        help="TSV with BARCODE + predicted label columns",
+    )
+    parser.add_argument(
+        "--pred_label",
+        required=False,
+        type=str,
+        default="label",
+        help="Column name for predicted labels (default: label)",
+    )
+    parser.add_argument(
+        "--ref_labels",
+        required=False,
+        type=str,
+        default=None,
+        help="TSV with BARCODE + reference label columns",
+    )
+    parser.add_argument(
+        "--ref_label",
+        required=False,
+        type=str,
+        default="path_label",
+        help="Column name for reference labels (default: path_label)",
+    )
     parser.add_argument("--sample", required=True, type=str)
     parser.add_argument("--data_type", required=False, type=str, default="gex")
     parser.add_argument("--genome_size", required=False, type=str, default=None)
     parser.add_argument("--region_bed", required=False, type=str, default=None)
-    parser.add_argument("--h5ad", required=False, type=str, default=None,
-                        help="h5ad for spatial neighbors (joincount)")
+    parser.add_argument(
+        "--h5ad",
+        required=False,
+        type=str,
+        default=None,
+        help="h5ad for spatial neighbors (joincount)",
+    )
     parser.add_argument("--n_neighs", required=False, type=int, default=6)
     parser.add_argument("-o", "--out_dir", required=True, type=str)
     parser.add_argument("--dpi", required=False, type=int, default=200)
@@ -100,7 +128,9 @@ def run(args=None):
     pred_df = pd.read_csv(args["pred_labels"], sep="\t")
     assert "BARCODE" in pred_df.columns, "pred_labels must have BARCODE column"
     assert pred_label in pred_df.columns, f"pred_labels must have {pred_label} column"
-    logging.info(f"predictions: {len(pred_df)} spots, labels: {pred_df[pred_label].value_counts().to_dict()}")
+    logging.info(
+        f"predictions: {len(pred_df)} spots, labels: {pred_df[pred_label].value_counts().to_dict()}"
+    )
 
     # ── Load reference ──
     ref_df = None
@@ -123,7 +153,9 @@ def run(args=None):
     if ref_df is not None and ref_label in anns.columns:
         purity_col = "tumor_purity" if "tumor_purity" in anns.columns else None
         m = evaluate_malignant_accuracy(
-            anns, qry_label=pred_label, ref_label=ref_label,
+            anns,
+            qry_label=pred_label,
+            ref_label=ref_label,
             tumor_post=purity_col if purity_col else "tumor",
         )
         metric.update(m)
@@ -143,13 +175,18 @@ def run(args=None):
 
         # Crosstab
         plot_crosstab(
-            anns, sample,
+            anns,
+            sample,
             os.path.join(out_dir, f"{sample}.crosstab.png"),
-            metric=metric, acol=pred_label, bcol=ref_label,
+            metric=metric,
+            acol=pred_label,
+            bcol=ref_label,
         )
 
         # Refine
-        anns = refine_labels_by_reference(anns, ref_label, pred_label, f"{pred_label}-refined")
+        anns = refine_labels_by_reference(
+            anns, ref_label, pred_label, f"{pred_label}-refined"
+        )
 
     # ── Joincount ──
     if args.get("h5ad") and "REP_ID" in anns.columns:
@@ -159,7 +196,12 @@ def run(args=None):
 
     # ── Save evaluation ──
     eval_df = pd.DataFrame([metric])
-    eval_df.to_csv(os.path.join(out_dir, f"{sample}.evaluation.tsv"), sep="\t", index=False, na_rep="")
+    eval_df.to_csv(
+        os.path.join(out_dir, f"{sample}.evaluation.tsv"),
+        sep="\t",
+        index=False,
+        na_rep="",
+    )
     logging.info(f"saved evaluation to {out_dir}/{sample}.evaluation.tsv")
 
     # ── Cluster obs + BAF metrics ──
@@ -174,27 +216,41 @@ def run(args=None):
         raw_clust = sx_data.to_cluster_level()
 
         is_normal = (anns[pred_label] == "normal").values
-        raw_lambda = compute_baseline_proportions(raw_clust.X, raw_clust.T, is_normal) if is_normal.sum() > 0 else None
+        raw_lambda = (
+            compute_baseline_proportions(raw_clust.X, raw_clust.T, is_normal)
+            if is_normal.sum() > 0
+            else None
+        )
 
         for obs_label in [pred_label] + ([ref_label] if ref_df is not None else []):
             if obs_label not in anns.columns:
                 continue
             baf_metrics = compute_cluster_baf_metrics(raw_clust, anns[obs_label].values)
             for g, m in sorted(baf_metrics.items()):
-                logging.info(f"  cluster {g} ({obs_label}): within_var={m['within_var']:.4f}")
+                logging.info(
+                    f"  cluster {g} ({obs_label}): within_var={m['within_var']:.4f}"
+                )
             plot_cluster_observed_data(
-                raw_clust, anns, sample,
-                os.path.join(out_dir, f"{sample}.{data_type}.cluster_obs.{obs_label}.pdf"),
-                label_col=obs_label, baf_metrics=baf_metrics, base_props=raw_lambda,
+                raw_clust,
+                anns,
+                sample,
+                os.path.join(
+                    out_dir, f"{sample}.{data_type}.cluster_obs.{obs_label}.pdf"
+                ),
+                label_col=obs_label,
+                baf_metrics=baf_metrics,
+                base_props=raw_lambda,
                 dpi=args["dpi"],
             )
 
     # ── Purity histograms ──
     if "tumor_purity" in anns.columns:
         plot_purity_histograms(
-            anns, sample,
+            anns,
+            sample,
             os.path.join(out_dir, f"{sample}.purity_histograms.pdf"),
-            label_col=pred_label, dpi=args["dpi"],
+            label_col=pred_label,
+            dpi=args["dpi"],
         )
 
     logging.info("validation done")

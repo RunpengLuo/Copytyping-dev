@@ -99,7 +99,9 @@ class SX_Data:
             W = sg["W"]
             sg_bcs = sg["BARCODE"]
             N_rep = len(sg_bcs)
-            A = sparse.eye(N_rep, format="csr") + sparse.csr_matrix(W > 0).astype(np.int8)
+            A = sparse.eye(N_rep, format="csr") + sparse.csr_matrix(W > 0).astype(
+                np.int8
+            )
 
             bc_set = set(sg_bcs)
             col_idx = np.array([i for i, bc in enumerate(bc_arr) if bc in bc_set])
@@ -148,7 +150,9 @@ class SX_Data:
 
         n_smoothed = (spot_k > 0).sum()
         smoothed = spot_k > 0
-        k_counts = {k: int((spot_k == k).sum()) for k in range(max_k + 1) if (spot_k == k).any()}
+        k_counts = {
+            k: int((spot_k == k).sum()) for k in range(max_k + 1) if (spot_k == k).any()
+        }
         logging.info(
             f"adaptive smoothing (max_k={max_k}, min_umi={min_umi}, min_snp_umi={min_snp_umi}): "
             f"{n_smoothed}/{self.N} spots smoothed, k distribution: {k_counts}"

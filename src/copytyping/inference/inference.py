@@ -17,10 +17,7 @@ from copytyping.inference.inference_utils import (
     adaptive_bin_bbc,
     annotate_adata_celltype,
 )
-from copytyping.inference.model_utils import (
-    compute_baseline_proportions,
-    prepare_params,
-)
+from copytyping.inference.model_utils import prepare_params
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import evaluate_init_normal
 from copytyping.io_utils import (
@@ -192,7 +189,9 @@ def run(args=None):
 
     anns.to_csv(
         os.path.join(out_dir, f"{out_prefix}.{platform}.annotations.tsv"),
-        sep="\t", header=True, index=False,
+        sep="\t",
+        header=True,
+        index=False,
     )
 
     # Save segment-level count matrices
@@ -222,17 +221,24 @@ def run(args=None):
             if "tumor_purity" in lt:
                 trace_dict[f"tumor_purity_{i}"] = lt["tumor_purity"]
         trace_dict["n_iters"] = np.array([len(instance.labeling_trace)])
-        np.savez(os.path.join(proc_dir, f"{out_prefix}.labeling_trace.npz"), **trace_dict)
+        np.savez(
+            os.path.join(proc_dir, f"{out_prefix}.labeling_trace.npz"), **trace_dict
+        )
 
     # Save metadata
     meta = {
-        "sample": sample, "platform": platform, "data_types": ",".join(data_types),
-        "label": label, "ref_label": ref_label,
+        "sample": sample,
+        "platform": platform,
+        "data_types": ",".join(data_types),
+        "label": label,
+        "ref_label": ref_label,
         "min_snp_count": str(min_snp_agg_bbc),
         "max_bin_length": str(max_len_agg_bbc),
     }
     pd.Series(meta).to_csv(
-        os.path.join(proc_dir, f"{out_prefix}.metadata.tsv"), sep="\t", header=False,
+        os.path.join(proc_dir, f"{out_prefix}.metadata.tsv"),
+        sep="\t",
+        header=False,
     )
 
     logging.info(f"inference complete. outputs in {out_dir}")
