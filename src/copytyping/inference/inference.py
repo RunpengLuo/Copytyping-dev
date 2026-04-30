@@ -16,7 +16,6 @@ from copytyping.inference.clustering import kmeans_copytyping, cluster_label_maj
 from copytyping.inference.inference_utils import (
     adaptive_bin_bbc,
     annotate_adata_celltype,
-    merge_celltype_into_barcodes,
 )
 from copytyping.inference.model_utils import (
     compute_baseline_proportions,
@@ -25,13 +24,12 @@ from copytyping.inference.model_utils import (
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.validation import (
     compute_cluster_baf_metrics,
+    compute_joincount_zscores,
     evaluate_init_normal,
     evaluate_malignant_accuracy,
-    joincount_zscore,
     refine_labels_by_reference,
 )
 from copytyping.io_utils import (
-    exclude_barcodes,
     load_modality_data,
     load_spatial_neighbors,
     union_align_barcodes,
@@ -94,6 +92,7 @@ def run(args=None):
     agg_bbc_data_sources = {}
     adatas = {}
     spatial_graphs = {}
+    exclude_set = set(args["exclude"].split(",")) if args.get("exclude") else None
     for data_type in data_types:
         barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc = (
             load_modality_data(
@@ -106,28 +105,11 @@ def run(args=None):
                 data_type,
                 args["seg_ucn"],
                 solfile=args.get("solfile"),
+                cell_type_df=cell_type_df,
+                ref_label=ref_label,
+                exclude_labels=exclude_set,
             )
         )
-
-        if cell_type_df is not None:
-            barcodes_df = merge_celltype_into_barcodes(
-                barcodes_df, cell_type_df, ref_label, data_type
-            )
-            if args.get("exclude"):
-                exclude_set = set(args["exclude"].split(","))
-                barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc = (
-                    exclude_barcodes(
-                        barcodes_df,
-                        exclude_set,
-                        ref_label,
-                        X_seg,
-                        Y_seg,
-                        D_seg,
-                        X_bbc,
-                        Y_bbc,
-                        D_bbc,
-                    )
-                )
 
         seg_sx = SX_Data(
             barcodes_df, seg_df, X_seg, Y_seg, D_seg, baf_clip=args["baf_clip"]
@@ -255,41 +237,17 @@ def run(args=None):
     # Joincount z-scores (shared across labels)
     jc_metric = {}
     if is_spot and spatial_graphs:
-        anns_indexed = anns.set_index("BARCODE")
-        for rep_id in anns["REP_ID"].unique():
-            for data_type in data_types:
-                if data_type not in spatial_graphs:
-                    continue
-                sg_reps = spatial_graphs[data_type]
-                if rep_id not in sg_reps:
-                    continue
-                sg = sg_reps[rep_id]
-                sg_keep = np.isin(sg["BARCODE"], anns_indexed.index)
-                if sg_keep.sum() == 0:
-                    continue
-                sg_barcodes = sg["BARCODE"][sg_keep]
-                W = sg["W"].tocsr() if hasattr(sg["W"], "tocsr") else sg["W"]
-                sg_W = W[np.ix_(sg_keep, sg_keep)]
-                clone_labels = anns_indexed.loc[sg_barcodes, label].to_numpy()
-                jc = joincount_zscore(clone_labels, sg_W)
-                logging.info(f"joincount z-score (rep={rep_id}, {data_type}):")
-                for lab, z in sorted(jc.items()):
-                    if lab == "normal":
-                        continue
-                    logging.info(f"  {lab:8s}: {z:.4f}")
-                    jc_metric[f"JC_{rep_id}_{lab}"] = z
+        jc_metric = compute_joincount_zscores(anns, label, spatial_graphs, data_types)
 
     # Evaluate main label + all pcut labels
     pcut_cols = [c for c in anns.columns if c.startswith(f"{label}_pcut")]
     eval_labels = pcut_cols if pcut_cols else [label]
     if ref_label in barcodes.columns:
+        purity_col = "tumor_purity" if is_spot else "tumor"
         for eval_label in eval_labels:
             if "_pcut" in eval_label:
-                pcut_val = eval_label.rsplit("_pcut", 1)[-1]
-                purity_col = f"tumor_purity_pcut{pcut_val}"
-                row_label = f"pcut{pcut_val}"
+                row_label = f"pcut{eval_label.rsplit('_pcut', 1)[-1]}"
             else:
-                purity_col = "tumor_purity" if is_spot else "tumor"
                 row_label = "default"
             m = evaluate_malignant_accuracy(
                 anns,
@@ -301,27 +259,6 @@ def run(args=None):
         anns = refine_labels_by_reference(anns, ref_label, label, f"{label}-refined")
     else:
         eval_rows.append({**base_meta, "label": "default", **jc_metric})
-
-    # Add per-cluster BAF metrics to eval rows
-    for data_type in data_types:
-        raw_clust = raw_data_sources[data_type]
-        baf_metrics = compute_cluster_baf_metrics(raw_clust, anns[label].values)
-        sil_vals = [
-            m["silhouette"]
-            for m in baf_metrics.values()
-            if not np.isnan(m["silhouette"])
-        ]
-        wv_vals = [m["within_var"] for m in baf_metrics.values()]
-        for row in eval_rows:
-            row[f"silhouette_mean_{data_type}"] = (
-                float(np.mean(sil_vals)) if sil_vals else np.nan
-            )
-            row[f"within_var_mean_{data_type}"] = (
-                float(np.mean(wv_vals)) if wv_vals else np.nan
-            )
-            for g, m in baf_metrics.items():
-                row[f"silhouette_{data_type}_c{g}"] = m["silhouette"]
-                row[f"within_var_{data_type}_c{g}"] = m["within_var"]
 
     eval_df = pd.DataFrame(eval_rows)
     metric = eval_rows[0] if eval_rows else base_meta
@@ -388,7 +325,8 @@ def run(args=None):
             for g, m in sorted(baf_metrics.items()):
                 logging.info(
                     f"  [{data_type}] cluster {g} ({suffix}): "
-                    f"silhouette={m['silhouette']:.4f}, within_var={m['within_var']:.4f}"
+                    f"silhouette={m['silhouette']:.4f} within_var={m['within_var']:.4f} "
+                    f"silhouette_tumor={m['silhouette_tumor']:.4f} within_var_tumor={m['within_var_tumor']:.4f}"
                 )
             plot_cluster_observed_data(
                 raw_clust,

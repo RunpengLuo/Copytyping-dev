@@ -62,7 +62,7 @@ def plot_scatter_2d_per_cell(
 
             uniq = sorted(set(hue), key=lambda x: (x != "normal", x))
             palette = {lab: f"C{i}" for i, lab in enumerate(uniq)}
-            palette["normal"] = "silver"
+            palette["normal"] = "lightgray"
 
             df = pd.DataFrame({"BAF": baf, "RDR": rdr, label_col: hue})
 

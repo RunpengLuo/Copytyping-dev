@@ -223,7 +223,7 @@ def plot_init_baf_histograms(
                         f"normal (n={len(baf_normal)})",
                         f"tumor (n={len(baf_tumor)})",
                     ],
-                    color=["silver", "#d62728"],
+                    color=["lightgray", "#d62728"],
                     edgecolor="black",
                     linewidth=0.3,
                 )
@@ -490,9 +490,12 @@ def plot_cluster_observed_data(
                 m = baf_metrics[g]
                 parts = []
                 if not np.isnan(m["silhouette"]):
-                    parts.append(f"Sil={m['silhouette']:.3f}")
-                parts.append(f"WVar={m['within_var']:.4f}")
-                metric_str = "  " + " ".join(parts)
+                    parts.append(f"silhouette={m['silhouette']:.3f}")
+                parts.append(f"within_var={m['within_var']:.4f}")
+                if not np.isnan(m["silhouette_tumor"]):
+                    parts.append(f"silhouette_tumor={m['silhouette_tumor']:.3f}")
+                parts.append(f"within_var_tumor={m['within_var_tumor']:.4f}")
+                metric_str = "\n" + "  ".join(parts)
             fig.suptitle(
                 f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
                 f"{'/'.join(tag)}{metric_str}\nCN: {cn_str}",

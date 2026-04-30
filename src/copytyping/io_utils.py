@@ -22,6 +22,9 @@ def load_modality_data(
     data_type: str,
     seg_ucn_file: str,
     solfile=None,
+    cell_type_df=None,
+    ref_label=None,
+    exclude_labels=None,
 ):
     """Load bbc count matrices, apply phase correction, and aggregate.
 
@@ -84,6 +87,25 @@ def load_modality_data(
     X_seg = X_sp.toarray().astype(np.int32)
     Y_seg = Y_sp.toarray().astype(np.int32)
     D_seg = D_sp.toarray().astype(np.int32)
+
+    if cell_type_df is not None and ref_label is not None:
+        from copytyping.inference.inference_utils import merge_celltype_into_barcodes
+
+        barcodes_df = merge_celltype_into_barcodes(
+            barcodes_df, cell_type_df, ref_label, data_type
+        )
+        if exclude_labels:
+            barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc = exclude_barcodes(
+                barcodes_df,
+                exclude_labels,
+                ref_label,
+                X_seg,
+                Y_seg,
+                D_seg,
+                X_bbc,
+                Y_bbc,
+                D_bbc,
+            )
 
     return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc
 

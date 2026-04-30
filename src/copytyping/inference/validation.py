@@ -14,14 +14,29 @@ from sklearn.metrics import (
 from copytyping.utils import NA_CELLTYPE, is_tumor_label
 
 
+def _baf_wvar_sil(baf, lab):
+    """Compute within-cluster BAF variance and silhouette for given baf/labels."""
+    n_total = len(baf)
+    within_var = 0.0
+    for l in np.unique(lab):
+        m = lab == l
+        if m.sum() > 1:
+            within_var += m.sum() * np.var(baf[m])
+    within_var /= max(n_total, 1)
+    sil = np.nan
+    if len(set(lab)) >= 2:
+        sil = silhouette_score(baf.reshape(-1, 1), lab)
+    return sil, within_var
+
+
 def compute_cluster_baf_metrics(sx_data, labels):
     """Compute per-cluster BAF silhouette and within-cluster variance.
 
-    For each informative cluster g, computes:
-    - silhouette: penalizes both mixing and over-fragmentation
-    - within_var: weighted mean within-cluster BAF variance (only penalizes mixing)
+    For each informative cluster g, computes metrics for:
+    - all cells (silhouette, within_var)
+    - tumor cells only, excluding "normal" label (silhouette_tumor, within_var_tumor)
 
-    Returns dict: cluster_index -> {"silhouette": float, "within_var": float}.
+    Returns dict: cluster_index -> {silhouette, within_var, silhouette_tumor, within_var_tumor}.
     """
     results = {}
     for g in range(sx_data.G):
@@ -33,21 +48,20 @@ def compute_cluster_baf_metrics(sx_data, labels):
         baf = Y_g[valid] / D_g[valid]
         lab = labels[valid]
 
-        # Within-cluster BAF variance
-        n_total = len(baf)
-        within_var = 0.0
-        for l in np.unique(lab):
-            m = lab == l
-            if m.sum() > 1:
-                within_var += m.sum() * np.var(baf[m])
-        within_var /= max(n_total, 1)
+        sil, wvar = _baf_wvar_sil(baf, lab)
 
-        # Silhouette
-        sil = np.nan
-        if len(set(lab)) >= 2:
-            sil = silhouette_score(baf.reshape(-1, 1), lab)
+        # Tumor only
+        tumor_mask = lab != "normal"
+        sil_t, wvar_t = np.nan, np.nan
+        if tumor_mask.sum() > 0:
+            sil_t, wvar_t = _baf_wvar_sil(baf[tumor_mask], lab[tumor_mask])
 
-        results[g] = {"silhouette": sil, "within_var": within_var}
+        results[g] = {
+            "silhouette": sil,
+            "within_var": wvar,
+            "silhouette_tumor": sil_t,
+            "within_var_tumor": wvar_t,
+        }
     return results
 
 
@@ -185,6 +199,38 @@ def joincount_zscore(labels, W):
         results[lab] = float((J - E_J) / np.sqrt(Var_J)) if Var_J > 0 else np.nan
 
     return results
+
+
+def compute_joincount_zscores(anns, label, spatial_graphs, data_types):
+    """Compute joincount z-scores across all reps and data types.
+
+    Returns dict with keys like JC_{rep_id}_{clone_label}.
+    """
+    jc_metric = {}
+    anns_indexed = anns.set_index("BARCODE")
+    for rep_id in anns["REP_ID"].unique():
+        for data_type in data_types:
+            if data_type not in spatial_graphs:
+                continue
+            sg_reps = spatial_graphs[data_type]
+            if rep_id not in sg_reps:
+                continue
+            sg = sg_reps[rep_id]
+            sg_keep = np.isin(sg["BARCODE"], anns_indexed.index)
+            if sg_keep.sum() == 0:
+                continue
+            sg_barcodes = sg["BARCODE"][sg_keep]
+            W = sg["W"].tocsr() if hasattr(sg["W"], "tocsr") else sg["W"]
+            sg_W = W[np.ix_(sg_keep, sg_keep)]
+            clone_labels = anns_indexed.loc[sg_barcodes, label].to_numpy()
+            jc = joincount_zscore(clone_labels, sg_W)
+            logging.info(f"joincount z-score (rep={rep_id}, {data_type}):")
+            for lab, z in sorted(jc.items()):
+                if lab == "normal":
+                    continue
+                logging.info(f"  {lab:8s}: {z:.4f}")
+                jc_metric[f"JC_{rep_id}_{lab}"] = z
+    return jc_metric
 
 
 def evaluate_init_normal(init_is_normal, barcodes, ref_label):

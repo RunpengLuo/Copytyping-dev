@@ -208,7 +208,7 @@ class Spot_Model(Base_Model):
         theta = params[f"{self.data_types[0]}-theta"]
 
         anns = self._map_estimation(gamma, params, label)
-        anns["tumor_purity_raw"] = theta
+        anns["tumor_purity"] = theta
         base_labels = anns[label].values.copy()
         base_cq = anns["CQ"].values.copy()
 
@@ -216,7 +216,6 @@ class Spot_Model(Base_Model):
         for pcut in self._purity_cutoffs:
             col = f"{label}_pcut{pcut}"
             labels_pcut = base_labels.copy()
-            cq_pcut = base_cq.copy()
             low_pur = (labels_pcut != "normal") & (theta <= pcut)
             n_low = int(low_pur.sum())
             if n_low > 0:
@@ -224,18 +223,11 @@ class Spot_Model(Base_Model):
                     f"purity filter (pcut={pcut}): {n_low} spots relabeled to normal"
                 )
                 labels_pcut[low_pur] = "normal"
-                cq_pcut[low_pur] = 0
             anns[col] = labels_pcut
-            anns[f"tumor_purity_pcut{pcut}"] = np.where(
-                labels_pcut == "normal", 0.0, theta
-            )
             pcut_labels.append(col)
 
         # Use first cutoff as the main label
         anns[label] = anns[pcut_labels[0]].values
-        anns["tumor_purity"] = anns[
-            f"tumor_purity_pcut{self._purity_cutoffs[0]}"
-        ].values
         anns["CQ"] = np.where(anns[label] == "normal", 0, base_cq)
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}

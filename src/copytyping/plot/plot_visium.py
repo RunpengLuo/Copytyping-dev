@@ -16,7 +16,7 @@ logging.getLogger("anndata").setLevel(logging.WARNING)
 # ── Unified color palette ──
 # normal=gray, NA=tab10[0], tumor clones=tab10[1:]
 _PALETTE = sns.color_palette("tab10", 10).as_hex()
-NORMAL_COLOR = "silver"
+NORMAL_COLOR = "lightgray"
 NA_COLOR = _PALETTE[0]
 _TUMOR_COLORS = _PALETTE[1:]
 
@@ -102,21 +102,21 @@ def plot_visium_panel(
 ):
     """Single-page PDF: H&E, path_label, purity, copytyping (per pcut), CQ per slice."""
     import squidpy as sq
+    from matplotlib.collections import PatchCollection as _PC
 
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
     plt.rcParams["svg.fonttype"] = "none"
 
-    has_purity = "tumor_purity_raw" in slices[0][1].columns
     has_path = path_label in slices[0][1].columns
     has_cq = "CQ" in slices[0][1].columns
 
     row_labels = ["H&E"]
     if has_path:
         row_labels.append(path_label)
-    if has_purity:
-        purity_label = f"tumor purity\n{title_info}" if title_info else "tumor purity"
-        row_labels.append(purity_label)
+    purity_label = f"tumor purity\n{title_info}" if title_info else "tumor purity"
+    row_labels.append(purity_label)
+    row_labels.append("clone x purity")
 
     # pcut label rows (or fallback to single spot_label)
     if spot_labels_pcut:
@@ -166,8 +166,7 @@ def plot_visium_panel(
         if has_path:
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
             set_label_colors(vis_adata, path_label, clone_indexed=False)
-        if has_purity:
-            vis_adata.obs["tumor_purity_raw"] = anns_vis["tumor_purity_raw"].values
+        vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
 
         ri = 0
         sq.pl.spatial_scatter(
@@ -190,19 +189,39 @@ def plot_visium_panel(
                 edgecolors="none",
             )
 
-        if has_purity:
-            ri += 1
-            sq.pl.spatial_scatter(
-                vis_adata,
-                color="tumor_purity_raw",
-                size=size,
-                library_id=rep_id,
-                cmap="magma_r",
-                vmin=0,
-                vmax=1,
-                ax=axes[ri, ci],
-                edgecolors="none",
-            )
+        ri += 1
+        sq.pl.spatial_scatter(
+            vis_adata,
+            color="tumor_purity",
+            size=size,
+            library_id=rep_id,
+            cmap="magma_r",
+            vmin=0,
+            vmax=1,
+            ax=axes[ri, ci],
+            edgecolors="none",
+        )
+
+        # Clone x purity: clone color blended with lightgrey by purity
+        ri += 1
+        first_label = label_rows[0] if label_rows else spot_label
+        sq.pl.spatial_scatter(
+            vis_adata,
+            color=first_label,
+            size=size,
+            library_id=rep_id,
+            ax=axes[ri, ci],
+            img=False,
+            edgecolors="none",
+        )
+        rgba = blend_purity_rgba(vis_adata, first_label, "tumor_purity")
+        for child in axes[ri, ci].get_children():
+            if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
+                child.set_facecolors(rgba)
+                break
+        old_legend = axes[ri, ci].get_legend()
+        if old_legend:
+            old_legend.remove()
 
         for col in label_rows:
             ri += 1
@@ -213,9 +232,16 @@ def plot_visium_panel(
                 library_id=rep_id,
                 ax=axes[ri, ci],
                 img=False,
-                alpha=alpha,
                 edgecolors="none",
             )
+            rgba = blend_purity_rgba(vis_adata, col, "tumor_purity")
+            for child in axes[ri, ci].get_children():
+                if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
+                    child.set_facecolors(rgba)
+                    break
+            old_leg = axes[ri, ci].get_legend()
+            if old_leg:
+                old_leg.remove()
 
         if has_cq:
             ri += 1
