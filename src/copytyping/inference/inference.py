@@ -15,7 +15,6 @@ from copytyping.copytyping_parser import (
 from copytyping.inference.cell_model import Cell_Model
 from copytyping.inference.clustering import kmeans_copytyping, cluster_label_major_vote
 from copytyping.inference.inference_utils import (
-    adaptive_bin_bbc,
     annotate_adata_celltype,
 )
 from copytyping.inference.model_utils import prepare_params
@@ -29,7 +28,6 @@ from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
-    save_cnp_profile,
     save_phased_bbc,
     setup_logging,
 )
@@ -60,12 +58,9 @@ def run(args=None):
         assert "BARCODE" in cell_type_df.columns
         assert ref_label in cell_type_df.columns
 
-    min_snp_agg_bbc = args["min_snp_count"]
-    max_len_agg_bbc = args["max_bin_length"]
     data_sources = {}
     raw_data_sources = {}
     seg_data_sources = {}
-    agg_bbc_data_sources = {}
     adatas = {}
     spatial_graphs = {}
     exclude_set = set(args["exclude"].split(",")) if args.get("exclude") else None
@@ -91,13 +86,13 @@ def run(args=None):
             barcodes_df, seg_df, X_seg, Y_seg, D_seg, baf_clip=args["baf_clip"]
         )
         seg_data_sources[data_type] = seg_sx
-        agg_bbc_data_sources[data_type] = adaptive_bin_bbc(
-            bbc_df, X_bbc, Y_bbc, D_bbc, seg_sx, min_snp_agg_bbc, max_len_agg_bbc,
-        )
 
         # Save BBC-level data for validate to recompute agg_bbc
         save_phased_bbc(
-            bbc_df, X_bbc, Y_bbc, D_bbc,
+            bbc_df,
+            X_bbc,
+            Y_bbc,
+            D_bbc,
             os.path.join(proc_dir, f"{out_prefix}.{data_type}.bbc"),
         )
 
@@ -126,9 +121,11 @@ def run(args=None):
         else:
             data_sources[data_type] = raw_data_sources[data_type]
 
-    save_cnp_profile(
-        seg_data_sources,
+    # Save segment CNV profile (cnv_blocks from first data_type)
+    seg_data_sources[data_types[0]].cnv_blocks.to_csv(
         os.path.join(proc_dir, f"{out_prefix}.cnp_profile.tsv"),
+        sep="\t",
+        index=False,
     )
 
     barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
@@ -204,7 +201,9 @@ def run(args=None):
     )
 
     # Save barcodes
-    barcodes.to_csv(os.path.join(proc_dir, f"{out_prefix}.barcodes.tsv"), sep="\t", index=False)
+    barcodes.to_csv(
+        os.path.join(proc_dir, f"{out_prefix}.barcodes.tsv"), sep="\t", index=False
+    )
 
     # Save segment-level count matrices
     for data_type in data_types:
@@ -244,8 +243,6 @@ def run(args=None):
         "data_types": ",".join(data_types),
         "label": label,
         "ref_label": ref_label,
-        "min_snp_count": str(min_snp_agg_bbc),
-        "max_bin_length": str(max_len_agg_bbc),
     }
     pd.Series(meta).to_csv(
         os.path.join(proc_dir, f"{out_prefix}.metadata.tsv"),

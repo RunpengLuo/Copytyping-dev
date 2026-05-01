@@ -480,6 +480,14 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         default="path_label",
         help="Column name for reference labels (default: path_label)",
     )
+    parser.add_argument(
+        "--method",
+        required=False,
+        type=str,
+        default="copytyping",
+        help="Method that produced the labels: copytyping or others (default: copytyping). "
+        "Non-copytyping skips init normal, purity sweep, trace, count histograms.",
+    )
     parser.add_argument("--sample", required=True, type=str, help="sample name")
     parser.add_argument(
         "--data_type",
@@ -527,15 +535,24 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         help="DPI for plots (default: 200)",
     )
     parser.add_argument(
-        "--min_snp_count", required=False, type=int, default=300,
+        "--min_snp_count",
+        required=False,
+        type=int,
+        default=300,
         help="min SNP count per adaptive BBC bin for 1d scatter (default: 300)",
     )
     parser.add_argument(
-        "--max_bin_length", required=False, type=int, default=5_000_000,
+        "--max_bin_length",
+        required=False,
+        type=int,
+        default=5_000_000,
         help="max bin length (bp) for adaptive BBC binning (default: 5000000)",
     )
     parser.add_argument(
-        "--heatmap_agg", required=False, type=int, default=10,
+        "--heatmap_agg",
+        required=False,
+        type=int,
+        default=10,
         help="aggregate observations in heatmap (default: 10)",
     )
     parser.add_argument(
@@ -545,6 +562,14 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         default="0.5,0.6,0.7",
         help="comma-separated purity cutoffs for hard label evaluation "
         "(default: 0.5,0.6,0.7). Spots with purity <= cutoff labeled normal.",
+    )
+    parser.add_argument(
+        "--post_cutoff",
+        required=False,
+        type=str,
+        default="0.5,0.6,0.7,0.8,0.9",
+        help="comma-separated max_posterior cutoffs (default: 0.5,0.6,0.7,0.8,0.9). "
+        "Tumor spots with max_posterior <= cutoff labeled NA (excluded from metrics).",
     )
     parser.add_argument(
         "-v",

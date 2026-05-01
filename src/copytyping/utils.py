@@ -122,32 +122,6 @@ def add_file_logging(out_dir: str, command: str = "copytyping"):
     return fh
 
 
-def save_cnp_profile(seg_data_sources, out_file):
-    """Save input CNP profile as TSV with per-segment stats per data_type.
-
-    Columns: #CHR, START, END, cn_<clone>..., #BBC,
-    and per data_type: <dt>_med_count, <dt>_med_allele.
-    """
-    import numpy as np
-
-    sx0 = list(seg_data_sources.values())[0]
-    cnp_df = sx0.cnv_blocks[["#CHR", "START", "END"]].copy()
-    for ki, clone_name in enumerate(sx0.clones):
-        cnp_df[f"cn_{clone_name}"] = [
-            f"{a}|{b}" for a, b in zip(sx0.A[:, ki], sx0.B[:, ki])
-        ]
-    if "#BBC" in sx0.cnv_blocks.columns:
-        cnp_df["#BBC"] = sx0.cnv_blocks["#BBC"].values
-    if "#SNPS" in sx0.cnv_blocks.columns:
-        cnp_df["#SNPS"] = sx0.cnv_blocks["#SNPS"].values
-
-    for dt, sx in seg_data_sources.items():
-        cnp_df[f"{dt}_med_count"] = np.median(sx.X, axis=1).astype(int)
-        cnp_df[f"{dt}_med_allele"] = np.median(sx.D, axis=1).astype(int)
-
-    cnp_df.to_csv(out_file, sep="\t", index=False)
-
-
 def save_phased_bbc(bbc_df, X_bbc, Y_bbc, D_bbc, prefix):
     """Save phase-corrected BBC data (DataFrame + sparse matrices).
 

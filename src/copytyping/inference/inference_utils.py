@@ -177,3 +177,48 @@ def adaptive_bin_bbc(
     )
 
     return SX_Data(seg_sx.barcodes, agg_df, X_agg, Y_agg, D_agg)
+
+
+def compute_loh_baf(clust):
+    """Per-spot aggregated BAF over clone-specific LOH clusters.
+
+    Args:
+        clust: cluster-level SX_Data-like object (from seg_sx.to_cluster_level()).
+
+    Returns (baf_array, loh_info) where:
+        baf_array: float (N, K_tumor) — per-spot BAF aggregated over LOH clusters of each tumor clone.
+            NaN if no allele coverage or no LOH clusters for that clone.
+        loh_info: list of (clone_name, list of "segments <tab> clone states") per clone with LOH.
+    """
+    K_tumor = clust.K - 1
+    baf = np.full((clust.N, K_tumor), np.nan)
+    loh_info = []
+
+    for ki in range(K_tumor):
+        k = ki + 1  # skip normal
+        clone = clust.clones[k]
+        loh_mask = (clust.B[:, k] == 0) & (clust.A[:, k] > 0)
+        if loh_mask.sum() == 0:
+            continue
+
+        entries = []
+        for gi in np.where(loh_mask)[0]:
+            row = clust.cnv_blocks.iloc[gi]
+            cn_parts = [
+                f"{clust.clones[j]}={clust.A[gi, j]}|{clust.B[gi, j]}"
+                for j in range(clust.K)
+            ]
+            segs = row.get("SEGMENTS", f"cluster{gi}")
+            entries.append(f"{segs}\t{', '.join(cn_parts)}")
+        loh_info.append((clone, entries))
+
+        Y_loh = clust.Y[loh_mask].sum(axis=0).astype(float)
+        D_loh = clust.D[loh_mask].sum(axis=0).astype(float)
+        valid = D_loh > 0
+        baf[valid, ki] = Y_loh[valid] / D_loh[valid]
+
+        logging.info(f"LOH clusters for {clone} ({int(loh_mask.sum())} clusters):")
+        for entry in entries:
+            logging.info(f"  {entry}")
+
+    return baf, loh_info

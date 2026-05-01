@@ -84,6 +84,9 @@ def blend_purity_rgba(adata, label_col, purity_col):
         c = cat_rgb.get(labels.iloc[i], gray)
         rgba[i, :3] = purity[i] * c + (1 - purity[i]) * gray
     rgba[na_mask, 3] = 0.0  # NA purity → transparent
+    # NA labels → transparent
+    na_labels = labels.isin(["NA", "Unknown"])
+    rgba[na_labels.values, 3] = 0.0
     return rgba
 
 
@@ -96,6 +99,8 @@ def plot_visium_panel(
     out_dir: str,
     spot_label="spot_label",
     path_label="Microregion_annotation",
+    best_cutoff_label=None,
+    best_cutoff_metrics=None,
     dpi=300,
     size=1.5,
     alpha=0.8,
@@ -103,7 +108,11 @@ def plot_visium_panel(
 ):
     """Single-page PDF visium panel per slice.
 
-    Rows: H&E, path_label, ref purity, inferred purity, clone x purity, CQ.
+    Rows: H&E, path_label, ref purity, inferred purity, clone x purity,
+          [best cutoff clone x purity], CQ.
+
+    best_cutoff_label: column name in anns for best (pcut, post) cutoff labels.
+    best_cutoff_metrics: dict with ARI_clone, f1 for the row title.
     """
     import squidpy as sq
     from matplotlib.collections import PatchCollection as _PC
@@ -126,6 +135,27 @@ def plot_visium_panel(
     row_labels.append(purity_label)
     clone_purity_ri = len(row_labels)
     row_labels.append("clone x purity")
+    has_best_cutoff = (
+        best_cutoff_label is not None
+        and best_cutoff_label in slices[0][1].columns
+        and best_cutoff_label != spot_label
+    )
+    best_cutoff_ri = None
+    if has_best_cutoff:
+        best_cutoff_ri = len(row_labels)
+        m = best_cutoff_metrics or {}
+        ari = m.get("ARI_clone", float("nan"))
+        f1 = m.get("f1", float("nan"))
+        # Extract cutoff values from label name (e.g. "..._pcut0.5_post0.8")
+        cutoff_parts = []
+        if "_pcut" in best_cutoff_label:
+            pc = best_cutoff_label.split("_pcut")[1].split("_")[0]
+            cutoff_parts.append(f"pcut={pc}")
+        if "_post" in best_cutoff_label:
+            pt = best_cutoff_label.split("_post")[1].split("_")[0]
+            cutoff_parts.append(f"post={pt}")
+        cutoff_str = ", ".join(cutoff_parts) if cutoff_parts else best_cutoff_label
+        row_labels.append(f"{cutoff_str}\nARI={ari:.3f} F1={f1:.3f}")
     if has_cq:
         row_labels.append("CQ score")
 
@@ -196,10 +226,14 @@ def plot_visium_panel(
             edgecolors="none",
         )
 
-        # 5. clone x purity (no H&E)
+        # 5. clone x purity (no H&E) — exclude NA spots
         ri += 1
+        keep5 = vis_adata.obs[spot_label] != "NA"
+        sub5 = vis_adata[keep5].copy()
+        sub5.obs[spot_label] = sub5.obs[spot_label].cat.remove_unused_categories()
+        set_label_colors(sub5, spot_label)
         sq.pl.spatial_scatter(
-            vis_adata,
+            sub5,
             color=spot_label,
             size=size,
             library_id=rep_id,
@@ -207,7 +241,7 @@ def plot_visium_panel(
             img=False,
             edgecolors="none",
         )
-        rgba = blend_purity_rgba(vis_adata, spot_label, "tumor_purity")
+        rgba = blend_purity_rgba(sub5, spot_label, "tumor_purity")
         for child in axes[ri, ci].get_children():
             if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
                 child.set_facecolors(rgba)
@@ -216,7 +250,37 @@ def plot_visium_panel(
         if old_legend:
             old_legend.remove()
 
-        # 6. CQ score (no H&E)
+        # 6. Best cutoff clone x purity (no H&E) — exclude NA spots
+        if has_best_cutoff:
+            ri += 1
+            vis_adata.obs[best_cutoff_label] = anns_vis[best_cutoff_label].astype(
+                "category"
+            )
+            keep6 = vis_adata.obs[best_cutoff_label] != "NA"
+            sub6 = vis_adata[keep6].copy()
+            sub6.obs[best_cutoff_label] = sub6.obs[
+                best_cutoff_label
+            ].cat.remove_unused_categories()
+            set_label_colors(sub6, best_cutoff_label)
+            sq.pl.spatial_scatter(
+                sub6,
+                color=best_cutoff_label,
+                size=size,
+                library_id=rep_id,
+                ax=axes[ri, ci],
+                img=False,
+                edgecolors="none",
+            )
+            rgba = blend_purity_rgba(sub6, best_cutoff_label, "tumor_purity")
+            for child in axes[ri, ci].get_children():
+                if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
+                    child.set_facecolors(rgba)
+                    break
+            old_legend = axes[ri, ci].get_legend()
+            if old_legend:
+                old_legend.remove()
+
+        # 7. CQ score (no H&E)
         if has_cq:
             ri += 1
             cq_vals = anns_vis["CQ"].values.copy().astype(float)
@@ -271,6 +335,132 @@ def plot_visium_panel(
     fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     logging.info(f"saved visium panel to {out_file}")
+
+
+def plot_visium_loh_baf(
+    sample: str,
+    slices: list,
+    raw_clust,
+    loh_baf,
+    loh_info,
+    out_file: str,
+    dpi=200,
+    size=1.5,
+    alpha=0.8,
+):
+    """PDF with visium LOH BAF spatial plots.
+
+    Args:
+        raw_clust: cluster-level SX_Data-like object (from seg_sx.to_cluster_level()).
+        loh_baf: float (N, K_tumor) from compute_loh_baf — aggregated BAF per clone.
+        loh_info: list of (clone_name, entries) from compute_loh_baf.
+
+    Pages:
+    - One page per CNP cluster with LOH in at least one tumor clone,
+      showing per-spot BAF. Title = CN states + segments.
+    - One page per tumor clone, showing aggregated BAF across its LOH clusters.
+    """
+    import squidpy as sq
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.rcParams["ps.fonttype"] = 42
+
+    ncols = len(slices)
+    bc_to_idx = {bc: i for i, bc in enumerate(raw_clust.barcodes["BARCODE"])}
+
+    # Find clusters with LOH in at least one tumor clone
+    loh_clusters = []
+    for gi in range(raw_clust.G):
+        loh_ks = [
+            k
+            for k in range(1, raw_clust.K)
+            if raw_clust.B[gi, k] == 0 and raw_clust.A[gi, k] > 0
+        ]
+        if loh_ks:
+            loh_clusters.append(gi)
+
+    if not loh_clusters and not loh_info:
+        logging.info("no LOH clusters found, skipping LOH BAF visium")
+        return
+
+    def _spot_vals(data, vis_adata):
+        """Map (N,) array to per-vis-spot values via barcode index."""
+        vals = np.full(len(vis_adata), np.nan)
+        for si, bc in enumerate(vis_adata.obs_names):
+            idx = bc_to_idx.get(bc, -1)
+            if idx >= 0:
+                vals[si] = data[idx]
+        return vals
+
+    # BAF colormap matching plot_heatmap: NaN=white, 0.5=gray
+    baf_colors = [
+        "#1f77b4",
+        "#3b8bc6",
+        "#67a9cf",
+        "#90c4d6",
+        "#b8d6da",
+        "#d9d9d9",
+        "#fddbc7",
+        "#f4a582",
+        "#d6604d",
+        "#b2182b",
+    ]
+    baf_cmap = mcolors.ListedColormap(baf_colors, name="baf_disc")
+    baf_cmap.set_bad("white")
+    baf_norm = mcolors.BoundaryNorm(np.linspace(0, 1, 11), baf_cmap.N, clip=True)
+
+    def _plot_page(pdf, col_data, title):
+        fig, axes = plt.subplots(1, ncols, figsize=(6 * ncols, 6), squeeze=False)
+        for ci, (rep_id, anns_vis, vis_adata) in enumerate(slices):
+            col_name = "_loh_tmp"
+            vis_adata.obs[col_name] = _spot_vals(col_data, vis_adata)
+            sq.pl.spatial_scatter(
+                vis_adata,
+                color=col_name,
+                size=size,
+                library_id=rep_id,
+                ax=axes[0, ci],
+                img=False,
+                alpha=alpha,
+                edgecolors="none",
+                cmap=baf_cmap,
+                norm=baf_norm,
+            )
+            axes[0, ci].set_title(f"{sample}_{rep_id}", fontsize=10)
+        fig.suptitle(title, fontsize=11, fontweight="bold")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=dpi)
+        plt.close(fig)
+
+    with PdfPages(out_file) as pdf:
+        # Per-cluster pages
+        for gi in loh_clusters:
+            row = raw_clust.cnv_blocks.iloc[gi]
+            cn_parts = [
+                f"{raw_clust.clones[k]}={raw_clust.A[gi, k]}|{raw_clust.B[gi, k]}"
+                for k in range(raw_clust.K)
+            ]
+            length_mb = row.get("LENGTH", 0) / 1e6
+            n_bbc = int(row.get("#BBC", 0))
+            title = (
+                f"cluster {gi} ({length_mb:.1f}Mb, {n_bbc} BBCs): {', '.join(cn_parts)}"
+            )
+
+            D_g = raw_clust.D[gi].astype(float)
+            Y_g = raw_clust.Y[gi].astype(float)
+            baf_g = np.where(D_g > 0, Y_g / D_g, np.nan)
+            _plot_page(pdf, baf_g, title)
+
+        # Aggregated LOH BAF per clone
+        for ki, (clone, entries) in enumerate(loh_info):
+            _plot_page(
+                pdf,
+                loh_baf[:, ki],
+                f"Aggregated LOH BAF — {clone} ({len(entries)} clusters)",
+            )
+
+    logging.info(f"saved LOH BAF visium to {out_file}")
 
 
 def plot_visium_iters(

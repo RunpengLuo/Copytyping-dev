@@ -57,18 +57,25 @@ def compute_cluster_baf_metrics(sx_data, labels):
 
 
 def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
-    """Compute metrics for a subset of annotations. NA labels excluded."""
-    known_mask = ~anns_sub[ref_label].isin(NA_CELLTYPE) & ~anns_sub[qry_label].isin(NA_CELLTYPE)
-    anns_known = anns_sub[known_mask]
-    na_count = int(anns_sub[qry_label].isin(NA_CELLTYPE).sum())
+    """Compute metrics for a subset of annotations.
+
+    For prec/recall/f1/ARI_binary: pred-NA treated as non-tumor (hurts recall).
+    For ARI_clone: pred-NA excluded (no clone to compare).
+    Ref-NA always excluded.
+    """
+    ref_known = ~anns_sub[ref_label].isin(NA_CELLTYPE)
+    pred_na = anns_sub[qry_label].isin(NA_CELLTYPE)
+    na_count = int(pred_na.sum())
     total = len(anns_sub)
 
-    y_true = anns_known[ref_label].apply(is_tumor_label).to_numpy(dtype=int)
+    # Binary metrics: ref-known spots, pred-NA = not tumor
+    anns_bin = anns_sub[ref_known]
+    y_true = anns_bin[ref_label].apply(is_tumor_label).to_numpy(dtype=int)
     has_both = len(y_true) > 0 and 0 < y_true.sum() < len(y_true)
 
     precision = recall = f1 = accuracy = auc_hard = np.nan
     if has_both:
-        y_pred = anns_known[qry_label].apply(is_tumor_label).to_numpy(dtype=int)
+        y_pred = anns_bin[qry_label].apply(is_tumor_label).to_numpy(dtype=int)
         precision, recall, f1, _ = precision_recall_fscore_support(
             y_true, y_pred, average="binary", zero_division=0.0
         )
@@ -76,22 +83,27 @@ def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
         auc_hard = roc_auc_score(y_true, y_pred)
 
     auc_soft = np.nan
-    if has_both and tumor_post in anns_known:
-        auc_soft = roc_auc_score(y_true, anns_known[tumor_post])
+    if has_both and tumor_post in anns_bin:
+        soft_vals = anns_bin[tumor_post].values
+        soft_valid = ~np.isnan(soft_vals.astype(float))
+        if soft_valid.sum() > 0:
+            auc_soft = roc_auc_score(y_true[soft_valid], soft_vals[soft_valid])
 
-    # ARI_binary: ref/pred both mapped to {normal, tumor}
+    # ARI_binary: pred-NA = not tumor
     ari_binary = np.nan
     if has_both:
         ref_binary = np.where(y_true, "tumor", "normal")
         pred_binary = np.where(
-            anns_known[qry_label].apply(is_tumor_label).to_numpy(), "tumor", "normal"
+            anns_bin[qry_label].apply(is_tumor_label).to_numpy(), "tumor", "normal"
         )
         ari_binary = adjusted_rand_score(ref_binary, pred_binary)
 
-    # ARI_clone: ref={normal,clone_1,...} vs pred={normal,clone1,...}
+    # ARI_clone: exclude both ref-NA and pred-NA
     ari_clone = np.nan
-    if len(anns_known) > 0 and anns_known[ref_label].nunique() > 1:
-        ari_clone = adjusted_rand_score(anns_known[ref_label], anns_known[qry_label])
+    both_known = ref_known & ~pred_na
+    anns_clone = anns_sub[both_known]
+    if len(anns_clone) > 0 and anns_clone[ref_label].nunique() > 1:
+        ari_clone = adjusted_rand_score(anns_clone[ref_label], anns_clone[qry_label])
 
     label_counts = anns_sub[qry_label].value_counts()
     clone_cols = sorted([c for c in label_counts.index if c.startswith("clone")])
