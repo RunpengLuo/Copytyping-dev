@@ -266,7 +266,7 @@ def plot_crosstab(
 
     gt_tumor = sorted([r for r in ct.index if is_tumor_label(r)])
     gt_normal = sorted([r for r in ct.index if not is_tumor_label(r)])
-    row_order = gt_tumor + gt_normal
+    row_order = gt_normal + gt_tumor
 
     pred_normal = [c for c in ct.columns if c == "normal"]
     pred_clone = sorted([c for c in ct.columns if c.startswith("clone")])

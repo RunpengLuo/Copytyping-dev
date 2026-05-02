@@ -227,11 +227,11 @@ def run(args=None):
         if pc > 0 and purity is not None:
             low_pur = (labels != "NA") & (~np.isnan(purity)) & (purity <= pc)
             labels[low_pur] = "normal"
-        # 2. remaining tumor spots with max_posterior <= cutoff -> NA
+        # 2. remaining tumor spots with max_posterior <= cutoff -> normal
         if pt > 0 and max_post is not None:
             is_tumor = (labels != "NA") & (labels != "normal")
             low_post = is_tumor & (max_post <= pt)
-            labels[low_post] = "NA"
+            labels[low_post] = "normal"
         suffix = ""
         if pc > 0:
             suffix += f"_pcut{pc}"
