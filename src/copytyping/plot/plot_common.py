@@ -269,9 +269,12 @@ def plot_crosstab(
     row_order = gt_normal + gt_tumor
 
     pred_normal = [c for c in ct.columns if c == "normal"]
-    pred_clone = sorted([c for c in ct.columns if c.startswith("clone")])
-    pred_other = sorted([c for c in ct.columns if c not in pred_normal + pred_clone])
-    col_order = pred_normal + pred_clone + pred_other
+    pred_tumor = sorted([c for c in ct.columns if is_tumor_label(c)])
+    pred_na = [c for c in ct.columns if c in NA_CELLTYPE]
+    pred_other = sorted(
+        [c for c in ct.columns if c not in pred_normal + pred_tumor + pred_na]
+    )
+    col_order = pred_normal + pred_tumor + pred_other + pred_na
 
     row_order = [r for r in row_order if r in ct.index]
     col_order = [c for c in col_order if c in ct.columns]
@@ -289,9 +292,10 @@ def plot_crosstab(
             continue
         gt_is_tumor = is_tumor_label(gt_lab)
         for j, pred_lab in enumerate(col_order):
-            pred_is_tumor = pred_lab.startswith("clone")
+            pred_is_tumor = is_tumor_label(pred_lab)
+            pred_is_na = pred_lab in NA_CELLTYPE
             pred_is_normal = pred_lab == "normal"
-            if gt_is_tumor and pred_is_normal:
+            if gt_is_tumor and (pred_is_normal or pred_is_na):
                 error[i, j] = True
             if not gt_is_tumor and pred_is_tumor:
                 error[i, j] = True

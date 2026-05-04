@@ -17,9 +17,10 @@ import os
 
 import numpy as np
 import pandas as pd
+import scanpy as sc_mod
 from scipy import sparse
 
-from copytyping.inference.inference_utils import adaptive_bin_bbc
+from copytyping.inference.inference_utils import adaptive_bin_bbc, compute_loh_baf
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.io_utils import load_spatial_neighbors
 from copytyping.plot.plot_common import (
@@ -32,6 +33,11 @@ from copytyping.plot.plot_common import (
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_scatter_2d import plot_scatter_2d_per_cell
+from copytyping.plot.plot_visium import (
+    plot_visium_iters,
+    plot_visium_loh_baf,
+    plot_visium_panel,
+)
 from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import add_file_logging, setup_logging
 from copytyping.validation.metrics import (
@@ -56,19 +62,38 @@ def _load_npz(path):
     return dict(np.load(path, allow_pickle=True)) if os.path.exists(path) else None
 
 
-def _load_proc_data(proc_dir, data_type, prefix):
-    """Load processed data from proc_dir using known prefix."""
+def _load_metadata(proc_dir, prefix):
+    """Load metadata.tsv (key/value rows) into a dict."""
+    path = os.path.join(proc_dir, f"{prefix}.metadata.tsv")
+    if not os.path.exists(path):
+        return {}
+    df = pd.read_csv(path, sep="\t", header=None, names=["key", "value"])
+    return dict(zip(df["key"], df["value"]))
+
+
+def _load_shared_proc_data(proc_dir, prefix):
+    """Load shared (modality-independent) processed data."""
     p = os.path.join(proc_dir, prefix)
-
     cnp_df = pd.read_csv(f"{p}.cnp_profile.tsv", sep="\t")
+    params = _load_npz(f"{p}.model_params.npz") or {}
+    trace = _load_npz(f"{p}.labeling_trace.npz")
+    barcodes_df = None
+    bc_path = f"{p}.barcodes.tsv"
+    if os.path.exists(bc_path):
+        barcodes_df = pd.read_csv(bc_path, sep="\t")
+    return cnp_df, params, trace, barcodes_df
 
-    dt_p = f"{p}.{data_type}"
+
+def _load_modality_proc_data(proc_dir, prefix, data_type):
+    """Load per-modality matrices: returns (X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc)."""
+    dt_p = os.path.join(proc_dir, f"{prefix}.{data_type}")
+
     X = Y = D = None
     if os.path.exists(f"{dt_p}.seg.X.npz"):
         X = sparse.load_npz(f"{dt_p}.seg.X.npz").toarray()
         Y = sparse.load_npz(f"{dt_p}.seg.Y.npz").toarray()
         D = sparse.load_npz(f"{dt_p}.seg.D.npz").toarray()
-        logging.info(f"loaded seg matrices: X/Y/D shape={X.shape}")
+        logging.info(f"loaded {data_type} seg matrices: X/Y/D shape={X.shape}")
 
     bbc_df = X_bbc = Y_bbc = D_bbc = None
     bbc_p = f"{dt_p}.bbc"
@@ -79,17 +104,9 @@ def _load_proc_data(proc_dir, data_type, prefix):
         bbc_tsv = f"{bbc_p}.tsv.gz"
         if os.path.exists(bbc_tsv):
             bbc_df = pd.read_csv(bbc_tsv, sep="\t")
-        logging.info(f"loaded BBC matrices: shape={X_bbc.shape}")
+        logging.info(f"loaded {data_type} BBC matrices: shape={X_bbc.shape}")
 
-    params = _load_npz(f"{p}.model_params.npz") or {}
-    trace = _load_npz(f"{p}.labeling_trace.npz")
-
-    barcodes_df = None
-    bc_path = f"{p}.barcodes.tsv"
-    if os.path.exists(bc_path):
-        barcodes_df = pd.read_csv(bc_path, sep="\t")
-
-    return cnp_df, X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc, params, trace, barcodes_df
+    return X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc
 
 
 def run(args=None):
@@ -97,7 +114,6 @@ def run(args=None):
         args = vars(args)
 
     sample = args["sample"]
-    data_type = args["data_type"]
     proc_dir = args["processed_data"]
     out_dir = args["out_dir"]
     pred_label = args["pred_label"]
@@ -112,12 +128,13 @@ def run(args=None):
     os.makedirs(val_dir, exist_ok=True)
     _file_handler = add_file_logging(out_dir)
 
-    # ── Load processed data ──
+    # ── Load shared processed data ──
     prefix = _find_prefix(proc_dir)
     assert prefix, f"No metadata.tsv found in {proc_dir}"
-    cnp_df, X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc, params, trace, barcodes_df = (
-        _load_proc_data(proc_dir, data_type, prefix)
-    )
+    metadata = _load_metadata(proc_dir, prefix)
+    data_types = [d.strip() for d in metadata.get("data_types", "gex").split(",")]
+    logging.info(f"data_types: {data_types}")
+    cnp_df, params, trace, barcodes_df = _load_shared_proc_data(proc_dir, prefix)
 
     # ── Load predictions ──
     pred_df = pd.read_csv(args["pred_labels"], sep="\t")
@@ -135,21 +152,31 @@ def run(args=None):
         assert "BARCODE" in ref_df.columns
         assert ref_label in ref_df.columns
 
-    # ── Build SX_Data (use saved barcodes to match matrix dimensions) ──
-    seg_sx = None
-    raw_clust = None
-    if X is not None:
-        if barcodes_df is None:
-            barcodes_df = pred_df[["BARCODE"]].copy()
-            barcodes_df["REP_ID"] = (
-                pred_df["REP_ID"] if "REP_ID" in pred_df.columns else "R1"
-            )
+    # ── Fallback barcodes_df from pred_df if not on disk ──
+    if barcodes_df is None:
+        barcodes_df = pred_df[["BARCODE"]].copy()
+        barcodes_df["REP_ID"] = (
+            pred_df["REP_ID"] if "REP_ID" in pred_df.columns else "R1"
+        )
+
+    # ── Build per-modality SX_Data ──
+    seg_sx_by_dt = {}
+    raw_clust_by_dt = {}
+    bbc_by_dt = {}
+    for dt in data_types:
+        X, Y, D, bbc_df_dt, X_bbc, Y_bbc, D_bbc = _load_modality_proc_data(
+            proc_dir, prefix, dt
+        )
+        if X is None:
+            logging.warning(f"no seg matrices for {dt}, skipping")
+            continue
         seg_sx = SX_Data(barcodes_df, cnp_df, X, Y, D, baf_clip=0.1)
-        raw_clust = seg_sx.to_cluster_level()
+        seg_sx_by_dt[dt] = seg_sx
+        raw_clust_by_dt[dt] = seg_sx.to_cluster_level()
+        bbc_by_dt[dt] = (bbc_df_dt, X_bbc, Y_bbc, D_bbc)
 
     # ── Align pred_df to proc barcodes ──
-    if barcodes_df is not None and len(pred_df) != len(barcodes_df):
-        proc_bcs = set(barcodes_df["BARCODE"])
+    if len(pred_df) != len(barcodes_df):
         anns_base = barcodes_df.copy()
         pred_map = pred_df.set_index("BARCODE")
         for col in pred_df.columns:
@@ -171,9 +198,9 @@ def run(args=None):
                 pred_df.merge(ref_df[["BARCODE", ref_label]], on="BARCODE", how="left"),
                 ref_label,
             )
-            if raw_clust is not None:
+            if raw_clust_by_dt:
                 plot_init_baf_histograms(
-                    {data_type: raw_clust},
+                    raw_clust_by_dt,
                     init_is_normal,
                     sample,
                     val_dir,
@@ -304,7 +331,7 @@ def run(args=None):
         spatial_graphs = load_spatial_neighbors(
             args["h5ad"], n_neighs=args.get("n_neighs", 6)
         )
-        jc = compute_joincount_zscores(anns, pred_label, spatial_graphs, [data_type])
+        jc = compute_joincount_zscores(anns, pred_label, spatial_graphs, data_types)
         for row in eval_rows:
             row.update(jc)
 
@@ -333,32 +360,41 @@ def run(args=None):
     if cols:
         logging.info(f"\n{eval_df[cols].to_string(index=False)}")
 
-    # ── Determine baseline lambda ──
+    # ── Determine is_normal (shared across modalities) ──
     is_normal = (
         (anns[best_label] == "normal").values
         if best_label in anns.columns
         else np.zeros(len(anns), dtype=bool)
     )
-    seg_lambda = None
-    if seg_sx is not None and is_normal.sum() > 0:
-        seg_lambda = compute_baseline_proportions(seg_sx.X, seg_sx.T, is_normal)
 
-    # ── Count histograms (copytyping only) ──
-    if is_copytyping and seg_sx is not None:
+    # ── Count histograms (copytyping only, all modalities) ──
+    if is_copytyping and seg_sx_by_dt:
         plot_count_histograms(
-            {data_type: seg_sx},
+            seg_sx_by_dt,
             sample,
             os.path.join(val_dir, f"{sample}.count_histograms.pdf"),
             dpi=dpi,
         )
 
-    # ── Cluster obs + 2d scatter ──
-    if raw_clust is not None:
+    # ── Per-modality plots ──
+    region_bed = args.get("region_bed")
+    genome_size = args.get("genome_size")
+    heatmap_agg = args.get("heatmap_agg", 10)
+    for data_type, seg_sx in seg_sx_by_dt.items():
+        raw_clust = raw_clust_by_dt[data_type]
+        bbc_df_dt, X_bbc, Y_bbc, D_bbc = bbc_by_dt[data_type]
+        seg_lambda = (
+            compute_baseline_proportions(seg_sx.X, seg_sx.T, is_normal)
+            if is_normal.sum() > 0
+            else None
+        )
         raw_lambda = (
             compute_baseline_proportions(raw_clust.X, raw_clust.T, is_normal)
             if is_normal.sum() > 0
             else None
         )
+
+        # Cluster obs + 2d scatter
         plot_labels = [pred_label] + (
             [ref_label] if ref_df is not None and ref_label in anns.columns else []
         )
@@ -366,7 +402,8 @@ def run(args=None):
             baf_metrics = compute_cluster_baf_metrics(raw_clust, anns[obs_label].values)
             for g, m in sorted(baf_metrics.items()):
                 logging.info(
-                    f"  cluster {g} ({obs_label}): within_var={m['within_var']:.4f}"
+                    f"  cluster {g} ({data_type}, {obs_label}): "
+                    f"within_var={m['within_var']:.4f}"
                 )
             plot_cluster_observed_data(
                 raw_clust,
@@ -390,98 +427,95 @@ def run(args=None):
             dpi=dpi,
         )
 
-    # ── Heatmaps ──
-    region_bed = args.get("region_bed")
-    if seg_sx is not None and region_bed:
-        heatmap_agg = args.get("heatmap_agg", 10)
-        theta = params.get(f"{data_type}_theta")
-        plot_labels = [best_label] + (
-            [ref_label] if ref_df is not None and ref_label in anns.columns else []
-        )
-        for val in ["BAF", "log2RDR"]:
-            if val == "log2RDR" and seg_lambda is None:
-                continue
-            for agg in [1, heatmap_agg]:
-                # Unlabeled
-                logging.info(f"  heatmap {val} agg={agg} unlabeled")
-                plot_cnv_heatmap(
-                    sample,
-                    data_type,
-                    cnp_df,
-                    seg_sx,
-                    None,
-                    region_bed,
-                    val=val,
-                    base_props=seg_lambda,
-                    agg_size=agg,
-                    filename=os.path.join(
-                        plot_dir,
-                        f"{sample}.{val}_heatmap.{data_type}.agg{agg}.unlabeled.pdf",
-                    ),
-                    dpi=dpi,
-                    figsize=(20, 6 if agg > 1 else 15),
-                )
-                # Per label
-                for my_label in plot_labels:
-                    logging.info(f"  heatmap {val} agg={agg} {my_label}")
+        # Heatmaps
+        if region_bed:
+            theta = params.get(f"{data_type}_theta")
+            heat_labels = [best_label] + (
+                [ref_label] if ref_df is not None and ref_label in anns.columns else []
+            )
+            for val in ["BAF", "log2RDR"]:
+                if val == "log2RDR" and seg_lambda is None:
+                    continue
+                for agg in [1, heatmap_agg]:
+                    logging.info(f"  heatmap {data_type} {val} agg={agg} unlabeled")
                     plot_cnv_heatmap(
                         sample,
                         data_type,
                         cnp_df,
                         seg_sx,
-                        anns,
+                        None,
                         region_bed,
-                        proportions=theta,
                         val=val,
                         base_props=seg_lambda,
                         agg_size=agg,
-                        lab_type=my_label,
                         filename=os.path.join(
                             plot_dir,
-                            f"{sample}.{val}_heatmap.{data_type}.agg{agg}.{my_label}.pdf",
+                            f"{sample}.{val}_heatmap.{data_type}.agg{agg}.unlabeled.pdf",
                         ),
                         dpi=dpi,
                         figsize=(20, 6 if agg > 1 else 15),
                     )
+                    for my_label in heat_labels:
+                        logging.info(
+                            f"  heatmap {data_type} {val} agg={agg} {my_label}"
+                        )
+                        plot_cnv_heatmap(
+                            sample,
+                            data_type,
+                            cnp_df,
+                            seg_sx,
+                            anns,
+                            region_bed,
+                            proportions=theta,
+                            val=val,
+                            base_props=seg_lambda,
+                            agg_size=agg,
+                            lab_type=my_label,
+                            filename=os.path.join(
+                                plot_dir,
+                                f"{sample}.{val}_heatmap.{data_type}.agg{agg}.{my_label}.pdf",
+                            ),
+                            dpi=dpi,
+                            figsize=(20, 6 if agg > 1 else 15),
+                        )
 
-    # ── 1D scatter ──
-    genome_size = args.get("genome_size")
-    if seg_sx is not None and bbc_df is not None and genome_size and region_bed:
-        agg_bbc = adaptive_bin_bbc(
-            bbc_df,
-            X_bbc,
-            Y_bbc,
-            D_bbc,
-            seg_sx,
-            args.get("min_snp_count", 300),
-            args.get("max_bin_length", 5_000_000),
-        )
-        agg_lambda = (
-            compute_baseline_proportions(agg_bbc.X, agg_bbc.T, is_normal)
-            if is_normal.sum() > 0
-            else None
-        )
-        plot_labels = [best_label] + (
-            [ref_label] if ref_df is not None and ref_label in anns.columns else []
-        )
-        for my_label in plot_labels:
-            logging.info(f"  1d scatter {my_label}")
-            plot_rdr_baf_1d_pseudobulk(
-                agg_bbc,
-                anns,
-                agg_lambda,
-                sample,
-                data_type,
-                genome_size,
-                haplo_blocks=cnp_df,
-                region_bed=region_bed,
-                lab_type=my_label,
-                is_inferred=(my_label == best_label),
-                filename=os.path.join(
-                    plot_dir, f"{sample}.1d_scatter.{data_type}.{my_label}.pdf"
-                ),
-                platform="spatial",
+        # 1D scatter
+        if bbc_df_dt is not None and genome_size and region_bed:
+            agg_bbc = adaptive_bin_bbc(
+                bbc_df_dt,
+                X_bbc,
+                Y_bbc,
+                D_bbc,
+                seg_sx,
+                args.get("min_snp_count", 300),
+                args.get("max_bin_length", 5_000_000),
             )
+            agg_lambda = (
+                compute_baseline_proportions(agg_bbc.X, agg_bbc.T, is_normal)
+                if is_normal.sum() > 0
+                else None
+            )
+            scatter_labels = [best_label] + (
+                [ref_label] if ref_df is not None and ref_label in anns.columns else []
+            )
+            for my_label in scatter_labels:
+                logging.info(f"  1d scatter {data_type} {my_label}")
+                plot_rdr_baf_1d_pseudobulk(
+                    agg_bbc,
+                    anns,
+                    agg_lambda,
+                    sample,
+                    data_type,
+                    genome_size,
+                    haplo_blocks=cnp_df,
+                    region_bed=region_bed,
+                    lab_type=my_label,
+                    is_inferred=(my_label == best_label),
+                    filename=os.path.join(
+                        plot_dir, f"{sample}.1d_scatter.{data_type}.{my_label}.pdf"
+                    ),
+                    platform="spatial",
+                )
 
     # ── Purity histograms (copytyping only) ──
     if is_copytyping and has_purity:
@@ -493,11 +527,8 @@ def run(args=None):
             dpi=dpi,
         )
 
-    # ── Visium panel ──
+    # ── Visium plots ──
     if args.get("h5ad") and "REP_ID" in anns.columns:
-        import scanpy as sc_mod
-        from copytyping.plot.plot_visium import plot_visium_panel
-
         h5ad_adata = sc_mod.read_h5ad(args["h5ad"])
         anns_indexed = anns.set_index("BARCODE")
         visium_slices = []
@@ -524,11 +555,8 @@ def run(args=None):
             dpi=dpi,
         )
 
-        # LOH BAF visium
-        if raw_clust is not None:
-            from copytyping.inference.inference_utils import compute_loh_baf
-            from copytyping.plot.plot_visium import plot_visium_loh_baf
-
+        # LOH BAF visium (per modality)
+        for data_type, raw_clust in raw_clust_by_dt.items():
             loh_baf, loh_info = compute_loh_baf(raw_clust)
             plot_visium_loh_baf(
                 sample,
@@ -536,14 +564,12 @@ def run(args=None):
                 raw_clust,
                 loh_baf,
                 loh_info,
-                os.path.join(val_dir, f"{sample}.visium_loh_baf.pdf"),
+                os.path.join(val_dir, f"{sample}.{data_type}.visium_loh_baf.pdf"),
                 dpi=dpi,
             )
 
         # Visium iters (copytyping only, requires labeling trace)
-        if is_copytyping and trace is not None:
-            from copytyping.plot.plot_visium import plot_visium_iters
-
+        if is_copytyping and trace is not None and seg_sx_by_dt:
             n_iters = int(trace["n_iters"][0])
             labeling_trace = []
             for i in range(n_iters):
@@ -554,7 +580,7 @@ def run(args=None):
                 if f"tumor_purity_{i}" in trace:
                     lt["tumor_purity"] = trace[f"tumor_purity_{i}"]
                 labeling_trace.append(lt)
-            clones_list = list(seg_sx.clones) if seg_sx else None
+            clones_list = list(next(iter(seg_sx_by_dt.values())).clones)
             plot_visium_iters(
                 sample,
                 visium_slices,

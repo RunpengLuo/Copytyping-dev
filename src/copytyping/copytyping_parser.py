@@ -135,10 +135,11 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--baf_clip",
         required=False,
-        default=0.1,
+        default=0.001,
         type=float,
+        # spot model: use 0.1 (mixture tolerance); cell model: 0.001 is fine
         help="Clip expected clone BAF to [baf_clip, 1-baf_clip] "
-        "to avoid log(0) in BB likelihood at LOH segments (default: 0.1)",
+        "to avoid log(0) in BB likelihood at LOH segments (default: 0.001)",
     )
     parser.add_argument(
         "--tau_bounds",
@@ -164,6 +165,22 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="symmetric Dirichlet prior alpha for pi. "
         "1: non-informative (default), <1: sparse, >1: smoothing",
     )
+    parser.add_argument(
+        "--init_pi_from_bulk",
+        required=False,
+        action="store_true",
+        default=False,
+        help="Initialize pi from bulk clone proportions (HATCHet2). "
+        "Default: uniform 1/K initialization.",
+    )
+    parser.add_argument(
+        "--update_pi",
+        required=False,
+        action="store_true",
+        default=False,
+        help="Update pi (clone mixing proportions) during EM. "
+        "Default: fix pi at its initial value.",
+    )
 
     parser.add_argument(
         "--update_purity",
@@ -188,25 +205,7 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="if set, update NB dispersion (inv_phi) in M-step (cell model only)",
     )
     ##################################################
-    # plot parameters
-    parser.add_argument(
-        "--dpi", required=False, type=int, help="image resolution", default=300
-    )
-    parser.add_argument(
-        "--transparent",
-        required=False,
-        action="store_true",
-        default=False,
-        help="transparent background",
-    )
-    parser.add_argument(
-        "--img_type",
-        required=False,
-        choices=["pdf", "png", "svg"],
-        type=str,
-        help="file format (pdf, png, svg)",
-        default="pdf",
-    )
+    # spatial / smoothing parameters
     parser.add_argument(
         "--n_neighs",
         required=False,
@@ -235,34 +234,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         type=int,
         default=0,
         help="minimum total allele UMI per spot for adaptive smoothing (default: 0=disabled)",
-    )
-    parser.add_argument(
-        "--min_snp_count",
-        required=False,
-        type=int,
-        help="min SNP count per adaptive BBC bin (default: 300)",
-        default=300,
-    )
-    parser.add_argument(
-        "--max_bin_length",
-        required=False,
-        type=int,
-        help="max bin length (bp) for adaptive BBC binning (default: 5000000)",
-        default=5_000_000,
-    )
-    parser.add_argument(
-        "--heatmap_agg",
-        required=False,
-        type=int,
-        help="aggregate observations in heatmap (default: 10)",
-        default=10,
-    )
-    parser.add_argument(
-        "--umap",
-        required=False,
-        action="store_true",
-        default=False,
-        help="plot UMAP using BAF&RDR features",
     )
     parser.add_argument(
         "-v",
@@ -489,13 +460,6 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         "Non-copytyping skips init normal, purity sweep, trace, count histograms.",
     )
     parser.add_argument("--sample", required=True, type=str, help="sample name")
-    parser.add_argument(
-        "--data_type",
-        required=False,
-        type=str,
-        default="gex",
-        help="Data type for count matrices (default: gex)",
-    )
     parser.add_argument(
         "--genome_size",
         required=False,

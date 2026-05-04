@@ -17,7 +17,10 @@ def _parse_bounds(s):
 def prepare_params(args, cnv_blocks, platform, data_types):
     """Build init_params and fix_params dicts from CLI args and CNV profile."""
     bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
-    pi_init = bulk_props
+    if args.get("init_pi_from_bulk", False):
+        pi_init = bulk_props
+    else:
+        pi_init = np.ones(len(bulk_props)) / len(bulk_props)
     tau_bounds = _parse_bounds(args["tau_bounds"])
     invphi_bounds = _parse_bounds(args["invphi_bounds"])
     init_params = {
@@ -28,7 +31,7 @@ def prepare_params(args, cnv_blocks, platform, data_types):
         "ref_label": args["ref_label"],
         "niters": args["niters"],
     }
-    fix_params = {"pi": False}
+    fix_params = {"pi": not args.get("update_pi", False)}
     for data_type in data_types:
         fix_params[f"{data_type}-theta"] = not args["update_purity"]
         fix_params[f"{data_type}-tau"] = not args.get("update_tau", False)

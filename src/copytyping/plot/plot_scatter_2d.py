@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -14,11 +15,11 @@ def plot_scatter_2d_per_cell(
     outfile: str,
     label_col: str,
     base_props=None,
-    markersize=3,
+    markersize=4,
     rasterized=True,
     dpi=100,
 ):
-    """Per-cluster 2D scatter (BAF vs RDR) with marginal KDEs, one page per cluster."""
+    """Per-cluster 2D scatter (BAF vs log2RDR) with marginal KDEs, one page per cluster."""
     informative = sx_data.MASK["IMBALANCED"] | sx_data.MASK["ANEUPLOID"]
     cluster_indices = np.where(informative)[0]
     labels = anns[label_col].values
@@ -58,28 +59,28 @@ def plot_scatter_2d_per_cell(
 
             baf = Y_g[valid] / D_g[valid]
             rdr = X_g[valid] / (T[valid] * lam_g)
+            log2rdr = np.log2(np.clip(rdr, 1e-6, None))
             hue = labels[valid]
 
             uniq = sorted(set(hue), key=lambda x: (x != "normal", x))
             palette = {lab: f"C{i}" for i, lab in enumerate(uniq)}
             palette["normal"] = "lightgray"
 
-            df = pd.DataFrame({"BAF": baf, "RDR": rdr, label_col: hue})
+            df = pd.DataFrame({"BAF": baf, "log2RDR": log2rdr, label_col: hue})
 
-            rdr_hi = min(np.percentile(rdr, 99.5), 5.0)
             xlim = (-0.05, 1.05)
-            ylim = (0, rdr_hi)
+            ylim = (-5, 5)
 
             g0 = sns.JointGrid(
                 data=df,
                 x="BAF",
-                y="RDR",
+                y="log2RDR",
                 hue=label_col,
                 palette=palette,
                 xlim=xlim,
                 ylim=ylim,
             )
-            g0.refline(x=0.50)
+            g0.refline(x=0.50, y=0.0)
             g0.plot_joint(
                 sns.scatterplot,
                 s=markersize,
@@ -94,6 +95,55 @@ def plot_scatter_2d_per_cell(
             scatter = g0.ax_joint.collections[0]
             scatter.set_rasterized(rasterized)
             scatter.set_antialiased(False)
+
+            # Expected (BAF, log2RDR) cross markers per clone
+            # Use raw B/(A+B) for BAF (unclipped), log2(C_clone/C_normal) for RDR
+            # Group clones that share the same expected position
+            C_normal_g = max(sx_data.C[g, 0], 1)
+            exp_points = defaultdict(list)
+            for k in range(sx_data.K):
+                C_k = sx_data.C[g, k]
+                exp_baf_k = sx_data.B[g, k] / C_k if C_k > 0 else 0.5
+                exp_log2rdr_k = np.log2(max(C_k, 1e-6) / C_normal_g)
+                key = (round(exp_baf_k, 4), round(exp_log2rdr_k, 4))
+                exp_points[key].append(sx_data.clones[k])
+
+            for (exp_baf, exp_log2rdr), clone_names in exp_points.items():
+                g0.ax_joint.plot(
+                    exp_baf,
+                    exp_log2rdr,
+                    marker="x",
+                    color="black",
+                    markersize=10,
+                    markeredgewidth=2.5,
+                    zorder=10,
+                )
+                label_text = ", ".join(clone_names)
+                if len(clone_names) > 1:
+                    label_text = f"({label_text})"
+                g0.ax_joint.annotate(
+                    label_text,
+                    (exp_baf, exp_log2rdr),
+                    textcoords="offset points",
+                    xytext=(6, 4),
+                    fontsize=7,
+                    fontweight="bold",
+                )
+
+            # Move legend outside, enlarge markers
+            leg = g0.ax_joint.get_legend()
+            if leg is not None:
+                leg.remove()
+            handles, labels_leg = g0.ax_joint.get_legend_handles_labels()
+            g0.ax_marg_y.legend(
+                handles,
+                labels_leg,
+                loc="upper left",
+                fontsize=8,
+                framealpha=0.8,
+                borderaxespad=0.5,
+                markerscale=5,
+            )
 
             g0.figure.suptitle(
                 f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
