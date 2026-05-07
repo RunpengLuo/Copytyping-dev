@@ -1,7 +1,6 @@
 import logging
 
 import numpy as np
-from scipy.optimize import minimize_scalar
 from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
@@ -9,7 +8,7 @@ from copytyping.inference.model_utils import (
     clone_rdr_gk,
     cond_betabin_logpmf_theta,
     cond_negbin_logpmf_theta,
-    estimate_tumor_proportion_bin,
+    estimate_tumor_proportion,
 )
 
 
@@ -68,15 +67,20 @@ class Spot_Model(Base_Model):
         for dt in self.data_types:
             sx = self.data_sources[dt]
             lg = params[f"{dt}-lambda"]
-            params[f"{dt}-theta"] = estimate_tumor_proportion_bin(sx, lg)
+            tau = inv_phi = None
             if fit_mode in {"allele_only", "hybrid"}:
-                params[f"{dt}-tau"] = self._init_tau_from_normals(
+                tau = self._init_tau_from_normals(
                     dt, is_normal, init_params["tau_bounds"]
                 )
+                params[f"{dt}-tau"] = tau
             if fit_mode in {"total_only", "hybrid"}:
-                params[f"{dt}-inv_phi"] = self._init_invphi_from_normals(
+                inv_phi = self._init_invphi_from_normals(
                     dt, lg, is_normal, init_params["invphi_bounds"]
                 )
+                params[f"{dt}-inv_phi"] = inv_phi
+            params[f"{dt}-theta"] = estimate_tumor_proportion(
+                sx, lg, tau, inv_phi, fit_mode=fit_mode
+            )
             # Precompute: rdrs only for tumor clones (exclude normal column)
             rdrs_full = clone_rdr_gk(lg, sx.C)
             params[f"{dt}-rdrs"] = rdrs_full[:, 1:]  # (G, K_tumor)
@@ -143,51 +147,9 @@ class Spot_Model(Base_Model):
         return np.sum(log_marg), log_marg, global_lls
 
     def _m_step(self, fit_mode, gamma, params, fix_params, t=0, eps=1e-10):
-        # Mixture weights: standard simplex update
+        # Mixture weights: standard simplex update.
+        # theta is fixed after init (see estimate_tumor_proportion).
         self._update_pi(gamma, params, fix_params, self.N, self.K_tumor)
-
-        # Theta update (per-spot, all spots)
-        if any(not fix_params[f"{dt}-theta"] for dt in self.data_types):
-            theta_arr = params[f"{self.data_types[0]}-theta"]
-
-            for n in range(self.N):
-                w = gamma[n]  # (K_tumor,)
-
-                def neg_Q(tv, _n=n, _w=w):
-                    tv_arr = np.array([tv], dtype=float)
-                    Q = 0.0
-                    for dt in self.data_types:
-                        if not self.modality_masks[dt][_n]:
-                            continue
-                        sx = self.data_sources[dt]
-                        rdrs = params[f"{dt}-rdrs"]
-                        am = params[f"{dt}-allele_mask"]
-                        if fit_mode in {"allele_only", "hybrid"} and am.any():
-                            ll = cond_betabin_logpmf_theta(
-                                sx.Y[am, _n : _n + 1],
-                                sx.D[am, _n : _n + 1],
-                                params[f"{dt}-tau"],
-                                sx.BAF[am, 1:],
-                                rdrs[am],
-                                tv_arr,
-                            )
-                            Q += np.sum(ll[:, 0, :] * _w)
-                        tm = params[f"{dt}-total_mask"]
-                        if fit_mode in {"total_only", "hybrid"} and tm.any():
-                            ll = cond_negbin_logpmf_theta(
-                                sx.X[tm, _n : _n + 1],
-                                np.array([sx.T[_n]], dtype=float),
-                                params[f"{dt}-lambda"][tm],
-                                params[f"{dt}-inv_phi"],
-                                rdrs[tm],
-                                tv_arr,
-                            )
-                            Q += np.sum(ll[:, 0, :] * _w)
-                    return -Q
-
-                theta_arr[n] = minimize_scalar(
-                    neg_Q, bounds=(0.0, 1.0), method="bounded"
-                ).x
 
     def _e_step(self, fit_mode, params, t=0):
         """E-step: posterior over K_tumor clones."""

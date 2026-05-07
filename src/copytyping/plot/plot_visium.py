@@ -250,7 +250,7 @@ def plot_visium_panel(
         if old_legend:
             old_legend.remove()
 
-        # 6. Best cutoff clone x purity (no H&E) — exclude NA spots
+        # 6. Best cutoff clone x purity (with H&E) — exclude NA spots
         if has_best_cutoff:
             ri += 1
             vis_adata.obs[best_cutoff_label] = anns_vis[best_cutoff_label].astype(
@@ -268,7 +268,7 @@ def plot_visium_panel(
                 size=size,
                 library_id=rep_id,
                 ax=axes[ri, ci],
-                img=False,
+                img=True,
                 edgecolors="none",
             )
             rgba = blend_purity_rgba(sub6, best_cutoff_label, "tumor_purity")

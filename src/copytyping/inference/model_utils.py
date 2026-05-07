@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from scipy.optimize import minimize_scalar
 from scipy.special import betaln, gammaln
-from scipy.stats import binom, zscore
+from scipy.stats import zscore
 
 from copytyping.sx_data.sx_data import SX_Data
 
@@ -33,7 +33,7 @@ def prepare_params(args, cnv_blocks, platform, data_types):
     }
     fix_params = {"pi": not args.get("update_pi", False)}
     for data_type in data_types:
-        fix_params[f"{data_type}-theta"] = not args["update_purity"]
+        fix_params[f"{data_type}-theta"] = True  # theta is fixed after init
         fix_params[f"{data_type}-tau"] = not args.get("update_tau", False)
         fix_params[f"{data_type}-inv_phi"] = not args.get("update_invphi", False)
     return init_params, fix_params
@@ -106,156 +106,85 @@ def empirical_rdr_gn(
     return rdr_matrix
 
 
-def _fit_theta_spots(Y_bins, D_bins, p_k, mu_k, N, theta_arr, spot_mask):
-    """Fit theta for a subset of spots using binomial MLE on given bins."""
-    eps = 1e-10
-    n_fitted = 0
-    for n in np.where(spot_mask)[0]:
-        d_n = D_bins[:, n]
-        y_n = Y_bins[:, n]
-        valid = (d_n > 0) & (mu_k > 0) & np.isfinite(mu_k)
-        if valid.sum() == 0:
-            continue
-        d_v = d_n[valid].astype(np.float64)
-        y_v = y_n[valid].astype(np.float64)
-        mu_v = mu_k[valid]
-        p_v = p_k[valid]
-
-        def neg_ll(theta):
-            denom = theta * mu_v + (1 - theta)
-            p_hat = (theta * mu_v * p_v + 0.5 * (1 - theta)) / np.maximum(denom, eps)
-            p_hat = np.clip(p_hat, eps, 1 - eps)
-            return -np.sum(binom.logpmf(y_v, d_v, p_hat))
-
-        res = minimize_scalar(neg_ll, bounds=(1e-4, 1 - 1e-4), method="bounded")
-        theta_arr[n] = np.clip(res.x, 1e-4, 1 - 1e-4)
-        n_fitted += 1
-    return n_fitted
-
-
-def estimate_tumor_proportion_bin(sx_data: SX_Data, base_props: np.ndarray, u_min=0.0):
-    """Estimate per-spot tumor purity from clonal LOH segments.
-
-    Spots without LOH coverage get theta=u_min.
-
-    Args:
-        sx_data: SX_Data instance providing A, B, C, BAF, Y, D arrays.
-        base_props: (G,) baseline proportions from normal spots.
-        u_min: fallback purity for spots without LOH coverage.
-
-    Returns:
-        (N,) per-spot tumor purity estimates.
-    """
-    rdrs_gk = clone_rdr_gk(base_props, sx_data.C)
-    loh_mask = sx_data.MASK["CLONAL_LOH"]
-    n_loh = int(loh_mask.sum())
-    logging.info(f"init theta: {n_loh} clonal LOH bins")
-
-    theta_arr = np.zeros(sx_data.N, dtype=np.float32)
-
-    if n_loh > 0:
-        p_loh = sx_data.BAF[loh_mask, 1]
-        mu_loh = rdrs_gk[loh_mask, 1]
-        Y_loh = sx_data.Y[loh_mask]
-        D_loh = sx_data.D[loh_mask]
-        has_loh = np.any(D_loh > 0, axis=0)
-        remaining = np.ones(sx_data.N, dtype=bool)
-        n_fit = _fit_theta_spots(
-            Y_loh, D_loh, p_loh, mu_loh, sx_data.N, theta_arr, remaining & has_loh
-        )
-        n_fallback = sx_data.N - n_fit
-        logging.info(
-            f"  LOH: fitted {n_fit} spots, {n_fallback} fallback to u_min={u_min}"
-        )
-
-    return theta_arr
-
-
-def estimate_tumor_proportion_bin_pois(
+def estimate_tumor_proportion(
     sx_data: SX_Data,
     base_props: np.ndarray,
+    tau: float,
+    inv_phi: float,
+    fit_mode: str = "hybrid",
 ):
-    """Estimate per-spot theta using clonal segments with Binomial + Poisson likelihood.
+    """Per-spot purity init using BB+NB on clonal-only segments (no gamma weighting).
 
-    Uses clonal segments (same CNP across all tumor clones) only.
-    Binomial for BAF at imbalanced bins, Poisson for RDR at aneuploid bins.
+    Mirrors the spot model E-step likelihood but evaluated on segments shared by
+    all tumor clones, where BAF_k and RDR_k are identical across k. The 1D MLE
+    over theta is therefore independent of clone assignment.
 
     Args:
         sx_data: SX_Data with X, Y, D, T, A, B, C, BAF, MASK.
-        base_props: (G,) baseline proportions lambda_g from normal cells.
+        base_props: (G,) baseline lambda from normal cells.
+        tau: BB concentration scalar.
+        inv_phi: NB inv-phi scalar.
+        fit_mode: "allele_only", "total_only", or "hybrid".
 
     Returns:
         theta_arr: (N,) per-spot purity estimates in [1e-4, 1-1e-4].
     """
-    eps = 1e-10
-    A_tumor = sx_data.A[:, 1:]
-    B_tumor = sx_data.B[:, 1:]
-    C_tumor = sx_data.C[:, 1:]
-
-    # Clonal segments: same CNP across all tumor clones
-    is_clonal = np.ones(sx_data.G, dtype=bool)
-    for k in range(1, A_tumor.shape[1]):
-        is_clonal &= (A_tumor[:, k] == A_tumor[:, 0]) & (B_tumor[:, k] == B_tumor[:, 0])
-    # Informative: A != B (imbalanced) OR C != 2 (aneuploid)
-    is_imb = A_tumor[:, 0] != B_tumor[:, 0]
-    is_aneu = C_tumor[:, 0] != 2
-    bin_mask = is_clonal & is_imb & (base_props > 0)
-    pois_mask = is_clonal & is_aneu & (base_props > 0)
-
-    n_bin = bin_mask.sum()
-    n_pois = pois_mask.sum()
-    logging.info(
-        f"estimate_tumor_proportion_bin_pois: {n_bin} clonal imbalanced bins, "
-        f"{n_pois} clonal aneuploid bins"
-    )
+    rdrs_tumor = clone_rdr_gk(base_props, sx_data.C)[:, 1:]  # (G, K_tumor)
+    non_sub = ~sx_data.MASK["SUBCLONAL"]
+    am = sx_data.MASK["IMBALANCED"] & non_sub & (base_props > 0)
+    tm = sx_data.MASK["ANEUPLOID"] & non_sub & (base_props > 0)
+    n_am = int(am.sum())
+    n_tm = int(tm.sum())
+    logging.info(f"init theta: {n_am} clonal imbalanced, {n_tm} clonal aneuploid bins")
 
     theta_arr = np.full(sx_data.N, 0.5, dtype=np.float32)
-    if n_bin == 0 and n_pois == 0:
-        logging.warning("no clonal informative bins; returning 0.5")
+    use_a = fit_mode in {"allele_only", "hybrid"} and n_am > 0
+    use_t = fit_mode in {"total_only", "hybrid"} and n_tm > 0
+    if not (use_a or use_t):
+        logging.warning("no clonal informative bins; theta=0.5")
         return theta_arr
 
-    # Clone-1 BAF and RDR for clonal bins (all clones identical)
-    p_bin = sx_data.BAF[bin_mask, 1]  # (G_bin,)
-    mu_bin = (C_tumor[bin_mask, 0] / 2.0).astype(np.float64)  # (G_bin,)
-
-    lambda_pois = base_props[pois_mask]  # (G_pois,)
-    mu_pois = (C_tumor[pois_mask, 0] / 2.0).astype(np.float64)  # (G_pois,)
-
-    purity_bounds = (1e-4, 1.0 - 1e-4)
-    n_fitted = 0
+    if use_a:
+        Y_am = sx_data.Y[am]
+        D_am = sx_data.D[am]
+        BAF_am = sx_data.BAF[am, 1:]
+        rdrs_am = rdrs_tumor[am]
+    if use_t:
+        X_tm = sx_data.X[tm]
+        lambda_tm = base_props[tm]
+        rdrs_tm = rdrs_tumor[tm]
 
     for n in range(sx_data.N):
-        has_bin = n_bin > 0 and np.any(sx_data.D[bin_mask, n] > 0)
-        has_pois = n_pois > 0 and sx_data.T[n] > 0
-        if not (has_bin or has_pois):
-            continue
 
-        def neg_ll(theta):
-            ll = 0.0
-            if has_bin:
-                y_n = sx_data.Y[bin_mask, n].astype(np.float64)
-                d_n = sx_data.D[bin_mask, n].astype(np.float64)
-                valid = d_n > 0
-                if valid.any():
-                    denom = theta * mu_bin[valid] + (1.0 - theta)
-                    p_hat = (
-                        theta * mu_bin[valid] * p_bin[valid] + 0.5 * (1.0 - theta)
-                    ) / np.maximum(denom, eps)
-                    p_hat = np.clip(p_hat, eps, 1.0 - eps)
-                    ll += np.sum(binom.logpmf(y_n[valid], d_n[valid], p_hat))
-            if has_pois:
-                x_n = sx_data.X[pois_mask, n].astype(np.float64)
-                T_n = float(sx_data.T[n])
-                mu_expected = T_n * lambda_pois * (theta * mu_pois + (1.0 - theta))
-                mu_expected = np.maximum(mu_expected, eps)
-                ll += np.sum(x_n * np.log(mu_expected) - mu_expected)
-            return -ll
+        def neg_Q(tv, _n=n):
+            tv_arr = np.array([tv], dtype=float)
+            Q = 0.0
+            if use_a:
+                ll = cond_betabin_logpmf_theta(
+                    Y_am[:, _n : _n + 1],
+                    D_am[:, _n : _n + 1],
+                    tau,
+                    BAF_am,
+                    rdrs_am,
+                    tv_arr,
+                )
+                # clonal segments → BAF_k identical across k → take k=0
+                Q += float(ll[:, 0, 0].sum())
+            if use_t:
+                ll = cond_negbin_logpmf_theta(
+                    X_tm[:, _n : _n + 1],
+                    np.array([sx_data.T[_n]], dtype=float),
+                    lambda_tm,
+                    inv_phi,
+                    rdrs_tm,
+                    tv_arr,
+                )
+                Q += float(ll[:, 0, 0].sum())
+            return -Q
 
-        res = minimize_scalar(neg_ll, bounds=purity_bounds, method="bounded")
+        res = minimize_scalar(neg_Q, bounds=(1e-4, 1.0 - 1e-4), method="bounded")
         theta_arr[n] = np.clip(res.x, 1e-4, 1.0 - 1e-4)
-        n_fitted += 1
 
-    logging.info(f"  fitted {n_fitted}/{sx_data.N} spots")
     return theta_arr
 
 

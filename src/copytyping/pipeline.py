@@ -148,10 +148,21 @@ def _run_one(
     logging.info(f"RUN: {run_dir}")
     run_inference(inf_args)
 
+    # Compute metrics from freshly generated annotations
     metrics = {}
-    if os.path.isfile(eval_file):
-        metrics = pd.read_table(eval_file).iloc[0].to_dict()
-        logging.info(pd.read_table(eval_file).to_string(index=False))
+    if os.path.isfile(ann_file):
+        ref_label = run_args.get("ref_label", "")
+        anns = pd.read_table(ann_file)
+        qry_labels = [
+            c
+            for c in anns.columns
+            if c.endswith("-label") and not c.endswith("-refined")
+        ]
+        if qry_labels and ref_label in anns.columns:
+            qry_label = qry_labels[0]
+            tumor_post = "tumor_purity" if platform == "spatial" else "tumor"
+            metrics = _eval_subset(anns, qry_label, ref_label, tumor_post)
+            logging.info(pd.DataFrame([metrics]).to_string(index=False))
     return "OK", metrics
 
 
@@ -168,8 +179,6 @@ def run(args):
     verbosity = args.get("verbosity", 0)
     sol_pattern = args.get("sol_pattern", "*{SOLID}*.tsv")
     extra_args = {}
-    if args.get("update_purity"):
-        extra_args["update_purity"] = True
     if args.get("smooth_k", 0) > 0:
         extra_args["smooth_k"] = args["smooth_k"]
 

@@ -317,7 +317,7 @@ def plot_cnv_heatmap(
 
     # order cells by labels, aggregate same label cells
     uniq_labels = np.unique(cell_labels)
-    if lab_type == "copytyping-label":
+    if lab_type and lab_type.startswith("copytyping-label"):
         # pcolormesh y=0 is bottom, so reverse desired top-to-bottom order
         desired = ["NA", "normal"] + [f"clone{c}" for c in range(1, sx_data.K)]
         uniq_labels = [

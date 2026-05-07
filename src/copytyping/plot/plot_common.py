@@ -295,9 +295,11 @@ def plot_crosstab(
             pred_is_tumor = is_tumor_label(pred_lab)
             pred_is_na = pred_lab in NA_CELLTYPE
             pred_is_normal = pred_lab == "normal"
-            if gt_is_tumor and (pred_is_normal or pred_is_na):
+            if pred_is_na:
                 error[i, j] = True
-            if not gt_is_tumor and pred_is_tumor:
+            elif gt_is_tumor and pred_is_normal:
+                error[i, j] = True
+            elif not gt_is_tumor and pred_is_tumor:
                 error[i, j] = True
 
     rgba = np.ones((num_rows, num_cols, 4))
@@ -361,9 +363,10 @@ def plot_purity_histograms(
     outfile: str,
     label_col: str,
     purity_col="tumor_purity",
+    xlabel="tumor purity",
     dpi=100,
 ):
-    """Per-label purity histogram. One page per label in a PDF."""
+    """Per-label histogram of `purity_col`. One page per label in a PDF."""
     if purity_col not in anns.columns:
         return
     labels = sorted(anns[label_col].unique(), key=lambda x: (x != "normal", x))
@@ -375,7 +378,7 @@ def plot_purity_histograms(
                 continue
             fig, ax = plt.subplots(figsize=(8, 4))
             ax.hist(vals, bins=50, range=(0, 1), edgecolor="black", linewidth=0.3)
-            ax.set_xlabel("tumor purity", fontsize=10)
+            ax.set_xlabel(xlabel, fontsize=10)
             ax.set_ylabel("count", fontsize=10)
             ax.set_title(
                 f"{sample} — {lab} (n={len(vals)}, "
@@ -385,7 +388,7 @@ def plot_purity_histograms(
             fig.tight_layout()
             pdf.savefig(fig, dpi=dpi)
             plt.close(fig)
-    logging.info(f"saved purity histograms to {outfile}")
+    logging.info(f"saved {xlabel} histograms to {outfile}")
 
 
 def plot_cluster_observed_data(

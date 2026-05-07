@@ -394,8 +394,8 @@ def run(args=None):
             else None
         )
 
-        # Cluster obs + 2d scatter
-        plot_labels = [pred_label] + (
+        # Cluster obs + 2d scatter (use best_label so it reflects post-cutoff partition)
+        plot_labels = [best_label] + (
             [ref_label] if ref_df is not None and ref_label in anns.columns else []
         )
         for obs_label in plot_labels:
@@ -524,6 +524,16 @@ def run(args=None):
             sample,
             os.path.join(val_dir, f"{sample}.purity_histograms.pdf"),
             label_col=best_label,
+            dpi=dpi,
+        )
+    if is_copytyping and has_post:
+        plot_purity_histograms(
+            anns,
+            sample,
+            os.path.join(val_dir, f"{sample}.posterior_histograms.pdf"),
+            label_col=best_label,
+            purity_col="max_posterior",
+            xlabel="max posterior",
             dpi=dpi,
         )
 

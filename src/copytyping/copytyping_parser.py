@@ -99,6 +99,15 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="Optional HATCHet solution.tsv to override "
         "CN profiles (matched by CLUSTER ID).",
     )
+    parser.add_argument(
+        "--keep_cn_row",
+        required=False,
+        type=str,
+        default=None,
+        help="Comma-separated whitelist of CNP rows (each row is the existing "
+        "';'-joined per-clone format, e.g. '1|1;2|0;2|1,1|1;1|1;2|0'). "
+        "Segments whose CNP is not in the list are dropped. Default: keep all.",
+    )
 
     parser.add_argument(
         "--genome_size",
@@ -182,14 +191,6 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         "Default: fix pi at its initial value.",
     )
 
-    parser.add_argument(
-        "--update_purity",
-        required=False,
-        action="store_true",
-        default=False,
-        help="if set, update per-spot tumor purity (theta) "
-        "in M-step (default: fixed after init, spatial only)",
-    )
     parser.add_argument(
         "--update_tau",
         required=False,
@@ -401,12 +402,6 @@ def add_arguments_pipeline(parser):
         default=0,
         type=int,
         help="Verbose level for each inference run",
-    )
-    parser.add_argument(
-        "--update_purity",
-        action="store_true",
-        default=False,
-        help="Update per-spot purity in M-step",
     )
     parser.add_argument(
         "--smooth_k",

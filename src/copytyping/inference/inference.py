@@ -82,10 +82,11 @@ def run(args=None):
             )
         )
 
-        seg_sx = SX_Data(
+        # Build the FULL seg_sx (saved to disk so validate can plot all CN states)
+        seg_sx_full = SX_Data(
             barcodes_df, seg_df, X_seg, Y_seg, D_seg, baf_clip=args["baf_clip"]
         )
-        seg_data_sources[data_type] = seg_sx
+        seg_data_sources[data_type] = seg_sx_full
 
         # Save BBC-level data for validate to recompute agg_bbc
         save_phased_bbc(
@@ -95,6 +96,28 @@ def run(args=None):
             D_bbc,
             os.path.join(proc_dir, f"{out_prefix}.{data_type}.bbc"),
         )
+
+        # Optional: filter CN rows for the model fit only (full data still saved)
+        keep_cn_row = args.get("keep_cn_row")
+        if keep_cn_row:
+            keep_set = {r.strip() for r in keep_cn_row.split(",") if r.strip()}
+            keep_mask = seg_df["CNP"].isin(keep_set).to_numpy()
+            n_kept = int(keep_mask.sum())
+            logging.info(
+                f"[{data_type}] keep_cn_row: model uses {n_kept}/{len(seg_df)} "
+                f"segments; full data saved to disk (whitelist: {sorted(keep_set)})"
+            )
+            assert n_kept > 0, "keep_cn_row matched 0 segments; check format vs CNP"
+            seg_sx = SX_Data(
+                barcodes_df,
+                seg_df[keep_mask].reset_index(drop=True),
+                X_seg[keep_mask],
+                Y_seg[keep_mask],
+                D_seg[keep_mask],
+                baf_clip=args["baf_clip"],
+            )
+        else:
+            seg_sx = seg_sx_full
 
         if args.get(f"{data_type}_h5ad") is not None:
             adatas[data_type] = sc.read_h5ad(args[f"{data_type}_h5ad"])

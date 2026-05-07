@@ -59,17 +59,18 @@ def compute_cluster_baf_metrics(sx_data, labels):
 def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
     """Compute metrics for a subset of annotations.
 
-    For prec/recall/f1/ARI_binary: pred-NA treated as non-tumor (hurts recall).
-    For ARI_clone: pred-NA excluded (no clone to compare).
-    Ref-NA always excluded.
+    All metrics (prec/recall/f1/AUC/ARI_binary/ARI_clone) are computed on cells
+    where BOTH ref and pred labels are non-NA. NAs are still preserved upstream
+    (e.g., in the crosstab) but excluded from these metric computations.
     """
     ref_known = ~anns_sub[ref_label].isin(NA_CELLTYPE)
     pred_na = anns_sub[qry_label].isin(NA_CELLTYPE)
     na_count = int(pred_na.sum())
     total = len(anns_sub)
 
-    # Binary metrics: ref-known spots, pred-NA = not tumor
-    anns_bin = anns_sub[ref_known]
+    # Binary metrics: both ref-known and pred-known
+    both_known = ref_known & ~pred_na
+    anns_bin = anns_sub[both_known]
     y_true = anns_bin[ref_label].apply(is_tumor_label).to_numpy(dtype=int)
     has_both = len(y_true) > 0 and 0 < y_true.sum() < len(y_true)
 
@@ -89,7 +90,7 @@ def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
         if soft_valid.sum() > 0:
             auc_soft = roc_auc_score(y_true[soft_valid], soft_vals[soft_valid])
 
-    # ARI_binary: pred-NA = not tumor
+    # ARI_binary: both ref-known and pred-known
     ari_binary = np.nan
     if has_both:
         ref_binary = np.where(y_true, "tumor", "normal")
@@ -98,12 +99,10 @@ def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
         )
         ari_binary = adjusted_rand_score(ref_binary, pred_binary)
 
-    # ARI_clone: exclude both ref-NA and pred-NA
+    # ARI_clone: also on both-known
     ari_clone = np.nan
-    both_known = ref_known & ~pred_na
-    anns_clone = anns_sub[both_known]
-    if len(anns_clone) > 0 and anns_clone[ref_label].nunique() > 1:
-        ari_clone = adjusted_rand_score(anns_clone[ref_label], anns_clone[qry_label])
+    if len(anns_bin) > 0 and anns_bin[ref_label].nunique() > 1:
+        ari_clone = adjusted_rand_score(anns_bin[ref_label], anns_bin[qry_label])
 
     label_counts = anns_sub[qry_label].value_counts()
     clone_cols = sorted([c for c in label_counts.index if c.startswith("clone")])
