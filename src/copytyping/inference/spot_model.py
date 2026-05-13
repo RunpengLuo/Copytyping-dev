@@ -57,29 +57,36 @@ class Spot_Model(Base_Model):
         is_normal, init_labeling = self._identify_normal_cells(
             init_fix_params, init_params
         )
-        # pi over tumor clones only (K_tumor components)
+        # pi per rep over tumor clones only: shape (R, K_tumor)
         bulk_pi = init_params.get("pi", np.ones(self.K) / self.K)
         tumor_pi = bulk_pi[1:]
         tumor_pi = tumor_pi / tumor_pi.sum()
-        params = {"pi": tumor_pi}
+        pi_per_rep = np.tile(tumor_pi, (self.R, 1))  # (R, K_tumor)
+        params = {"pi": pi_per_rep}
         self._init_lambda(params, is_normal)
 
         for dt in self.data_types:
             sx = self.data_sources[dt]
             lg = params[f"{dt}-lambda"]
-            tau = inv_phi = None
+            tau_per_rep = inv_phi_per_rep = None
             if fit_mode in {"allele_only", "hybrid"}:
-                tau = self._init_tau_from_normals(
+                tau_per_rep = self._init_tau_from_normals(
                     dt, is_normal, init_params["tau_bounds"]
                 )
-                params[f"{dt}-tau"] = tau
+                params[f"{dt}-tau"] = tau_per_rep  # (R,)
             if fit_mode in {"total_only", "hybrid"}:
-                inv_phi = self._init_invphi_from_normals(
+                inv_phi_per_rep = self._init_invphi_from_normals(
                     dt, lg, is_normal, init_params["invphi_bounds"]
                 )
-                params[f"{dt}-inv_phi"] = inv_phi
+                params[f"{dt}-inv_phi"] = inv_phi_per_rep  # (R,)
+            # estimate_tumor_proportion uses scalar dispersion;
+            # use the pooled (mean) value as a representative.
+            tau_init = float(np.mean(tau_per_rep)) if tau_per_rep is not None else None
+            invphi_init = (
+                float(np.mean(inv_phi_per_rep)) if inv_phi_per_rep is not None else None
+            )
             params[f"{dt}-theta"] = estimate_tumor_proportion(
-                sx, lg, tau, inv_phi, fit_mode=fit_mode
+                sx, lg, tau_init, invphi_init, fit_mode=fit_mode
             )
             # Precompute: rdrs only for tumor clones (exclude normal column)
             rdrs_full = clone_rdr_gk(lg, sx.C)
@@ -116,10 +123,11 @@ class Spot_Model(Base_Model):
                 MA, _ = sx.apply_mask_shallow(
                     self.allele_mask_id, additional_mask=params[f"{dt}-lambda"] > 0
                 )
+                tau_per_spot = params[f"{dt}-tau"][self.rep_idx]  # (N,)
                 ll_a[allele_mask] = cond_betabin_logpmf_theta(
                     MA["Y"],
                     MA["D"],
-                    params[f"{dt}-tau"],
+                    tau_per_spot,
                     MA["BAF"][:, 1:],  # tumor clone BAFs only
                     rdrs[allele_mask],
                     theta,
@@ -128,20 +136,21 @@ class Spot_Model(Base_Model):
                 global_lls += ll_a.sum(axis=0)
 
             if fit_mode in {"total_only", "hybrid"} and total_mask.any():
+                invphi_per_spot = params[f"{dt}-inv_phi"][self.rep_idx]  # (N,)
                 ll_t[total_mask] = cond_negbin_logpmf_theta(
                     sx.X[total_mask],
                     sx.T,
                     params[f"{dt}-lambda"][total_mask],
-                    params[f"{dt}-inv_phi"],
+                    invphi_per_spot,
                     rdrs[total_mask],
                     theta,
                 )
                 ll_t[:, ~mask_n, :] = 0.0
                 global_lls += ll_t.sum(axis=0)
 
-        # Standard pi prior (no gate)
-        pi = params["pi"]
-        global_lls += np.log(np.maximum(pi, 1e-30))
+        # Per-rep pi prior: log pi[rep_idx[n], k] added per spot
+        pi = params["pi"]  # (R, K_tumor)
+        global_lls += np.log(np.maximum(pi[self.rep_idx], 1e-30))
 
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls

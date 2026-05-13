@@ -50,9 +50,17 @@ def prepare_rdr_baf_features(sx_data: SX_Data, base_props: np.ndarray, norm=True
 
 
 def kmeans_copytyping(
-    data_sources: dict, barcodes: pd.DataFrame, ref_label: str, K: int
+    data_sources: dict,
+    barcodes: pd.DataFrame,
+    ref_label: str,
+    K: int,
+    label: str,
 ):
-    """K-means clustering on BAF+RDR features. Baseline from ref-label normals."""
+    """K-means clustering on BAF+RDR features. Returns (anns, clone_props).
+
+    If ref_label is in barcodes, clusters get majority-voted normal/tumor names
+    via cluster_label_major_vote; otherwise raw "clusterN" names are kept.
+    """
     is_normal = ~barcodes[ref_label].apply(is_tumor_label).to_numpy()
     n_normal = int(is_normal.sum())
     if n_normal == 0:
@@ -60,15 +68,26 @@ def kmeans_copytyping(
     logging.info(f"kmeans: {n_normal} ref normals for baseline")
 
     features = []
-    for data_type, sx in data_sources.items():
+    for sx in data_sources.values():
         base_props = compute_baseline_proportions(sx.X, sx.T, is_normal)
-        my_features = prepare_rdr_baf_features(sx, base_props, norm=False)
-        features.append(my_features)
+        features.append(prepare_rdr_baf_features(sx, base_props, norm=False))
     data_matrix = np.concatenate(features, axis=1)
 
     kmeans = cluster.KMeans(n_clusters=K, init="k-means++")
     kmeans.fit(data_matrix)
-    return kmeans.labels_
+    raw_labels = kmeans.labels_
+
+    anns = barcodes.copy(deep=True)
+    if ref_label in barcodes.columns:
+        return cluster_label_major_vote(
+            anns, raw_labels, cell_label=label, ref_label=ref_label
+        )
+    anns[label] = ["cluster" + str(x) for x in raw_labels]
+    clone_props = {
+        lab: np.mean(anns[label].to_numpy() == lab)
+        for lab in sorted(anns[label].unique())
+    }
+    return anns, clone_props
 
 
 def cluster_label_major_vote(

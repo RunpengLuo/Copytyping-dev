@@ -16,11 +16,8 @@ def _parse_bounds(s):
 
 def prepare_params(args, cnv_blocks, platform, data_types):
     """Build init_params and fix_params dicts from CLI args and CNV profile."""
-    bulk_props = np.array(list(map(float, cnv_blocks["PROPS"].iloc[0].split(";"))))
-    if args.get("init_pi_from_bulk", False):
-        pi_init = bulk_props
-    else:
-        pi_init = np.ones(len(bulk_props)) / len(bulk_props)
+    K = len(cnv_blocks["PROPS"].iloc[0].split(";"))
+    pi_init = np.ones(K) / K
     tau_bounds = _parse_bounds(args["tau_bounds"])
     invphi_bounds = _parse_bounds(args["invphi_bounds"])
     init_params = {
@@ -31,11 +28,11 @@ def prepare_params(args, cnv_blocks, platform, data_types):
         "ref_label": args["ref_label"],
         "niters": args["niters"],
     }
-    fix_params = {"pi": not args.get("update_pi", False)}
+    fix_params = {"pi": not args["update_pi"]}
     for data_type in data_types:
         fix_params[f"{data_type}-theta"] = True  # theta is fixed after init
-        fix_params[f"{data_type}-tau"] = not args.get("update_tau", False)
-        fix_params[f"{data_type}-inv_phi"] = not args.get("update_invphi", False)
+        fix_params[f"{data_type}-tau"] = not args["update_tau"]
+        fix_params[f"{data_type}-inv_phi"] = not args["update_invphi"]
     return init_params, fix_params
 
 
@@ -192,6 +189,21 @@ def estimate_tumor_proportion(
 # Likelihood functions
 
 
+def _broadcast_dispersion(val, G, N):
+    """Reshape tau / inv_phi for (G, N, K) likelihood broadcast.
+
+    Accepts scalar, (G,) per-bin, or (N,) per-spot/cell. Returns (G,1,1) or (1,N,1).
+    """
+    arr = np.atleast_1d(val)
+    if arr.size == 1:
+        return arr.reshape(1, 1, 1)
+    if arr.shape == (G,):
+        return arr[:, None, None]
+    if arr.shape == (N,):
+        return arr[None, :, None]
+    raise ValueError(f"dispersion shape {arr.shape} not in {{(1,), ({G},), ({N},)}}")
+
+
 def cond_betabin_logpmf(
     Y: np.ndarray,
     D: np.ndarray,
@@ -213,7 +225,7 @@ def cond_betabin_logpmf(
     Y_gnk = Y[:, :, None]
     D_gnk = D[:, :, None]
     X_gnk = D_gnk - Y_gnk
-    tau_gnk = np.broadcast_to(np.atleast_1d(tau)[:, None, None], (G, 1, 1))
+    tau_gnk = _broadcast_dispersion(tau, G, N)
     p_gnk = p[:, None, :]
 
     a = tau_gnk * p_gnk
@@ -253,11 +265,16 @@ def cond_negbin_logpmf(
     mu_gnk = np.clip(mu_gnk, eps, None)
     X_gnk = X[:, :, None]
 
-    inv_phi = np.broadcast_to(np.atleast_1d(inv_phi)[:, None, None], (G, N, K))
+    inv_phi = _broadcast_dispersion(inv_phi, G, N)
 
-    ll = gammaln(X_gnk + inv_phi) - gammaln(inv_phi) - gammaln(X_gnk + 1.0)
-    ll += inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
-    ll += X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+    # Single expression so result broadcasts to (G, N, K) regardless of inv_phi shape.
+    ll = (
+        gammaln(X_gnk + inv_phi)
+        - gammaln(inv_phi)
+        - gammaln(X_gnk + 1.0)
+        + inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
+        + X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+    )
     return ll
 
 
@@ -281,7 +298,7 @@ def cond_betabin_logpmf_theta(
     Y_gnk = Y[:, :, None]
     D_gnk = D[:, :, None]
     X_gnk = D_gnk - Y_gnk
-    tau_gnk = np.broadcast_to(np.atleast_1d(tau)[:, None, None], (G, 1, 1))
+    tau_gnk = _broadcast_dispersion(tau, G, N)
     p_gnk = p[:, None, :]
 
     rdrs_gnk = rdrs_gk[:, None, :]
@@ -328,14 +345,19 @@ def cond_negbin_logpmf_theta(
     lam_gnk = lam_g[:, None, None]
     rdrs_gnk = rdrs_gk[:, None, :]
     theta_gnk = theta[None, :, None]
-    inv_phi = np.broadcast_to(np.atleast_1d(inv_phi)[:, None, None], (G, N, K))
+    inv_phi = _broadcast_dispersion(inv_phi, G, N)
 
     mu_gnk = T_gnk * lam_gnk * (theta_gnk * rdrs_gnk + (1.0 - theta_gnk))
     mu_gnk = np.clip(mu_gnk, eps, None)
 
-    ll = gammaln(X_gnk + inv_phi) - gammaln(inv_phi) - gammaln(X_gnk + 1.0)
-    ll += inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
-    ll += X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+    # Single expression so result broadcasts to (G, N, K) regardless of inv_phi shape.
+    ll = (
+        gammaln(X_gnk + inv_phi)
+        - gammaln(inv_phi)
+        - gammaln(X_gnk + 1.0)
+        + inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
+        + X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+    )
     return ll
 
 

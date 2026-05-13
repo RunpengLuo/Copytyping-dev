@@ -22,5 +22,8 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+copytyping = ["copytyping.yaml"]
+
 [project.scripts]
 copytyping = "copytyping.__main__:main"

@@ -43,6 +43,13 @@ class Base_Model:
             modality_masks = {dt: np.ones(self.N, dtype=bool) for dt in data_types}
         self.modality_masks = modality_masks
 
+        # Per-rep grouping (used for per-rep pi / tau / inv_phi)
+        rep_series = barcodes["REP_ID"].astype(str)
+        self.rep_ids = list(dict.fromkeys(rep_series.tolist()))
+        rep_to_idx = {r: i for i, r in enumerate(self.rep_ids)}
+        self.rep_idx = np.array([rep_to_idx[r] for r in rep_series], dtype=np.int64)
+        self.R = len(self.rep_ids)
+
     # ------------------------------------------------------------------
     # Initialization helpers
     # ------------------------------------------------------------------
@@ -106,40 +113,84 @@ class Base_Model:
             )
 
     def _init_tau_from_normals(self, data_type, is_normal, tau_bounds):
-        """Estimate BB tau (scalar) via MLE on normal cells at imbalanced segments."""
+        """Estimate BB tau per rep via MLE on normal cells at imbalanced segments.
+
+        Returns (R,) array. First fits a global tau (all normals pooled) as a
+        fallback, then per-rep fits. Reps with no normals inherit the global tau.
+        """
         sx_data = self.data_sources[data_type]
         imb = sx_data.MASK["IMBALANCED"]
-        Y_norm = sx_data.Y[imb][:, is_normal][:, :, None].astype(np.float64)
-        D_norm = sx_data.D[imb][:, is_normal][:, :, None].astype(np.float64)
-        tau = mle_tau(
-            Y_norm,
-            D_norm,
-            np.full_like(Y_norm, 0.5),
-            np.ones_like(Y_norm),
-            tau_bounds=tau_bounds,
+        # Global tau (pooled across all normals) — used as fallback for empty reps
+        Yg = sx_data.Y[imb][:, is_normal][:, :, None].astype(np.float64)
+        Dg = sx_data.D[imb][:, is_normal][:, :, None].astype(np.float64)
+        tau_global = mle_tau(
+            Yg, Dg, np.full_like(Yg, 0.5), np.ones_like(Yg), tau_bounds=tau_bounds
         )
         logging.info(
-            f"{data_type}: tau={tau:.2f} (bounds={tau_bounds}) from "
-            f"{int(np.sum(is_normal))} normal x {int(imb.sum())} imbalanced segments"
+            f"{data_type}: pooled tau={tau_global:.2f} from "
+            f"{int(is_normal.sum())} normals × {int(imb.sum())} imb"
         )
-        return tau
+        tau_arr = np.full(self.R, tau_global, dtype=np.float64)
+        for r in range(self.R):
+            mask_r = (self.rep_idx == r) & is_normal
+            n_r = int(mask_r.sum())
+            if n_r == 0:
+                logging.warning(
+                    f"  {data_type} rep={self.rep_ids[r]}: no normals, "
+                    f"using pooled tau={tau_global:.2f}"
+                )
+                continue
+            Y = sx_data.Y[imb][:, mask_r][:, :, None].astype(np.float64)
+            D = sx_data.D[imb][:, mask_r][:, :, None].astype(np.float64)
+            tau_arr[r] = mle_tau(
+                Y, D, np.full_like(Y, 0.5), np.ones_like(Y), tau_bounds=tau_bounds
+            )
+            logging.info(
+                f"  {data_type} rep={self.rep_ids[r]}: tau={tau_arr[r]:.2f} from {n_r} normals"
+            )
+        return tau_arr
 
     def _init_invphi_from_normals(self, data_type, lambda_g, is_normal, invphi_bounds):
-        """Estimate NB inv_phi (scalar) via MLE on normal cells at aneuploid segments."""
+        """Estimate NB inv_phi per rep via MLE on normal cells at aneuploid segments.
+
+        Returns (R,) array. First fits a global inv_phi (all normals pooled) as a
+        fallback, then per-rep fits. Reps with no normals inherit the global inv_phi.
+        """
         sx_data = self.data_sources[data_type]
         aneu = sx_data.MASK["ANEUPLOID"]
-        X_norm = sx_data.X[aneu][:, is_normal][:, :, None].astype(np.float64)
-        mu_norm = (
-            sx_data.T[is_normal][None, :, None] * lambda_g[aneu, None, None]
-        ).astype(np.float64)
-        invphi = mle_invphi(
-            X_norm, mu_norm, np.ones_like(X_norm), invphi_bounds=invphi_bounds
+        # Global inv_phi (pooled across all normals) — fallback for empty reps
+        Xg = sx_data.X[aneu][:, is_normal][:, :, None].astype(np.float64)
+        mug = (sx_data.T[is_normal][None, :, None] * lambda_g[aneu, None, None]).astype(
+            np.float64
+        )
+        invphi_global = mle_invphi(
+            Xg, mug, np.ones_like(Xg), invphi_bounds=invphi_bounds
         )
         logging.info(
-            f"{data_type}: inv_phi={invphi:.4f} (phi={1 / invphi:.2f}, bounds={invphi_bounds}) from "
-            f"{int(np.sum(is_normal))} normal x {int(aneu.sum())} aneuploid segments"
+            f"{data_type}: pooled inv_phi={invphi_global:.2f} from "
+            f"{int(is_normal.sum())} normals × {int(aneu.sum())} aneu"
         )
-        return invphi
+        invphi_arr = np.full(self.R, invphi_global, dtype=np.float64)
+        for r in range(self.R):
+            mask_r = (self.rep_idx == r) & is_normal
+            n_r = int(mask_r.sum())
+            if n_r == 0:
+                logging.warning(
+                    f"  {data_type} rep={self.rep_ids[r]}: no normals, "
+                    f"using pooled inv_phi={invphi_global:.2f}"
+                )
+                continue
+            X = sx_data.X[aneu][:, mask_r][:, :, None].astype(np.float64)
+            mu = (sx_data.T[mask_r][None, :, None] * lambda_g[aneu, None, None]).astype(
+                np.float64
+            )
+            invphi_arr[r] = mle_invphi(
+                X, mu, np.ones_like(X), invphi_bounds=invphi_bounds
+            )
+            logging.info(
+                f"  {data_type} rep={self.rep_ids[r]}: inv_phi={invphi_arr[r]:.2f} from {n_r} normals"
+            )
+        return invphi_arr
 
     # ------------------------------------------------------------------
     # E-step
@@ -157,13 +208,24 @@ class Base_Model:
     # M-step helpers
     # ------------------------------------------------------------------
     def _update_pi(self, gamma, params, fix_params, N_eff, K_eff):
-        """MAP pi update with Dirichlet prior."""
-        if not fix_params["pi"]:
-            alpha = self._pi_alpha
-            N_k = gamma.sum(axis=0)
-            pi = (N_k + alpha - 1) / (N_eff + K_eff * (alpha - 1))
-            pi = np.clip(pi, 0, None)
-            params["pi"] = pi / pi.sum() if pi.sum() > 0 else np.ones(K_eff) / K_eff
+        """MAP per-rep pi update with Dirichlet prior. pi has shape (R, K_eff)."""
+        if fix_params["pi"]:
+            return
+        alpha = self._pi_alpha
+        pi = params["pi"]  # (R, K_eff)
+        new_pi = np.zeros_like(pi)
+        for r in range(self.R):
+            mask = self.rep_idx == r
+            n_r = int(mask.sum())
+            if n_r == 0:
+                new_pi[r] = pi[r]
+                continue
+            N_k = gamma[mask].sum(axis=0)  # (K_eff,)
+            denom = max(n_r + K_eff * (alpha - 1), 1e-10)
+            row = np.clip((N_k + alpha - 1) / denom, 0, None)
+            s = row.sum()
+            new_pi[r] = row / s if s > 0 else np.ones(K_eff) / K_eff
+        params["pi"] = new_pi
 
     # ------------------------------------------------------------------
     # Fit (common EM loop)

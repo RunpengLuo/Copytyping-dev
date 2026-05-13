@@ -12,6 +12,15 @@ from copytyping.utils import read_seg_ucn_file
 ##################################################
 
 
+def read_cell_types(ct_file: str, req_cols: set):
+    cell_type_df = pd.read_table(ct_file)
+    for req_col in req_cols:
+        assert req_col in cell_type_df.columns, (
+            f"read_cell_types {ct_file}: {req_col} is missing"
+        )
+    return cell_type_df
+
+
 def load_modality_data(
     bc_file: str,
     bbc_file: str,
@@ -38,7 +47,9 @@ def load_modality_data(
     barcodes_df = pd.read_table(
         bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
     )
-    barcodes_df["REP_ID"] = barcodes_df["BARCODE"].str.rsplit("_", n=1).str[-1]
+    # REP_ID is everything after the first underscore (e.g. "ACGT-1_U1" -> "U1",
+    # "ACGT-1_a_b_c" -> "a_b_c").
+    barcodes_df["REP_ID"] = barcodes_df["BARCODE"].str.split("_", n=1).str[1]
 
     X_bbc = sparse.load_npz(x_count_file)
     A_bbc = sparse.load_npz(a_allele_file)
@@ -380,8 +391,8 @@ def load_spatial_neighbors(h5ad_path, n_neighs=6):
     adata = sc.read_h5ad(h5ad_path)
     assert "spatial" in adata.obsm, f"no spatial coordinates in {h5ad_path}"
 
-    # extract rep_id from barcode suffix
-    rep_ids = np.array([bc.rsplit("_", 1)[-1] for bc in adata.obs_names])
+    # extract rep_id from barcode suffix (everything after first underscore)
+    rep_ids = np.array([bc.split("_", 1)[1] for bc in adata.obs_names])
     result = {}
     for rep_id in np.unique(rep_ids):
         mask = rep_ids == rep_id

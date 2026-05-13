@@ -1,9 +1,29 @@
+import argparse
+import logging
 import os
 import sys
-import pandas as pd
-import logging
-
 from collections import OrderedDict
+from importlib.resources import files
+
+import pandas as pd
+import yaml
+
+
+def load_defaults() -> dict:
+    """Load packaged tuning defaults from src/copytyping/copytyping.yaml."""
+    text = files("copytyping").joinpath("copytyping.yaml").read_text(encoding="utf-8")
+    return yaml.safe_load(text)
+
+
+def normalize_args(args) -> dict:
+    """Convert Namespace→dict if needed and merge YAML defaults under it (args win).
+
+    Argparse parsers use ``default=argparse.SUPPRESS`` so unparsed flags are
+    absent from the Namespace; this fills them from the bundled yaml.
+    """
+    if isinstance(args, argparse.Namespace):
+        args = vars(args)
+    return {**load_defaults(), **args}
 
 
 ALL_PLATFORMS = ["single_cell", "spatial"]
@@ -83,11 +103,7 @@ def read_whitelist_segments(bed_file: str):
 
 
 def setup_logging(args) -> None:
-    v = (
-        getattr(args, "verbosity", None)
-        or (args.get("verbosity") if isinstance(args, dict) else 0)
-        or 0
-    )
+    v = args["verbosity"] if isinstance(args, dict) else args.verbosity
     level = logging.DEBUG if v >= 2 else logging.INFO
     logging.basicConfig(
         level=level,

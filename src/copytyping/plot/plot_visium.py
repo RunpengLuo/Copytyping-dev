@@ -3,15 +3,110 @@ import os
 
 import numpy as np
 import pandas as pd
+import scanpy as sc
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 
+from copytyping.inference.inference_utils import compute_loh_baf
 from copytyping.utils import is_tumor_label, INVALID_LABELS, NA_CELLTYPE
 
 logging.getLogger("anndata").setLevel(logging.WARNING)
+
+
+def plot_visium_all(
+    *,
+    sample,
+    anns,
+    h5ad_source,
+    raw_clust,
+    plot_dir,
+    spot_label,
+    ref_label,
+    best_cutoff_label=None,
+    best_cutoff_metrics=None,
+    labeling_trace=None,
+    barcodes=None,
+    clones=None,
+    dpi=200,
+):
+    """Sample-level visium orchestrator (panel + LOH BAF + iters).
+
+    Visium is single-modality (gex) by definition, so all three plots run
+    once per sample, not per-modality.
+
+    Args:
+        anns: per-spot DataFrame with BARCODE, REP_ID, label columns.
+        h5ad_source: path to .h5ad or AnnData with spatial coords.
+        raw_clust: cluster-level SX_Data for the gex modality (for LOH BAF).
+        labeling_trace: optional list of EM-iter dicts (from Spot_Model);
+            if provided, also runs plot_visium_iters.
+        barcodes: union barcodes DataFrame (used by plot_visium_iters).
+        clones: clone names list (from raw_clust.clones).
+    """
+    slices = build_visium_slices(anns, h5ad_source, ref_label)
+    plot_visium_panel(
+        sample,
+        slices,
+        plot_dir,
+        spot_label=spot_label,
+        path_label=ref_label,
+        best_cutoff_label=best_cutoff_label,
+        best_cutoff_metrics=best_cutoff_metrics,
+        dpi=dpi,
+    )
+    try:
+        loh_baf, loh_info = compute_loh_baf(raw_clust)
+        plot_visium_loh_baf(
+            sample,
+            slices,
+            raw_clust,
+            loh_baf,
+            loh_info,
+            os.path.join(plot_dir, f"{sample}.visium_loh_baf.pdf"),
+            dpi=dpi,
+        )
+    except Exception as e:
+        logging.warning(f"visium_loh_baf failed: {e}")
+    if labeling_trace is not None:
+        plot_visium_iters(
+            sample,
+            slices,
+            labeling_trace,
+            barcodes=barcodes,
+            out_dir=plot_dir,
+            clones=clones,
+            ref_label=ref_label,
+            dpi=dpi,
+        )
+
+
+def build_visium_slices(anns, h5ad_source, ref_label):
+    """Build per-rep (rep_id, anns_vis, vis_adata) slices for visium plotting.
+
+    h5ad_source can be a path to a .h5ad file or an already-loaded AnnData.
+    Each anns_vis is reindexed to vis_adata.obs_names; ref_label column is
+    filled with "Unknown" if absent.
+    """
+    if isinstance(h5ad_source, str):
+        h5ad_adata = sc.read_h5ad(h5ad_source)
+    else:
+        h5ad_adata = h5ad_source
+    anns_indexed = anns.set_index("BARCODE")
+    slices = []
+    for rep_id in sorted(anns["REP_ID"].dropna().unique()):
+        anns_rep = anns[anns["REP_ID"] == rep_id]
+        vis_adata = h5ad_adata[
+            h5ad_adata.obs_names.isin(anns_rep["BARCODE"].values)
+        ].copy()
+        anns_vis = anns_indexed.reindex(vis_adata.obs_names)
+        if ref_label not in anns_vis.columns:
+            anns_vis[ref_label] = "Unknown"
+        slices.append((rep_id, anns_vis, vis_adata))
+    return slices
+
 
 # ── Unified color palette ──
 # normal=gray, NA=tab10[0], tumor clones=tab10[1:]

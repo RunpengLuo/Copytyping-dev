@@ -76,43 +76,41 @@ def adaptive_bin_bbc(
     """
     bbc_df = bbc_df.reset_index(drop=True)
 
-    def _to_dense(m):
-        return (
-            m.toarray().astype(np.int32)
-            if sparse.issparse(m)
-            else np.asarray(m, dtype=np.int32)
-        )
+    # Keep X/Y/D sparse (CSR) — avoids ~30 GB densification of 66K × 38K matrices.
+    # Per-group sum on sparse row slices is cheap; final aggregated matrix is small.
+    X = X_bbc.tocsr() if sparse.issparse(X_bbc) else sparse.csr_matrix(X_bbc)
+    Y = Y_bbc.tocsr() if sparse.issparse(Y_bbc) else sparse.csr_matrix(Y_bbc)
+    D = D_bbc.tocsr() if sparse.issparse(D_bbc) else sparse.csr_matrix(D_bbc)
 
-    X = _to_dense(X_bbc)
-    Y = _to_dense(Y_bbc)
-    D = _to_dense(D_bbc)
-
-    D_total = D.sum(axis=1)
+    D_total = np.asarray(D.sum(axis=1)).ravel()
+    # Pre-extract as numpy arrays so the walk loop avoids pandas iloc per access.
     bbc_chr = bbc_df["#CHR"].to_numpy()
     seg_ids = bbc_df["seg_id"].to_numpy()
+    starts = bbc_df["START"].to_numpy()
+    ends = bbc_df["END"].to_numpy()
+    cnps = bbc_df["CNP"].to_numpy()
 
-    # walk and merge
+    # bbc_df is already chr-pos sorted (HATCHet writes it that way); preserve that
+    # row order via pd.unique rather than np.unique (which would lex-sort).
     groups = []  # list of (chr, start, end, seg_id, cnp, [bbc_indices])
-    chroms = bbc_df["#CHR"].unique()
-    for chrom in chroms:
-        chr_mask = bbc_chr == chrom
-        chr_idx = np.where(chr_mask)[0]
-        if len(chr_idx) == 0:
+    for chrom in pd.unique(bbc_chr):
+        chr_idx = np.where(bbc_chr == chrom)[0]
+        if chr_idx.size == 0:
             continue
-        order = chr_idx[np.argsort(bbc_df["START"].to_numpy()[chr_idx])]
+        order = chr_idx[np.argsort(starts[chr_idx])]
 
         cur_seg = seg_ids[order[0]]
-        cur_start = bbc_df["START"].iloc[order[0]]
-        cur_end = bbc_df["END"].iloc[order[0]]
-        cur_cnp = bbc_df["CNP"].iloc[order[0]]
+        cur_start = starts[order[0]]
+        cur_end = ends[order[0]]
+        cur_cnp = cnps[order[0]]
         cur_indices = [order[0]]
         cur_d = D_total[order[0]]
 
         for i in range(1, len(order)):
             bi = order[i]
             bi_seg = seg_ids[bi]
-            bi_start = bbc_df["START"].iloc[bi]
-            bi_end = bbc_df["END"].iloc[bi]
+            bi_start = starts[bi]
+            bi_end = ends[bi]
             bi_length = bi_end - cur_start
 
             same_seg = bi_seg == cur_seg and cur_seg >= 0
@@ -130,13 +128,13 @@ def adaptive_bin_bbc(
                 cur_seg = bi_seg
                 cur_start = bi_start
                 cur_end = bi_end
-                cur_cnp = bbc_df["CNP"].iloc[bi]
+                cur_cnp = cnps[bi]
                 cur_indices = [bi]
                 cur_d = D_total[bi]
 
         groups.append((chrom, cur_start, cur_end, cur_seg, cur_cnp, cur_indices))
 
-    # build aggregated arrays
+    # build aggregated arrays — sum sparse rows per group, then densify the result
     n_agg = len(groups)
     N = X.shape[1]
     X_agg = np.zeros((n_agg, N), dtype=np.int32)
@@ -145,10 +143,10 @@ def adaptive_bin_bbc(
     rows = []
 
     for gi, (chrom, start, end, sid, cnp, indices) in enumerate(groups):
-        idx = np.array(indices)
-        X_agg[gi] = X[idx].sum(axis=0)
-        Y_agg[gi] = Y[idx].sum(axis=0)
-        D_agg[gi] = D[idx].sum(axis=0)
+        idx = np.asarray(indices)
+        X_agg[gi] = np.asarray(X[idx].sum(axis=0)).ravel()
+        Y_agg[gi] = np.asarray(Y[idx].sum(axis=0)).ravel()
+        D_agg[gi] = np.asarray(D[idx].sum(axis=0)).ravel()
         rows.append(
             {"#CHR": chrom, "START": start, "END": end, "seg_id": sid, "CNP": cnp}
         )

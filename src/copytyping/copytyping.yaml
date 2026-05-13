@@ -1,0 +1,88 @@
+# copytyping default parameter values for all subcommands.
+# Loaded by copytyping_parser._load_yaml_defaults() at parser-construction time;
+# CLI flags override these. Edit here to change the global default for a knob.
+
+##################################################
+# global
+# verbosity: 0 | 1 | 2
+verbosity: 0
+
+##################################################
+# inference — model fit
+# fit_mode: hybrid | allele_only | total_only
+fit_mode: hybrid
+niters: 100
+# baf_clip: cell model uses 0.001; spot model often uses 0.1 (mixture tolerance)
+baf_clip: 0.001
+# Beta-Binomial concentration bounds (comma-separated lo,hi). Larger = less dispersed.
+tau_bounds: "50.0,5000.0"
+# Negative-Binomial inv-phi bounds (comma-separated lo,hi). Larger = less dispersed.
+invphi_bounds: "20.0,5000.0"
+# Symmetric Dirichlet prior on pi (clone mixing proportions).
+# 1: non-informative (default), <1: sparse, >1: smoothing
+pi_alpha: 1.0
+# Update pi (clone mixing proportions) during EM? Default: fix at init.
+update_pi: false
+# Update BB tau in M-step? (cell model only)
+update_tau: false
+# Update NB inv_phi in M-step? (cell model only)
+update_invphi: false
+
+##################################################
+# inference — segment filtering & data control
+# method: copytyping (EM) | kmeans (feature-based clustering)
+method: copytyping
+# ref_label column name in --cell_type
+ref_label: cell_type
+# Comma-separated ref_label values to exclude from analysis. Requires --cell_type.
+exclude: "Doublet,doublet,Unknown,NA"
+# Comma-separated whitelist of CNP rows (joint A|B per-clone format). null = keep all.
+keep_cn_row: null
+# Output prefix: <out_dir>/<out_prefix>.* (defaults to --sample when unset)
+out_prefix: sample
+# If true, also save heavy processed_data files (~300MB/run). Always saved:
+# annotations.tsv, cnp_profile.tsv, metadata.tsv, model_params.npz.
+save_processed_data: false
+
+##################################################
+# inference — spatial smoothing (spot model)
+# Number of spatial neighbors for Visium hexagonal lattice.
+n_neighs: 6
+# Max adaptive smoothing level (0=none). Low-count spots smoothed k=1..max_smooth_k
+# until UMI / SNP-UMI thresholds met.
+max_smooth_k: 1
+# Min total UMI per spot for adaptive smoothing (0=disabled).
+min_umi_per_spot: 0
+# Min total allele UMI per spot for adaptive smoothing (0=disabled).
+min_snp_umi_per_spot: 0
+
+##################################################
+# inference / validate — plot parameters
+dpi: 200
+# Aggregate observations in heatmap (cells per row in agg10 view).
+heatmap_agg: 10
+# Min SNP count per adaptive BBC bin for 1d scatter.
+min_snp_count: 300
+# Max bin length (bp) for adaptive BBC binning.
+max_bin_length: 5_000_000
+# If true, render CN profile track as allele-specific (A/B sub-bars,
+# inferno red-yellow palette) instead of the default joint (A|B) palette.
+ascn_profile: false
+
+##################################################
+# validate — cutoff sweep + extras
+# Predicted-label column name in --pred_labels TSV.
+pred_label: label
+# Comma-separated purity cutoffs for hard label evaluation.
+# Spots with purity <= cutoff are relabeled "normal".
+purity_cutoff: "0.5,0.6,0.7"
+# Comma-separated max_posterior cutoffs.
+# Tumor spots with max_posterior <= cutoff are excluded from metrics.
+post_cutoff: "0.5,0.6,0.7,0.8,0.9"
+
+##################################################
+# pipeline
+# Glob pattern for solfiles under PATH_TO_SOLDIR. {SOLID} replaced by panel SOLID col.
+sol_pattern: "*sol{SOLID}*.tsv"
+# Force re-run even if existing annotations.tsv is present.
+force: false

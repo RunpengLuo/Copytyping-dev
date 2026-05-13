@@ -14,6 +14,8 @@ from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import read_whitelist_segments
 from copytyping.plot.plot_copynumber import (
     BLACK,
+    plot_ascn_legend,
+    plot_ascn_profile,
     plot_cnv_legend,
     plot_cnv_profile,
 )
@@ -130,7 +132,7 @@ def plot_heatmap(
         ax.add_patch(rect)
 
         yticks.append(0.5 * (y0 + y1))
-        yticklabels.append(f"{label} ({proportion}%)")
+        yticklabels.append(f"{label}\n{proportion}%")
 
     ax.set_yticks(yticks)
     ax.set_yticklabels(yticklabels, fontsize=11, fontweight="bold")
@@ -295,11 +297,13 @@ def plot_cnv_heatmap(
     agg_size=5,
     lab_type="cell_label",
     figsize=(20, 13),
-    hratios=[10, 1, 2],
+    hratios=[10, 2, 2],
     filename=None,
+    pdf_pages=None,
     dpi=300,
     transparent=False,
     title_info="",
+    ascn_profile=False,
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
     wl_fragments = read_whitelist_segments(region_bed)
@@ -437,8 +441,12 @@ def plot_cnv_heatmap(
         norm=norm,
     )
 
-    plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
-    plot_cnv_legend(axes[2])
+    if ascn_profile:
+        plot_ascn_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
+        plot_ascn_legend(axes[2])
+    else:
+        plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
+        plot_cnv_legend(axes[2])
 
     title = f"{sample} {data_type} {val} Heatmap"
     if agg_size > 1:
@@ -506,6 +514,10 @@ def plot_cnv_heatmap(
     cb = fig.colorbar(sm, cax=cax)
     cb.set_ticks(cticks)
 
+    if pdf_pages is not None:
+        pdf_pages.savefig(fig, dpi=dpi, bbox_inches="tight", transparent=transparent)
+        plt.close(fig)
+        return
     if filename is not None:
         plt.savefig(filename, dpi=dpi, bbox_inches="tight", transparent=transparent)
         plt.close()

@@ -8,6 +8,8 @@ from matplotlib.collections import LineCollection
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
 from copytyping.plot.plot_copynumber import (
+    plot_ascn_legend,
+    plot_ascn_profile,
     get_cn_colors,
     plot_cnv_legend,
     plot_cnv_profile,
@@ -95,9 +97,11 @@ def plot_rdr_baf_1d_pseudobulk(
     is_inferred=True,
     figsize=(20, 4),
     filename=None,
+    pdf_pages=None,
     log2=True,
     rdr_ylim=(-5, 5),
     markersize=20,
+    ascn_profile=False,
     **kwargs,
 ):
     """Per-clone log2RDR + BAF scatter plot along the genome, single page.
@@ -108,6 +112,7 @@ def plot_rdr_baf_1d_pseudobulk(
     chrom_sizes = get_chr_sizes(genome_file)
     cnv_blocks = sx_data.cnv_blocks.copy(deep=True)
     exp_bafs = getattr(sx_data, "BAF", None)
+    total_cells = len(anns)
 
     X = sx_data.X
     Y = sx_data.Y
@@ -268,10 +273,12 @@ def plot_rdr_baf_1d_pseudobulk(
             )
             exp_vals = None
             if clone_C_full is not None:
-                C_normal = np.maximum(sx_data.C[:, 0], 1).astype(np.float64)
-                exp_vals = clone_C_full / C_normal
-                if log2:
-                    exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
+                denom = float(np.sum(base_props * clone_C_full))
+                if denom > 0:
+                    exp_vals = clone_C_full / denom
+                    if log2:
+                        exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
+            if exp_vals is not None:
                 ax_rdr.add_collection(
                     LineCollection(
                         _merge_exp_lines(
@@ -282,14 +289,25 @@ def plot_rdr_baf_1d_pseudobulk(
                     )
                 )
             if log2:
-                ax_rdr.set_ylim(rdr_ylim)
+                # Adaptive ylim: tighten to (-2, 2) if obs + expected all fit, else use rdr_ylim
+                candidates = [val_rdr]
+                if exp_vals is not None:
+                    candidates.append(np.asarray(exp_vals))
+                all_vals = np.concatenate(
+                    [c[np.isfinite(c)] for c in candidates if c.size > 0]
+                )
+                if all_vals.size > 0 and all_vals.min() >= -2 and all_vals.max() <= 2:
+                    ylim_eff = (-2, 2)
+                else:
+                    ylim_eff = rdr_ylim
+                ax_rdr.set_ylim(ylim_eff)
                 if len(val_rdr) > 0:
-                    n_below = int((val_rdr < rdr_ylim[0]).sum())
-                    n_above = int((val_rdr > rdr_ylim[1]).sum())
+                    n_below = int((val_rdr < ylim_eff[0]).sum())
+                    n_above = int((val_rdr > ylim_eff[1]).sum())
                     if n_below + n_above > 0:
                         logging.info(
-                            f"  {cell_label} log2RDR: {n_below} bins < {rdr_ylim[0]}, "
-                            f"{n_above} bins > {rdr_ylim[1]}"
+                            f"  {cell_label} log2RDR: {n_below} bins < {ylim_eff[0]}, "
+                            f"{n_above} bins > {ylim_eff[1]}"
                         )
             else:
                 exp_max = float(exp_vals.max()) if exp_vals is not None else 1.0
@@ -300,8 +318,9 @@ def plot_rdr_baf_1d_pseudobulk(
         feat_label = {"atac": "fragment", "gex": "umi"}.get(data_type, "count")
         total_counts = int(np.sum(X[:, barcode_idxs]))
         snp_counts = int(np.sum(D[:, barcode_idxs]))
+        prop = round(100 * num_bcs / total_cells, 1) if total_cells > 0 else 0.0
         ax_rdr.set_title(
-            f"{cell_label} (n={num_bcs},"
+            f"{cell_label} (n={num_bcs}, prop={prop}%,"
             f" {data_type}-{feat_label}={total_counts:,},"
             f" snp-{feat_label}={snp_counts:,})",
             fontsize=12,
@@ -364,9 +383,15 @@ def plot_rdr_baf_1d_pseudobulk(
     # ── Bottom rows: CNP profile + legend ──
     if has_cnp:
         ax_cnp = axes[-2]
-        plot_cnv_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
+        if ascn_profile:
+            plot_ascn_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
+        else:
+            plot_cnv_profile(ax_cnp, haplo_blocks, wl_segments, plot_chrname=False)
         ax_cnp.set_xlim(0, chr_end)
-    plot_cnv_legend(axes[-1])
+    if ascn_profile:
+        plot_ascn_legend(axes[-1])
+    else:
+        plot_cnv_legend(axes[-1])
 
     title = (
         f"sample={sample}  platform={kwargs.get('platform', '')}  data_type={data_type}"
@@ -374,5 +399,8 @@ def plot_rdr_baf_1d_pseudobulk(
     if kwargs.get("subtitle"):
         title += f"\n{kwargs['subtitle']}"
     fig.suptitle(title, fontsize=12, fontweight="bold", y=1.02)
-    fig.savefig(filename, dpi=150, bbox_inches="tight")
+    if pdf_pages is not None:
+        pdf_pages.savefig(fig, dpi=150, bbox_inches="tight")
+    elif filename is not None:
+        fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)

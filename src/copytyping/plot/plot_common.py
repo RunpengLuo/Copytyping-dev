@@ -593,7 +593,11 @@ def plot_metrics_barplot(
         "AUC_soft": "#9467bd",
     }
 
-    valid = summary.dropna(subset=list(metrics), how="all").copy()
+    metric_cols = [m for m in metrics if m in summary.columns]
+    if not metric_cols:
+        logging.info(f"skipping metrics barplot: no {list(metrics)} columns in summary")
+        return
+    valid = summary.dropna(subset=metric_cols, how="all").copy()
     if valid.empty:
         return
 

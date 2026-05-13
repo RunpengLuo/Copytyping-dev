@@ -9,6 +9,7 @@ tests/atac_test/
 simulations/sim_*/
 dispersion_analysis/
 tmp/
+scripts/
 .DS_Store
 
 
@@ -223,3 +224,4 @@ __marimo__/
 purity_analysis/
 visium_analysis/
 single_cell_analysis/
+/benchmark/

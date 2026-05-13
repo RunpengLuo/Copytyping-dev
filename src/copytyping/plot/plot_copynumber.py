@@ -16,24 +16,23 @@ def plot_cnv_profile(
     title=None,
     ylabel=None,
     plot_chrname=True,
-    plot_prop=True,
     plot_clone_name=True,
+    clone_ploidies=None,
 ):
+    """Chrom-level integer CNV profile.
+
+    Bins strictly contained within whitelist segments are colored by the joint
+    (A|B) palette; centromere/whitelist gaps appear as dashed boundaries.
+    Mirrored events (cnb > cna) get a black right-pointing triangle overlay.
+    If a PI_VIOL column is present in cnv_blocks, a red/green line is drawn at
+    the top of each bin to indicate per-bin pure-int violation.
     """
-    plot chrom-level integer CNV profile.
-    regions outside white list segments are marked as dashed bar.
-    cnv_blocks: #CHR, START, END, CNP
-    """
-    state_style, tcn_states = get_cn_colors()
+    state_style, _ = get_cn_colors()
 
     num_clones = (
         len(str(cnv_blocks.iloc[0]["CNP"]).split(";")) - 1
     )  # first column is normal
     h = height / num_clones
-
-    bulk_props = np.array(
-        [float(v) for v in str(cnv_blocks["PROPS"].iloc[0]).split(";")]
-    )
 
     wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
     bins_chs = cnv_blocks.groupby(by="#CHR", sort=False, observed=True)
@@ -53,29 +52,23 @@ def plot_cnv_profile(
             seg_end = ch_offset + (wl_end - wl_start)
 
             bins_seg = bins_ch.loc[
-                (bins_ch["END"] > wl_start) & (bins_ch["START"] < wl_end), :
+                (bins_ch["START"] >= wl_start) & (bins_ch["END"] <= wl_end), :
             ]
             if bins_seg.empty:
                 ch_offset = seg_end
                 continue
 
-            # global bin coords (clip to whitelist region)
-            bin_starts = (
-                bins_seg["START"].clip(lower=wl_start) - wl_start + ch_offset
-            ).to_numpy()
-            bin_ends = (
-                bins_seg["END"].clip(upper=wl_end) - wl_start + ch_offset
-            ).to_numpy()
-            # update global offsets
+            bin_starts = (bins_seg["START"] - wl_start + ch_offset).to_numpy()
+            bin_ends = (bins_seg["END"] - wl_start + ch_offset).to_numpy()
             ch_offset = seg_end
             if si < len(wl_segments_ch) - 1:
                 seg_coords.append(ch_offset)  # centromere offset
 
-            # plot rectangles
+            has_pi_viol = "PI_VIOL" in bins_seg.columns
             for bi in range(len(bins_seg)):
                 x0, bin_end = bin_starts[bi], bin_ends[bi]
                 w = bin_end - x0
-                bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]  # ignore normal cnp
+                bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]  # skip normal
                 for k in range(num_clones):
                     cna, cnb = (
                         int(bin_cnvs[num_clones - k - 1].split("|")[0]),
@@ -83,68 +76,75 @@ def plot_cnv_profile(
                     )
                     color = state_style.get((cna, cnb), state_style["default"])
                     y0 = k * h
-                    rect = Rectangle(
-                        (x0, y0),
-                        w,
-                        h,
-                        facecolor=color,
-                        edgecolor=BLACK,
-                        transform=ax.get_xaxis_transform(),
-                        linewidth=0,
-                        rasterized=True,
-                    )
-                    ax.add_patch(rect)
-
-                    # plot mirrored events: cnb > cna means B allele has more copies
-                    if cnb > cna:
-                        trig = Polygon(
-                            [
-                                [x0, y0 + h],
-                                [x0 + w, y0 + h / 2],
-                                [x0, y0],
-                            ],  # top-left -> mid-right -> bottom-left
-                            linewidth=0,
-                            closed=True,
-                            facecolor=BLACK,
+                    ax.add_patch(
+                        Rectangle(
+                            (x0, y0),
+                            w,
+                            h,
+                            facecolor=color,
+                            edgecolor="none",
                             transform=ax.get_xaxis_transform(),
-                            rasterized=True,
+                            linewidth=0,
+                            antialiased=False,
                         )
-                        ax.add_patch(trig)
-            # plot segment bound (centromere) as dashed line
+                    )
+                    # Mirrored event: B-allele has more copies. Right-pointing
+                    # triangle marks the (a, b) orientation (top-left → mid-right
+                    # → bottom-left).
+                    if cnb > cna:
+                        ax.add_patch(
+                            Polygon(
+                                [[x0, y0 + h], [x0 + w, y0 + h / 2], [x0, y0]],
+                                linewidth=0,
+                                closed=True,
+                                facecolor=BLACK,
+                                transform=ax.get_xaxis_transform(),
+                            )
+                        )
+
+                # PI violation indicator: colored line at top of segment
+                if has_pi_viol:
+                    viol = bool(bins_seg["PI_VIOL"].iloc[bi])
+                    edge_color = "#d62728" if viol else "#2ca02c"
+                    y_top = num_clones * h
+                    ax.plot(
+                        [x0, x0 + w],
+                        [y_top, y_top],
+                        color=edge_color,
+                        linewidth=3,
+                        solid_capstyle="butt",
+                        transform=ax.get_xaxis_transform(),
+                    )
+
+            # centromere as dashed boundary
             if si < len(wl_segments_ch) - 1:
                 ax.vlines(
                     ch_offset,
                     ymin=0,
                     ymax=1,
                     transform=ax.get_xaxis_transform(),
-                    linewidth=1,
+                    linewidth=0.5,
                     colors=BLACK,
                     linestyles="dashed",
                 )
-        # add chromosome boundary
-        ax.vlines(
-            ch_offset,
-            ymin=0,
-            ymax=1,
-            transform=ax.get_xaxis_transform(),
-            linewidth=1,
-            colors=BLACK,
-        )
+        # chromosome boundary — solid; skip after last chrom
+        if ch != chs[-1]:
+            line = ax.vlines(
+                ch_offset,
+                ymin=0,
+                ymax=1.15,
+                transform=ax.get_xaxis_transform(),
+                linewidth=1,
+                colors=BLACK,
+            )
+            line.set_clip_on(False)
     ch_coords.append(ch_offset)  # genome end
 
-    # plot clone separation
-    if num_clones > 1:
-        ax.hlines(
-            y=[h * (i + 1) for i in range(num_clones - 1)],
-            xmin=0,
-            xmax=ch_offset,
-            colors=BLACK,
-            linewidth=1,
-            transform=ax.get_xaxis_transform(),
-        )
     ax.grid(False)
     ax.set_xlim(0, ch_offset)
     ax.set_xlabel("")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
     if plot_chrname:
         ax.set_xticks(
             [
@@ -160,26 +160,122 @@ def plot_cnv_profile(
         ax.set_xticks([])
         ax.set_xticklabels([])
 
-    # plot clone name
+    # Y-axis: clone label + optional ploidy (multi-line, bold)
     ax.set_yticks([h * (i + 0.5) for i in range(num_clones)])
     ylabels = []
     for ci in range(num_clones, 0, -1):
-        prop = round(bulk_props[ci] * 100, 1)
-        cname = str(ci)
+        lines = []
         if plot_clone_name:
-            cname = f"clone {cname}"
-        if plot_prop:
-            cname = f"{cname} ({prop}%)"
-        ylabels.append(cname)
-    ax.set_yticklabels(ylabels)
+            lines.append(f"Clone {ci}")
+        else:
+            lines.append(str(ci))
+        if clone_ploidies is not None:
+            clone_key = f"clone{ci}"
+            if clone_key in clone_ploidies:
+                lines.append(f"ploidy {round(clone_ploidies[clone_key], 2)}")
+        ylabels.append("\n".join(lines))
+    ax.set_yticklabels(ylabels, fontsize=8, fontweight="bold", va="center")
     ax.set_ylim(0, num_clones * h)
-    ax.tick_params(axis="y", which="both", left=False, right=False)
+    ax.tick_params(axis="y", which="both", left=True, right=False, length=4)
 
     if ylabel is not None:
         ax.set_ylabel(ylabel, rotation=0, ha="right", va="center")
     if title is not None:
         ax.set_title(title)
     return ax
+
+
+def _draw_mirror_swatches(
+    ax: plt.Axes,
+    leg_x: float,
+    fontsize: int = 10,
+    alpha: float = 1.0,
+    mirror_w: float = 1.25,
+    mirror_y0: float = 0.0,
+):
+    """Two mirror-CNA arrow swatches (right-pointing (a,b), left-pointing (b,a)).
+
+    Shared between plot_cnv_legend and plot_ascn_legend so both use the same
+    style. Returns the x-position after the last swatch.
+    """
+    ax.text(
+        leg_x,
+        mirror_y0 + mirror_w / 2.0,
+        "Mirrored CNA",
+        ha="right",
+        va="center",
+        fontsize=fontsize,
+        fontweight="bold",
+    )
+    leg_x += 0.3  # small gap between text and first symbol
+
+    # right triangle box (a, b)
+    ax.add_patch(
+        Rectangle(
+            (leg_x, mirror_y0),
+            mirror_w,
+            mirror_w,
+            facecolor="white",
+            edgecolor="black",
+        )
+    )
+    ax.add_patch(
+        Polygon(
+            [
+                [leg_x, mirror_y0 + mirror_w],
+                [leg_x + mirror_w, mirror_y0 + mirror_w - mirror_w / 4.0],
+                [leg_x, mirror_y0 + mirror_w - mirror_w / 2.0],
+            ],
+            linewidth=0,
+            closed=True,
+            facecolor="black",
+            alpha=alpha,
+        )
+    )
+    ax.text(
+        leg_x + mirror_w / 2.0,
+        mirror_y0 - 0.2,
+        "(a,b)",
+        ha="center",
+        va="top",
+        fontsize=fontsize,
+        fontweight="bold",
+    )
+    leg_x += mirror_w + 0.5
+
+    # left triangle box (b, a)
+    ax.add_patch(
+        Rectangle(
+            (leg_x, mirror_y0),
+            mirror_w,
+            mirror_w,
+            facecolor="white",
+            edgecolor="black",
+        )
+    )
+    ax.add_patch(
+        Polygon(
+            [
+                [leg_x, mirror_y0 + mirror_w / 4.0],
+                [leg_x + mirror_w, mirror_y0 + mirror_w - mirror_w / 2.0],
+                [leg_x + mirror_w, mirror_y0],
+            ],
+            linewidth=0,
+            closed=True,
+            facecolor="black",
+            alpha=alpha,
+        )
+    )
+    ax.text(
+        leg_x + mirror_w / 2.0,
+        mirror_y0 - 0.2,
+        "(b,a)",
+        ha="center",
+        va="top",
+        fontsize=fontsize,
+        fontweight="bold",
+    )
+    return leg_x + mirror_w
 
 
 def plot_cnv_legend(ax: plt.Axes):
@@ -258,84 +354,7 @@ def plot_cnv_legend(ax: plt.Axes):
     leg_x = group_x0 + pair_w + gap_groups
 
     # --- mirrored CNA symbol on the right ------------------------------------
-    # leave a clear gap after the last CN group
-    leg_x += 3.0
-
-    mirror_y0 = 0.0
-    mirror_w = 1.25
-
-    # label text
-    ax.text(
-        leg_x,
-        mirror_y0 + mirror_w / 2.0,
-        "Mirrored CNA",
-        ha="left",  # text grows to the right, away from CN=7 group
-        va="center",
-        fontsize=10,
-    )
-
-    # start symbol a bit to the right of the text
-    leg_x += 4.0  # adjust if you change fontsize
-
-    # right triangle box (a,b)
-    rect = Rectangle(
-        (leg_x, mirror_y0),
-        mirror_w,
-        mirror_w,
-        facecolor="white",
-        edgecolor="black",
-    )
-    ax.add_patch(rect)
-    trig = Polygon(
-        [
-            [leg_x, mirror_y0 + mirror_w],
-            [leg_x + mirror_w, mirror_y0 + mirror_w - mirror_w / 4.0],
-            [leg_x, mirror_y0 + mirror_w - mirror_w / 2.0],
-        ],
-        linewidth=0,
-        closed=True,
-        facecolor="black",
-    )
-    ax.add_patch(trig)
-    ax.text(
-        leg_x + mirror_w / 2.0,
-        mirror_y0 - 0.2,
-        "(a,b)",
-        ha="center",
-        va="top",
-        fontsize=10,
-    )
-    leg_x += mirror_w + 0.5
-
-    # left triangle box (b,a)
-    rect = Rectangle(
-        (leg_x, mirror_y0),
-        mirror_w,
-        mirror_w,
-        facecolor="white",
-        edgecolor="black",
-    )
-    ax.add_patch(rect)
-    trig = Polygon(
-        [
-            [leg_x, mirror_y0 + mirror_w / 4.0],
-            [leg_x + mirror_w, mirror_y0 + mirror_w - mirror_w / 2.0],
-            [leg_x + mirror_w, mirror_y0],
-        ],
-        linewidth=0,
-        closed=True,
-        facecolor="black",
-    )
-    ax.add_patch(trig)
-    ax.text(
-        leg_x + mirror_w / 2.0,
-        mirror_y0 - 0.2,
-        "(b,a)",
-        ha="center",
-        va="top",
-        fontsize=10,
-    )
-    leg_x += mirror_w + 3.0
+    leg_x = _draw_mirror_swatches(ax, leg_x + 3.0, fontsize=10, alpha=1.0) + 3.0
 
     # main title on the left
     ax.text(-0.5, pair_h / 2.0, "Copy numbers", fontsize=12, ha="right", va="center")
@@ -426,3 +445,352 @@ def get_cn_colors():
         state_style[(minor, major)] = color
     state_style["default"] = default_color
     return state_style, tcn_states
+
+
+def get_ascn_colors():
+    """Return (state_style, tcn_states) for allele-CN coloring.
+
+    cn=0 → white, cn=1 → black, cn=2..6 + 7+ → inferno (orange→pale yellow)
+    evenly spaced. Inferno is colorblind-safe and perceptually uniform.
+    All non-zero CN colors are drawn at alpha=0.5 at the call site.
+    Sample positions: np.linspace(0.65, 0.97, 6) on inferno → cn=2..6, 7+.
+    """
+    state_style = {
+        0: "#FFFFFF",  # white
+        1: "#000000",  # black (rendered at alpha=0.5 → mid gray)
+        2: "#EA632A",  # inferno 0.65 (orange)
+        3: "#F57D15",  # inferno 0.71
+        4: "#FB9B06",  # inferno 0.78 (amber)
+        5: "#FBBA1F",  # inferno 0.84
+        6: "#F5D949",  # inferno 0.91 (yellow)
+    }
+    state_style["default"] = "#F3F68A"  # inferno 0.97 (pale yellow) for cn >= 7
+    tcn_states = sorted(k for k in state_style if isinstance(k, int))
+    return state_style, tcn_states
+
+
+def plot_ascn_profile(
+    ax: plt.Axes,
+    cnv_blocks: pd.DataFrame,
+    wl_segments: pd.DataFrame,
+    width=20,
+    height=1,
+    title=None,
+    ylabel=None,
+    plot_chrname=True,
+    plot_clone_name=True,
+    clone_ploidies=None,
+):
+    """Allele-specific CN profile: each clone slot has a B sub-bar (bottom)
+    and A sub-bar (top), colored by integer copy number on the red palette.
+    Small vertical gap between adjacent clone slots; each sub-bar is outlined.
+    """
+    state_style, _ = get_ascn_colors()
+    num_clones = len(str(cnv_blocks.iloc[0]["CNP"]).split(";")) - 1
+    h = height / num_clones
+    clone_gap = 0.10 * h  # vertical gap between adjacent clone slots
+    h_pair = h - clone_gap
+    h_sub = h_pair / 2
+    y_gap = clone_gap / 2
+
+    wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
+    bins_chs = cnv_blocks.groupby(by="#CHR", sort=False, observed=True)
+
+    ch_offset = 0
+    ch_coords = []
+    seg_coords = []
+    chs = cnv_blocks["#CHR"].unique()
+    for ch in chs:
+        ch_coords.append(ch_offset)
+        wl_segments_ch = wl_segments_chs.get_group(ch)
+        bins_ch = bins_chs.get_group(ch)
+        for si in range(len(wl_segments_ch)):
+            wl_segment = wl_segments_ch.iloc[si]
+            wl_start = wl_segment["START"]
+            wl_end = wl_segment["END"]
+            seg_end = ch_offset + (wl_end - wl_start)
+
+            bins_seg = bins_ch.loc[
+                (bins_ch["END"] > wl_start) & (bins_ch["START"] < wl_end), :
+            ]
+            if bins_seg.empty:
+                ch_offset = seg_end
+                continue
+
+            bin_starts = (
+                bins_seg["START"].clip(lower=wl_start) - wl_start + ch_offset
+            ).to_numpy()
+            bin_ends = (
+                bins_seg["END"].clip(upper=wl_end) - wl_start + ch_offset
+            ).to_numpy()
+            ch_offset = seg_end
+            if si < len(wl_segments_ch) - 1:
+                seg_coords.append(ch_offset)
+
+            for bi in range(len(bins_seg)):
+                x0, bin_end = bin_starts[bi], bin_ends[bi]
+                w = bin_end - x0
+                bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]
+                clone_states = [
+                    (int(cn.split("|")[0]), int(cn.split("|")[1])) for cn in bin_cnvs
+                ]
+                # Mirrored LOH: every clone state is LOH (a==0 or b==0),
+                # AND the bin contains BOTH an A-LOH clone (a>0,b=0) and a
+                # B-LOH clone (a=0,b>0).
+                any_non_loh = any(a > 0 and b > 0 for a, b in clone_states)
+                dirs = [
+                    (1 if (a > 0 and b == 0) else (-1 if (a == 0 and b > 0) else 0))
+                    for a, b in clone_states
+                ]
+                has_mirror = (not any_non_loh) and (1 in dirs) and (-1 in dirs)
+                for k in range(num_clones):
+                    cna, cnb = clone_states[num_clones - k - 1]
+                    direction = dirs[num_clones - k - 1]
+                    y_b = k * h + y_gap
+                    y_a = y_b + h_sub
+                    ax.add_patch(
+                        Rectangle(
+                            (x0, y_b),
+                            w,
+                            h_sub,
+                            facecolor=state_style.get(cnb, state_style["default"]),
+                            edgecolor="none",
+                            transform=ax.get_xaxis_transform(),
+                            linewidth=0,
+                            alpha=1.0 if cnb == 0 else 0.5,
+                        )
+                    )
+                    ax.add_patch(
+                        Rectangle(
+                            (x0, y_a),
+                            w,
+                            h_sub,
+                            facecolor=state_style.get(cna, state_style["default"]),
+                            edgecolor="none",
+                            transform=ax.get_xaxis_transform(),
+                            linewidth=0,
+                            alpha=1.0 if cna == 0 else 0.5,
+                        )
+                    )
+
+                    # Mirrored-LOH symbol: chevrons ≪ / ≫ spanning clone height.
+                    # A-LOH → ≫ (apex right), B-LOH → ≪ (apex left).
+                    if has_mirror and direction != 0:
+                        n_chev = 2
+                        chev_unit = w * 0.12
+                        gap = w * 0.04
+                        total_chev_w = n_chev * chev_unit + (n_chev - 1) * gap
+                        x_start = x0 + (w - total_chev_w) / 2.0
+                        y_high = y_b + 2 * h_sub
+                        y_low = y_b
+                        y_mid = (y_high + y_low) / 2.0
+                        for ci in range(n_chev):
+                            cx_left = x_start + ci * (chev_unit + gap)
+                            cx_right = cx_left + chev_unit
+                            if direction > 0:
+                                xs = [cx_left, cx_right, cx_left]
+                            else:
+                                xs = [cx_right, cx_left, cx_right]
+                            ax.plot(
+                                xs,
+                                [y_high, y_mid, y_low],
+                                color="black",
+                                linewidth=1.2,
+                                alpha=0.5,
+                                solid_capstyle="round",
+                                transform=ax.get_xaxis_transform(),
+                            )
+
+            if si < len(wl_segments_ch) - 1:
+                for k in range(num_clones):
+                    ax.vlines(
+                        ch_offset,
+                        ymin=k * h + y_gap,
+                        ymax=k * h + y_gap + h_pair,
+                        transform=ax.get_xaxis_transform(),
+                        linewidth=0.5,
+                        colors=BLACK,
+                        linestyles="dashed",
+                    )
+        if ch != chs[-1]:
+            line = ax.vlines(
+                ch_offset,
+                ymin=0,
+                ymax=1.15,
+                transform=ax.get_xaxis_transform(),
+                linewidth=1,
+                colors=BLACK,
+            )
+            line.set_clip_on(False)
+    ch_coords.append(ch_offset)
+
+    # Outline each clone's A and B rows with a single thin black border
+    for k in range(num_clones):
+        y_b_k = k * h + y_gap
+        y_a_k = y_b_k + h_sub
+        for y0 in (y_b_k, y_a_k):
+            ax.add_patch(
+                Rectangle(
+                    (0, y0),
+                    ch_offset,
+                    h_sub,
+                    facecolor="none",
+                    edgecolor="black",
+                    linewidth=0.5,
+                    transform=ax.get_xaxis_transform(),
+                )
+            )
+
+    ax.grid(False)
+    ax.set_xlim(0, ch_offset)
+    ax.set_xlabel("")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    if plot_chrname:
+        ax.set_xticks(
+            [
+                ch_coords[i] + (ch_coords[i + 1] - ch_coords[i]) // 2
+                for i in range(len(ch_coords) - 1)
+            ]
+        )
+        ax.set_xticklabels(chs, rotation=60, fontsize=8)
+        ax.tick_params(
+            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
+        )
+    else:
+        ax.set_xticks([])
+        ax.set_xticklabels([])
+
+    # Major y ticks at clone-center → "Clone N (prop%)" + optional ploidy
+    ax.set_yticks([h * (i + 0.5) for i in range(num_clones)])
+    ylabels = []
+    for ci in range(num_clones, 0, -1):
+        lines = []
+        if plot_clone_name:
+            lines.append(f"Clone {ci}")
+        else:
+            lines.append(str(ci))
+        if clone_ploidies is not None:
+            clone_key = f"clone{ci}"
+            if clone_key in clone_ploidies:
+                lines.append(f"ploidy {round(clone_ploidies[clone_key], 2)}")
+        ylabels.append("\n".join(lines))
+    ax.set_yticklabels(ylabels, fontsize=8, fontweight="bold", va="center")
+
+    # Minor y ticks: A/B sub-labels centered on each sub-bar
+    minor_positions = []
+    minor_labels = []
+    for k in range(num_clones):
+        minor_positions.append(k * h + y_gap + h_sub * 0.5)
+        minor_labels.append("B")
+        minor_positions.append(k * h + y_gap + h_sub * 1.5)
+        minor_labels.append("A")
+    ax.set_yticks(minor_positions, minor=True)
+    ax.set_yticklabels(minor_labels, minor=True, fontsize=6, fontweight="bold")
+    ax.tick_params(axis="y", which="minor", left=False, right=False, pad=2)
+
+    ax.set_ylim(0, num_clones * h)
+    ax.tick_params(axis="y", which="major", left=True, right=False, length=4, pad=20)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, rotation=0, ha="right", va="center")
+    if title is not None:
+        ax.set_title(title)
+    return ax
+
+
+def plot_ascn_legend(
+    ax: plt.Axes,
+    box_w: float = 1.2,
+    box_h: float = 0.4,
+    tick_len: float = 0.08,
+    label_fontsize: int = 12,
+):
+    """Horizontal color-bar legend for allele-specific CN values (0..6, 7+).
+
+    Rectangles for cn>0 are rendered at alpha=0.5 to match the profile plot.
+    A separate mirrored-LOH swatch box (chevrons) is appended on the right.
+    """
+    state_style, tcn_states = get_ascn_colors()
+    boxes = list(tcn_states) + ["7+"]
+    ax.axis("off")
+    x0 = 0.0
+
+    for i, label in enumerate(boxes):
+        color = state_style["default"] if label == "7+" else state_style[label]
+        rect = Rectangle(
+            (x0 + i * box_w, 0.0),
+            box_w,
+            box_h,
+            facecolor=color,
+            edgecolor="black",
+            alpha=1.0 if label == 0 else 0.5,
+        )
+        ax.add_patch(rect)
+        xc = x0 + i * box_w + box_w / 2.0
+        ax.plot([xc, xc], [-tick_len, 0.0], color="black", linewidth=0.8)
+        ax.text(
+            xc,
+            -tick_len - 0.04,
+            str(label),
+            ha="center",
+            va="top",
+            fontsize=label_fontsize,
+            fontweight="bold",
+        )
+
+    total_w = len(boxes) * box_w
+    ax.text(
+        -0.3,
+        box_h / 2.0,
+        "Allele copy number",
+        fontsize=label_fontsize,
+        fontweight="bold",
+        ha="right",
+        va="center",
+    )
+
+    # Mirrored-LOH swatch: chevrons inside a small bordered box.
+    swatch_w = box_w * 0.7
+    chev_box_x = total_w + 1.0
+    ax.add_patch(
+        Rectangle(
+            (chev_box_x, 0.0),
+            swatch_w,
+            box_h,
+            facecolor="white",
+            edgecolor="black",
+        )
+    )
+    n_chev = 2
+    chev_unit = swatch_w * 0.30
+    gap = swatch_w * 0.10
+    chev_total_w = n_chev * chev_unit + (n_chev - 1) * gap
+    chev_x_start = chev_box_x + (swatch_w - chev_total_w) / 2.0
+    y_high = box_h
+    y_low = 0.0
+    y_mid = (y_high + y_low) / 2.0
+    for i in range(n_chev):
+        cx_left = chev_x_start + i * (chev_unit + gap)
+        cx_right = cx_left + chev_unit
+        ax.plot(
+            [cx_left, cx_right, cx_left],
+            [y_high, y_mid, y_low],
+            color="black",
+            linewidth=1.2,
+            alpha=0.5,
+            solid_capstyle="round",
+        )
+    ax.text(
+        chev_box_x + swatch_w / 2.0,
+        -tick_len - 0.04,
+        "Mirrored LOH",
+        ha="center",
+        va="top",
+        fontsize=label_fontsize,
+        fontweight="bold",
+    )
+    ax.set_xlim(-2.0, chev_box_x + swatch_w + 0.5)
+    ax.set_ylim(-0.5, box_h + 0.2)
+    ax.set_aspect("auto")
+    return ax

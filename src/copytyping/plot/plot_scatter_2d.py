@@ -68,8 +68,29 @@ def plot_scatter_2d_per_cell(
 
             df = pd.DataFrame({"BAF": baf, "log2RDR": log2rdr, label_col: hue})
 
+            # Pre-compute expected (BAF, log2RDR) per clone (used for ylim + markers below).
+            # BAF: B/(A+B). log2RDR: log2(C_{g,k} / sum_g(lambda_g * C_{g,k})).
+            exp_points = defaultdict(list)
+            for k in range(sx_data.K):
+                C_k = sx_data.C[g, k]
+                exp_baf_k = sx_data.B[g, k] / C_k if C_k > 0 else 0.5
+                denom_k = float(np.sum(base_props * sx_data.C[:, k]))
+                if denom_k > 0 and C_k > 0:
+                    exp_log2rdr_k = np.log2(C_k / denom_k)
+                else:
+                    exp_log2rdr_k = 0.0
+                key = (round(exp_baf_k, 4), round(exp_log2rdr_k, 4))
+                exp_points[key].append(sx_data.clones[k])
+
             xlim = (-0.05, 1.05)
-            ylim = (-5, 5)
+            # Adaptive ylim: tighten to (-2, 2) if all obs + expected fit, else (-5, 5)
+            obs_finite = log2rdr[np.isfinite(log2rdr)]
+            exp_finite = np.array([y for _, y in exp_points.keys()], dtype=float)
+            all_y = np.concatenate([obs_finite, exp_finite])
+            if all_y.size > 0 and all_y.min() >= -2 and all_y.max() <= 2:
+                ylim = (-2, 2)
+            else:
+                ylim = (-5, 5)
 
             g0 = sns.JointGrid(
                 data=df,
@@ -95,18 +116,6 @@ def plot_scatter_2d_per_cell(
             scatter = g0.ax_joint.collections[0]
             scatter.set_rasterized(rasterized)
             scatter.set_antialiased(False)
-
-            # Expected (BAF, log2RDR) cross markers per clone
-            # Use raw B/(A+B) for BAF (unclipped), log2(C_clone/C_normal) for RDR
-            # Group clones that share the same expected position
-            C_normal_g = max(sx_data.C[g, 0], 1)
-            exp_points = defaultdict(list)
-            for k in range(sx_data.K):
-                C_k = sx_data.C[g, k]
-                exp_baf_k = sx_data.B[g, k] / C_k if C_k > 0 else 0.5
-                exp_log2rdr_k = np.log2(max(C_k, 1e-6) / C_normal_g)
-                key = (round(exp_baf_k, 4), round(exp_log2rdr_k, 4))
-                exp_points[key].append(sx_data.clones[k])
 
             for (exp_baf, exp_log2rdr), clone_names in exp_points.items():
                 g0.ax_joint.plot(

@@ -43,9 +43,10 @@ class Cell_Model(Base_Model):
         )
 
     def _init_params(self, fit_mode, init_fix_params, init_params):
-        params = {
-            "pi": init_params.get("pi", np.ones(self.K) / self.K),
-        }
+        # pi per rep: shape (R, K)
+        pi_init = init_params.get("pi", np.ones(self.K) / self.K)
+        pi_per_rep = np.tile(pi_init, (self.R, 1))  # (R, K)
+        params = {"pi": pi_per_rep}
 
         # Identify normals (skip in allele_only to avoid recursion
         # from _identify_normal_cells inner sub-EM)
@@ -77,8 +78,10 @@ class Cell_Model(Base_Model):
                         data_type, is_normal, tau_bounds
                     )
                 else:
-                    # allele_only mode: no normals yet, use geometric mean of bounds
-                    params[f"{data_type}-tau"] = np.sqrt(tau_bounds[0] * tau_bounds[1])
+                    # allele_only mode: no normals yet, use geometric mean of bounds (per rep)
+                    params[f"{data_type}-tau"] = np.full(
+                        self.R, np.sqrt(tau_bounds[0] * tau_bounds[1])
+                    )
 
         fix_params = {key: False for key in params}
         if init_fix_params is not None:
@@ -103,8 +106,9 @@ class Cell_Model(Base_Model):
 
             if fit_mode in {"allele_only", "hybrid"}:
                 MA, _ = sx_data.apply_mask_shallow(mask_id=self.allele_mask_id)
+                tau_per_spot = params[f"{data_type}-tau"][self.rep_idx]  # (N,)
                 ll_a[allele_mask] = cond_betabin_logpmf(
-                    MA["Y"], MA["D"], params[f"{data_type}-tau"], MA["BAF"]
+                    MA["Y"], MA["D"], tau_per_spot, MA["BAF"]
                 )
                 ll_a[:, ~mask_n, :] = 0.0
                 global_lls += ll_a.sum(axis=0)
@@ -113,23 +117,25 @@ class Cell_Model(Base_Model):
                 lambda_g = params[f"{data_type}-lambda"]
                 total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
                 props_gk = clone_pi_gk(lambda_g, sx_data.C)[total_mask, :]
+                invphi_per_spot = params[f"{data_type}-inv_phi"][self.rep_idx]  # (N,)
                 ll_t[total_mask] = cond_negbin_logpmf(
                     sx_data.X[total_mask],
                     sx_data.T,
                     props_gk,
-                    params[f"{data_type}-inv_phi"],
+                    invphi_per_spot,
                 )
                 ll_t[:, ~mask_n, :] = 0.0
                 global_lls += ll_t.sum(axis=0)
 
-        global_lls += np.log(np.maximum(params["pi"], 1e-30))[None, :]
+        # Per-rep pi prior: log pi[rep_idx[n], k] added per cell
+        pi = params["pi"]  # (R, K)
+        global_lls += np.log(np.maximum(pi[self.rep_idx], 1e-30))
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
     def _m_step(self, fit_mode, gamma, params, fix_params, t=0, eps=1e-10):
         self._update_pi(gamma, params, fix_params, self.N, self.K)
 
-        gamma_gnk = gamma[None, :, :]  # (1, N, K)
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
 
@@ -137,13 +143,19 @@ class Cell_Model(Base_Model):
                 f"{data_type}-tau", True
             ):
                 MA, _ = sx_data.apply_mask_shallow(mask_id=self.allele_mask_id)
-                params[f"{data_type}-tau"] = mle_tau(
-                    MA["Y"][:, :, None],
-                    MA["D"][:, :, None],
-                    MA["BAF"][:, None, :],
-                    gamma_gnk,
-                    tau_bounds=self._tau_bounds,
-                )
+                tau_arr = params[f"{data_type}-tau"].copy()
+                for r in range(self.R):
+                    mask = self.rep_idx == r
+                    if mask.sum() == 0:
+                        continue
+                    tau_arr[r] = mle_tau(
+                        MA["Y"][:, mask][:, :, None],
+                        MA["D"][:, mask][:, :, None],
+                        MA["BAF"][:, None, :],
+                        gamma[mask][None, :, :],
+                        tau_bounds=self._tau_bounds,
+                    )
+                params[f"{data_type}-tau"] = tau_arr
 
             if fit_mode in {"total_only", "hybrid"} and not fix_params.get(
                 f"{data_type}-inv_phi", True
@@ -151,9 +163,15 @@ class Cell_Model(Base_Model):
                 lambda_g = params[f"{data_type}-lambda"]
                 total_mask = sx_data.MASK[self.total_mask_id] & (lambda_g > 0)
                 props_gk = clone_pi_gk(lambda_g, sx_data.C)[total_mask, :]
-                params[f"{data_type}-inv_phi"] = mle_invphi(
-                    sx_data.X[total_mask][:, :, None],
-                    props_gk[:, None, :] * sx_data.T[None, :, None],
-                    gamma_gnk,
-                    invphi_bounds=self._invphi_bounds,
-                )
+                invphi_arr = params[f"{data_type}-inv_phi"].copy()
+                for r in range(self.R):
+                    mask = self.rep_idx == r
+                    if mask.sum() == 0:
+                        continue
+                    invphi_arr[r] = mle_invphi(
+                        sx_data.X[total_mask][:, mask][:, :, None],
+                        props_gk[:, None, :] * sx_data.T[mask][None, :, None],
+                        gamma[mask][None, :, :],
+                        invphi_bounds=self._invphi_bounds,
+                    )
+                params[f"{data_type}-inv_phi"] = invphi_arr

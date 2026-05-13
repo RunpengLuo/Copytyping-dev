@@ -29,13 +29,14 @@ import pandas as pd
 
 from copytyping.plot.plot_common import plot_joincount_boxplot, plot_metrics_barplot
 
-from copytyping.copytyping_parser import get_inference_defaults
 from copytyping.inference.inference import run as run_inference
 from copytyping.inference.validation import _eval_subset
+from copytyping.utils import normalize_args
+from copytyping.validation.validate import run as run_validate
 
 
 def _build_base_args(row):
-    """Build base inference args from a panel row. Returns None to skip."""
+    """Build per-row I/O args from a panel row. Returns None to skip."""
     sample = row["SAMPLE"]
     platform = row["PLATFORM"]
     seg = row["PATH_TO_SEG"]
@@ -52,29 +53,32 @@ def _build_base_args(row):
         logging.warning(f"SKIP {sample}: missing PATH_TO_BB_INPUT={bb_input}")
         return None
 
-    args = {
+    base = {
         "platform": platform,
         "sample": sample,
         "seg_ucn": seg,
         "bbc_phases": bbc_phase,
         "out_prefix": sample,
         "ref_label": ref_label,
+        "method": "copytyping",
+        "gex_dir": None,
+        "atac_dir": None,
+        "cell_type": celltype_file
+        if celltype_file and os.path.isfile(celltype_file)
+        else None,
     }
 
     if platform == "spatial":
-        args["gex_dir"] = os.path.join(bb_input, "VISIUM")
+        base["gex_dir"] = os.path.join(bb_input, "VISIUM")
     else:
         scrna = os.path.join(bb_input, "scRNA")
         scatac = os.path.join(bb_input, "scATAC")
         if os.path.isdir(scrna):
-            args["gex_dir"] = scrna
+            base["gex_dir"] = scrna
         if os.path.isdir(scatac):
-            args["atac_dir"] = scatac
+            base["atac_dir"] = scatac
 
-    if celltype_file and os.path.isfile(celltype_file):
-        args["cell_type"] = celltype_file
-
-    return args
+    return base
 
 
 def _resolve_solfiles(row, sol_pattern):
@@ -102,56 +106,67 @@ def _resolve_solfiles(row, sol_pattern):
     return results
 
 
-def _run_one(
-    run_args, run_dir, genome_size, region_bed, verbosity, force, extra_args=None
-):
-    """Run inference for one configuration. Returns (status, eval_dict)."""
-    prefix = run_args["out_prefix"]
-    platform = run_args["platform"]
-    ann_file = os.path.join(run_dir, f"{prefix}.{platform}.annotations.tsv")
+def _read_loglik(run_dir, prefix):
+    """Read final log_likelihood from the saved model_params.npz, or NaN."""
+    import numpy as np
+
+    npz_path = os.path.join(run_dir, "processed_data", f"{prefix}.model_params.npz")
+    if not os.path.isfile(npz_path):
+        return float("nan")
+    try:
+        with np.load(npz_path) as data:
+            if "log_likelihood" in data:
+                return float(np.atleast_1d(data["log_likelihood"])[0])
+    except Exception:
+        pass
+    return float("nan")
+
+
+def _eval_metrics(ann_file, eval_file, ref_label, platform, prefix, run_dir):
+    """Read metrics from an existing annotations/eval file."""
+    metrics = {"log_likelihood": _read_loglik(run_dir, prefix)}
+    anns = pd.read_table(ann_file)
+    qry_labels = [
+        c for c in anns.columns if c.endswith("-label") and not c.endswith("-refined")
+    ]
+    if qry_labels and ref_label in anns.columns:
+        qry_label = qry_labels[0]
+        tumor_post = "tumor_purity" if platform == "spatial" else "tumor"
+        metrics.update(_eval_subset(anns, qry_label, ref_label, tumor_post))
+        if os.path.isfile(eval_file):
+            old = pd.read_table(eval_file).iloc[0].to_dict()
+            for k, v in old.items():
+                if k.startswith("JC_"):
+                    metrics[k] = v
+    elif os.path.isfile(eval_file):
+        metrics.update(pd.read_table(eval_file).iloc[0].to_dict())
+    return metrics
+
+
+def _run_one(pipeline_args, base_args, run_dir):
+    """Run inference + validate for one configuration. Returns (status, eval_dict)."""
+    prefix = base_args["out_prefix"]
+    platform = base_args["platform"]
+    ref_label = base_args["ref_label"]
+    sample = base_args["sample"]
+    ann_file = os.path.join(run_dir, f"{prefix}.annotations.tsv")
     eval_file = os.path.join(run_dir, f"{prefix}.{platform}.evaluation.tsv")
 
-    if not force and os.path.isfile(ann_file):
+    if not pipeline_args["force"] and os.path.isfile(ann_file):
         logging.info(f"SKIP (exists): {run_dir}")
-        ref_label = run_args.get("ref_label", "")
-        anns = pd.read_table(ann_file)
-        # Detect qry_label: column ending with "-label" but not "-refined"
-        qry_labels = [
-            c
-            for c in anns.columns
-            if c.endswith("-label") and not c.endswith("-refined")
-        ]
-        metrics = {}
-        if qry_labels and ref_label in anns.columns:
-            qry_label = qry_labels[0]
-            tumor_post = "tumor_purity" if platform == "spatial" else "tumor"
-            metrics = _eval_subset(anns, qry_label, ref_label, tumor_post)
-            # Preserve JC_* from old eval file (requires spatial coords)
-            if os.path.isfile(eval_file):
-                old = pd.read_table(eval_file).iloc[0].to_dict()
-                for k, v in old.items():
-                    if k.startswith("JC_"):
-                        metrics[k] = v
-        elif os.path.isfile(eval_file):
-            metrics = pd.read_table(eval_file).iloc[0].to_dict()
-        return "SKIPPED", metrics
+        return "SKIPPED", _eval_metrics(
+            ann_file, eval_file, ref_label, platform, prefix, run_dir
+        )
 
-    inf_args = {**get_inference_defaults(), **run_args}
+    inf_args = {**pipeline_args, **base_args}
     inf_args["out_dir"] = run_dir
-    inf_args["genome_size"] = genome_size
-    inf_args["region_bed"] = region_bed
-    inf_args["verbosity"] = verbosity
-    if extra_args:
-        inf_args.update(extra_args)
     os.makedirs(run_dir, exist_ok=True)
 
     logging.info(f"RUN: {run_dir}")
     run_inference(inf_args)
 
-    # Compute metrics from freshly generated annotations
-    metrics = {}
+    metrics = {"log_likelihood": _read_loglik(run_dir, prefix)}
     if os.path.isfile(ann_file):
-        ref_label = run_args.get("ref_label", "")
         anns = pd.read_table(ann_file)
         qry_labels = [
             c
@@ -161,26 +176,32 @@ def _run_one(
         if qry_labels and ref_label in anns.columns:
             qry_label = qry_labels[0]
             tumor_post = "tumor_purity" if platform == "spatial" else "tumor"
-            metrics = _eval_subset(anns, qry_label, ref_label, tumor_post)
+            metrics.update(_eval_subset(anns, qry_label, ref_label, tumor_post))
             logging.info(pd.DataFrame([metrics]).to_string(index=False))
+
+    val_dir = os.path.join(run_dir, "validate")
+    if not os.path.isfile(os.path.join(val_dir, f"{sample}.evaluation.tsv")):
+        val_args = {**pipeline_args}
+        val_args["sample"] = sample
+        val_args["processed_data"] = os.path.join(run_dir, "processed_data")
+        val_args["pred_labels"] = ann_file
+        val_args["pred_label"] = "copytyping-label"
+        val_args["ref_labels"] = inf_args["cell_type"]
+        val_args["ref_label"] = ref_label
+        val_args["method"] = inf_args["method"]
+        val_args["out_dir"] = val_dir
+        val_args["h5ad"] = inf_args["gex_h5ad"]
+        run_validate(val_args)
     return "OK", metrics
 
 
 def run(args):
-    if hasattr(args, "__dict__"):
-        args = vars(args)
+    args = normalize_args(args)
 
     panel_tsv = args["panel_tsv"]
     out_dir = args["out_dir"]
-    genome_size = args["genome_size"]
-    region_bed = args["region_bed"]
-    platform_filter = args.get("platform_filter")
-    force = args.get("force", False)
-    verbosity = args.get("verbosity", 0)
-    sol_pattern = args.get("sol_pattern", "*{SOLID}*.tsv")
-    extra_args = {}
-    if args.get("smooth_k", 0) > 0:
-        extra_args["smooth_k"] = args["smooth_k"]
+    platform_filter = args["platform_filter"]
+    sol_pattern = args["sol_pattern"]
 
     panel = pd.read_table(panel_tsv, dtype=str).fillna("")
     required = [
@@ -203,7 +224,7 @@ def run(args):
     n_runs = 0
     n_skipped = 0
 
-    sample_filter = args.get("samples")
+    sample_filter = args["samples"]
     for _, row in panel.iterrows():
         if platform_filter and row["PLATFORM"] != platform_filter:
             continue
@@ -216,33 +237,23 @@ def run(args):
 
         solfiles = _resolve_solfiles(row, sol_pattern)
         for solfile, tag in solfiles:
-            run_args = {**base_args}
-            if solfile:
-                run_args["solfile"] = solfile
+            row_args = {**base_args, "solfile": solfile}
 
             ploidy = row["PLOIDY"]
             clone = row["CLONE"]
             run_dir = os.path.join(
                 out_dir,
-                run_args["sample"],
-                run_args["platform"],
+                row_args["sample"],
+                row_args["platform"],
                 f"{ploidy}_n{clone}_{tag}",
             )
 
-            status, metrics = _run_one(
-                run_args,
-                run_dir,
-                genome_size,
-                region_bed,
-                verbosity,
-                force,
-                extra_args=extra_args,
-            )
+            status, metrics = _run_one(args, row_args, run_dir)
 
             dtypes = []
-            if "gex_dir" in run_args:
+            if row_args["gex_dir"]:
                 dtypes.append("gex")
-            if "atac_dir" in run_args:
+            if row_args["atac_dir"]:
                 dtypes.append("atac")
             info = dict(row)
             info["OUT_PREFIX"] = os.path.relpath(run_dir, out_dir)

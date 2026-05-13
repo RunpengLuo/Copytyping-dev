@@ -58,6 +58,33 @@ class SX_Data:
         logging.debug(f"#effective imbalanced CNA bins={self.nrows_imbalanced}")
         logging.debug(f"#effective aneuploid CNA bins={self.nrows_aneuploid}")
 
+    def subset_by_rep(self, rep_id):
+        """Return (new SX_Data, mask) restricted to barcodes where REP_ID == rep_id.
+
+        Reuses G-axis attributes (cnv_blocks, A/B/C/BAF/MASK, etc.) and only
+        recomputes N-axis attributes (X/Y/D/T/barcodes/N).
+        """
+        mask = (self.barcodes["REP_ID"] == rep_id).to_numpy()
+        new = SX_Data.__new__(SX_Data)
+        new.barcodes = self.barcodes[mask].reset_index(drop=True)
+        new.N = int(mask.sum())
+        new.cnv_blocks = self.cnv_blocks
+        new.X = self.X[:, mask]
+        new.Y = self.Y[:, mask]
+        new.D = self.D[:, mask]
+        new.clones = self.clones
+        new.A = self.A
+        new.B = self.B
+        new.C = self.C
+        new.BAF = self.BAF
+        new.G = self.G
+        new.K = self.K
+        new.MASK = self.MASK
+        new.nrows_imbalanced = self.nrows_imbalanced
+        new.nrows_aneuploid = self.nrows_aneuploid
+        new.T = np.sum(new.X, axis=0)
+        return new, mask
+
     def apply_mask_shallow(self, mask_id="CNP", additional_mask=None):
         if additional_mask is None:
             additional_mask = np.ones(self.G, dtype=bool)

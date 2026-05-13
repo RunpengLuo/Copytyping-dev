@@ -4,7 +4,8 @@ import os
 from copytyping.utils import ALL_PLATFORMS
 
 
-def add_arguments_inference(parser: argparse.ArgumentParser):
+def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
+    """I/O paths and run-control flags for a single inference run."""
     parser.add_argument(
         "--platform",
         required=True,
@@ -28,12 +29,27 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         help="/path/to/atac modality directory",
     )
     parser.add_argument(
-        "--gex_h5ad",
+        "--seg_ucn",
+        required=True,
+        type=str,
+        help="HATCHet seg.ucn.tsv file with segment-level copy numbers. "
+        "--gex_dir contains bbc-level data which will be aggregated "
+        "to segment level.",
+    )
+    parser.add_argument(
+        "--bbc_phases",
+        required=True,
+        type=str,
+        help="TSV file with BBC block phase assignments "
+        "(must contain #CHR, START, END, PHASE columns).",
+    )
+    parser.add_argument(
+        "--solfile",
         required=False,
         type=str,
         default=None,
-        help="Path to gex h5ad file (auto-detected as scRNA.h5ad "
-        "in --gex_dir if not provided)",
+        help="Optional HATCHet solution.tsv to override "
+        "CN profiles (matched by CLUSTER ID).",
     )
     parser.add_argument(
         "--cell_type",
@@ -45,23 +61,15 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--ref_label",
         required=False,
-        default="cell_type",
+        default=argparse.SUPPRESS,
         type=str,
-        help="Reference label colname in --cell_type, (default: cell_type)",
-    )
-    parser.add_argument(
-        "--exclude",
-        required=False,
-        type=str,
-        default="Doublet,doublet,Unknown,NA",
-        help="comma-separated ref_label values to exclude from analysis "
-        "(default: 'Doublet,doublet,Unknown,NA'). Requires --cell_type.",
+        help="Reference label colname in --cell_type",
     )
     parser.add_argument(
         "--method",
         required=False,
         type=str,
-        default="copytyping",
+        default=argparse.SUPPRESS,
         choices=["copytyping", "kmeans"],
         help="copytyping (EM model) or kmeans (feature-based clustering)",
     )
@@ -69,46 +77,10 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--out_prefix",
         required=False,
-        default="sample",
+        default=argparse.SUPPRESS,
         type=str,
         help="<out_dir>/<out_prefix>.",
     )
-
-    parser.add_argument(
-        "--seg_ucn",
-        required=True,
-        type=str,
-        help="HATCHet seg.ucn.tsv file with segment-level copy numbers. "
-        "--gex_dir contains bbc-level data which will be aggregated "
-        "to segment level.",
-    )
-
-    parser.add_argument(
-        "--bbc_phases",
-        required=True,
-        type=str,
-        help="TSV file with BBC block phase assignments "
-        "(must contain #CHR, START, END, PHASE columns).",
-    )
-
-    parser.add_argument(
-        "--solfile",
-        required=False,
-        type=str,
-        default=None,
-        help="Optional HATCHet solution.tsv to override "
-        "CN profiles (matched by CLUSTER ID).",
-    )
-    parser.add_argument(
-        "--keep_cn_row",
-        required=False,
-        type=str,
-        default=None,
-        help="Comma-separated whitelist of CNP rows (each row is the existing "
-        "';'-joined per-clone format, e.g. '1|1;2|0;2|1,1|1;1|1;2|0'). "
-        "Segments whose CNP is not in the list are dropped. Default: keep all.",
-    )
-
     parser.add_argument(
         "--genome_size",
         required=True,
@@ -119,17 +91,62 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         "--region_bed",
         required=True,
         type=str,
-        default="./data/chm13v2.0_region.bed",
         help="Reference chromosome BED file (e.g., hg19.chrom.bed)",
     )
+    parser.add_argument(
+        "-v",
+        "--verbosity",
+        required=False,
+        default=argparse.SUPPRESS,
+        type=int,
+        help="verbose level, 0, 1, 2",
+    )
+    return parser
 
-    ##################################################
-    # Parameters
+
+def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
+    """Model, smoothing, and plot parameters (all defaulted, tunable from CLI)."""
+    parser.add_argument(
+        "--exclude",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        help="comma-separated ref_label values to exclude from analysis. "
+        "Requires --cell_type.",
+    )
+    parser.add_argument(
+        "--keep_cn_row",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        help="Comma-separated whitelist of CNP rows (each row is the existing "
+        "';'-joined per-clone format, e.g. '1|1;2|0;2|1,1|1;1|1;2|0'). "
+        "Segments whose CNP is not in the list are dropped. Default: keep all.",
+    )
+    parser.add_argument(
+        "--save_processed_data",
+        required=False,
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="If set, also save heavy processed_data files "
+        "(seg.{X,Y,D}.npz, bbc.{X,Y,D}.npz, bbc.tsv.gz, labeling_trace.npz). "
+        "Default: skip them (~300MB/run). Always saved regardless: "
+        "annotations.tsv, cnp_profile.tsv, metadata.tsv, model_params.npz.",
+    )
+    parser.add_argument(
+        "--ascn_profile",
+        required=False,
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="If set, render the CN profile track in plots as allele-specific "
+        "(A/B sub-bars per clone, inferno palette) instead of the default "
+        "joint (A|B) integer-CN palette.",
+    )
     parser.add_argument(
         "--fit_mode",
         required=False,
         type=str,
-        default="hybrid",
+        default=argparse.SUPPRESS,
         choices=["hybrid", "allele_only", "total_only"],
         help="Likelihood mode: hybrid (BAF+RDR), "
         "allele_only (BAF only), total_only (RDR only)",
@@ -138,87 +155,74 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         "--niters",
         required=False,
         type=int,
-        default=100,
-        help="num_iters=100",
+        default=argparse.SUPPRESS,
+        help="Max EM iterations",
     )
     parser.add_argument(
         "--baf_clip",
         required=False,
-        default=0.001,
+        default=argparse.SUPPRESS,
         type=float,
-        # spot model: use 0.1 (mixture tolerance); cell model: 0.001 is fine
-        help="Clip expected clone BAF to [baf_clip, 1-baf_clip] "
-        "to avoid log(0) in BB likelihood at LOH segments (default: 0.001)",
+        help="Clip expected clone BAF to [baf_clip, 1-baf_clip] to avoid log(0)",
     )
     parser.add_argument(
         "--tau_bounds",
         required=False,
-        default="50.0,5000.0",
+        default=argparse.SUPPRESS,
         type=str,
-        help="Bounds for BB tau MLE (comma-separated, default: 50.0,5000.0). "
-        "tau is a concentration parameter: larger=less dispersed (BB→Binomial as tau→∞)",
+        help="Bounds for BB tau MLE (comma-separated). "
+        "tau is a concentration parameter: larger=less dispersed",
     )
     parser.add_argument(
         "--invphi_bounds",
         required=False,
-        default="20.0,5000.0",
+        default=argparse.SUPPRESS,
         type=str,
-        help="Bounds for NB inv_phi MLE (comma-separated, default: 20.0,5000.0). "
-        "inv_phi is a concentration parameter: larger=less dispersed (NB→Poisson as inv_phi→∞)",
+        help="Bounds for NB inv_phi MLE (comma-separated). "
+        "inv_phi is a concentration parameter: larger=less dispersed",
     )
     parser.add_argument(
         "--pi_alpha",
         required=False,
-        default=1.0,
+        default=argparse.SUPPRESS,
         type=float,
         help="symmetric Dirichlet prior alpha for pi. "
-        "1: non-informative (default), <1: sparse, >1: smoothing",
-    )
-    parser.add_argument(
-        "--init_pi_from_bulk",
-        required=False,
-        action="store_true",
-        default=False,
-        help="Initialize pi from bulk clone proportions (HATCHet2). "
-        "Default: uniform 1/K initialization.",
+        "1: non-informative, <1: sparse, >1: smoothing",
     )
     parser.add_argument(
         "--update_pi",
         required=False,
         action="store_true",
-        default=False,
+        default=argparse.SUPPRESS,
         help="Update pi (clone mixing proportions) during EM. "
         "Default: fix pi at its initial value.",
     )
-
     parser.add_argument(
         "--update_tau",
         required=False,
         action="store_true",
-        default=False,
+        default=argparse.SUPPRESS,
         help="if set, update BB dispersion (tau) in M-step (cell model only)",
     )
     parser.add_argument(
         "--update_invphi",
         required=False,
         action="store_true",
-        default=False,
+        default=argparse.SUPPRESS,
         help="if set, update NB dispersion (inv_phi) in M-step (cell model only)",
     )
-    ##################################################
-    # spatial / smoothing parameters
     parser.add_argument(
         "--n_neighs",
         required=False,
         type=int,
-        default=6,
-        help="number of spatial neighbors (default: 6 for Visium hexagonal)",
+        default=argparse.SUPPRESS,
+        help="number of spatial neighbors (6 for Visium hexagonal)",
     )
     parser.add_argument(
         "--max_smooth_k",
         required=False,
         type=int,
-        default=1,
+        default=argparse.SUPPRESS,
         help="max adaptive smoothing level (0=none). Low-count spots get "
         "progressively smoothed k=1..max_smooth_k until thresholds met.",
     )
@@ -226,30 +230,59 @@ def add_arguments_inference(parser: argparse.ArgumentParser):
         "--min_umi_per_spot",
         required=False,
         type=int,
-        default=0,
-        help="minimum total UMI per spot for adaptive smoothing (default: 0=disabled)",
+        default=argparse.SUPPRESS,
+        help="minimum total UMI per spot for adaptive smoothing (0=disabled)",
     )
     parser.add_argument(
         "--min_snp_umi_per_spot",
         required=False,
         type=int,
-        default=0,
-        help="minimum total allele UMI per spot for adaptive smoothing (default: 0=disabled)",
+        default=argparse.SUPPRESS,
+        help="minimum total allele UMI per spot for adaptive smoothing (0=disabled)",
     )
     parser.add_argument(
-        "-v",
-        "--verbosity",
+        "--dpi",
         required=False,
-        default=0,
         type=int,
-        help="verbose level, 0, 1, 2",
+        default=argparse.SUPPRESS,
+        help="DPI for plots",
     )
+    parser.add_argument(
+        "--heatmap_agg",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="aggregate observations in heatmap",
+    )
+    parser.add_argument(
+        "--min_snp_count",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="min SNP count per adaptive BBC bin for 1d scatter",
+    )
+    parser.add_argument(
+        "--max_bin_length",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="max bin length (bp) for adaptive BBC binning",
+    )
+    return parser
+
+
+def add_arguments_inference(parser: argparse.ArgumentParser):
+    add_arguments_inference_inputs(parser)
+    add_arguments_inference_parameters(parser)
     return parser
 
 
 def check_arguments_inference(args: dict):
     gex_dir = args["gex_dir"]
     atac_dir = args["atac_dir"]
+
+    args["gex_h5ad"] = None
+    args["atac_h5ad"] = None
 
     data_types = []
     if gex_dir is not None:
@@ -268,15 +301,9 @@ def check_arguments_inference(args: dict):
         args["gex_A_allele"] = a_allele
         args["gex_B_allele"] = b_allele
 
-        # h5ad: use explicit --gex_h5ad, else pick first .h5ad in gex_dir
-        gex_h5ad = args.get("gex_h5ad")
-        if gex_h5ad is None:
-            h5ad_files = sorted(f for f in os.listdir(gex_dir) if f.endswith(".h5ad"))
-            if h5ad_files:
-                gex_h5ad = os.path.join(gex_dir, h5ad_files[0])
-        if gex_h5ad is not None:
-            assert os.path.exists(gex_h5ad), f"missing file: {gex_h5ad}"
-        args["gex_h5ad"] = gex_h5ad
+        h5ad_files = sorted(f for f in os.listdir(gex_dir) if f.endswith(".h5ad"))
+        if h5ad_files:
+            args["gex_h5ad"] = os.path.join(gex_dir, h5ad_files[0])
 
     if atac_dir is not None:
         assert os.path.isdir(atac_dir), f"--atac_dir={atac_dir} is not a directory"
@@ -297,51 +324,19 @@ def check_arguments_inference(args: dict):
     assert len(data_types) > 0, (
         "at least one of --gex_dir or --atac_dir must be provided"
     )
+    args["data_types"] = data_types
     platform = args["platform"]
     if platform == "spatial":
         assert gex_dir is not None, (
             "--gex_dir is required for spatial platform (h5ad with spatial coords)"
         )
 
-    seg_ucn = args.get("seg_ucn", None)
-    if seg_ucn is not None:
-        assert os.path.exists(seg_ucn), f"missing --seg_ucn file: {seg_ucn}"
-    args["seg_ucn"] = seg_ucn
-    bbc_phases = args.get("bbc_phases", None)
-    if bbc_phases is not None:
-        assert os.path.exists(bbc_phases), f"missing --bbc_phases file: {bbc_phases}"
-    args["bbc_phases"] = bbc_phases
-    solfile = args.get("solfile", None)
-    if solfile is not None:
-        assert os.path.exists(solfile), f"missing --solfile: {solfile}"
-    args["data_types"] = data_types
+    assert os.path.exists(args["seg_ucn"]), f"invalid --seg_ucn file"
+    assert os.path.exists(args["bbc_phases"]), f"invalid --bbc_phases file"
+    if args["solfile"] is not None:
+        assert os.path.exists(args["solfile"]), f"invalid --solfile: {args['solfile']}"
+
     return args
-
-
-def get_inference_defaults():
-    """Get default inference args from the inference parser."""
-    tmp = argparse.ArgumentParser()
-    add_arguments_inference(tmp)
-    return vars(
-        tmp.parse_args(
-            [
-                "--platform",
-                "single_cell",
-                "--sample",
-                "_",
-                "--seg_ucn",
-                "_",
-                "--bbc_phases",
-                "_",
-                "-o",
-                "_",
-                "--genome_size",
-                "_",
-                "--region_bed",
-                "_",
-            ]
-        )
-    )
 
 
 def add_arguments_pipeline(parser):
@@ -378,11 +373,10 @@ def add_arguments_pipeline(parser):
     )
     parser.add_argument(
         "--sol_pattern",
-        default="*sol{SOLID}*.tsv",
+        default=argparse.SUPPRESS,
         type=str,
         help="Glob pattern for solfiles under PATH_TO_SOLDIR. "
-        "{SOLID} is replaced by the SOLID column value "
-        "(default: '*sol{SOLID}*.tsv')",
+        "{SOLID} is replaced by the SOLID column value.",
     )
     parser.add_argument(
         "--samples",
@@ -393,21 +387,39 @@ def add_arguments_pipeline(parser):
     parser.add_argument(
         "--force",
         action="store_true",
-        default=False,
+        default=argparse.SUPPRESS,
         help="Re-run even if output already exists",
     )
     parser.add_argument(
         "-v",
         "--verbosity",
-        default=0,
+        default=argparse.SUPPRESS,
         type=int,
         help="Verbose level for each inference run",
     )
+    add_arguments_inference_parameters(parser)
+    add_arguments_validate_parameters(parser)
+    return parser
+
+
+def add_arguments_validate_parameters(parser: argparse.ArgumentParser):
+    """Validate-only parameters (cutoff sweeps). Plot/smoothing params are
+    inherited from add_arguments_inference_parameters."""
     parser.add_argument(
-        "--smooth_k",
-        type=int,
-        default=0,
-        help="Spatial smoothing level (default: 0)",
+        "--purity_cutoff",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        help="comma-separated purity cutoffs for hard label evaluation. "
+        "Spots with purity <= cutoff labeled normal.",
+    )
+    parser.add_argument(
+        "--post_cutoff",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        help="comma-separated max_posterior cutoffs. "
+        "Tumor spots with max_posterior <= cutoff labeled NA (excluded from metrics).",
     )
     return parser
 
@@ -429,8 +441,8 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         "--pred_label",
         required=False,
         type=str,
-        default="label",
-        help="Column name for predicted labels (default: label)",
+        default=argparse.SUPPRESS,
+        help="Column name for predicted labels",
     )
     parser.add_argument(
         "--ref_labels",
@@ -450,8 +462,8 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         "--method",
         required=False,
         type=str,
-        default="copytyping",
-        help="Method that produced the labels: copytyping or others (default: copytyping). "
+        default=argparse.SUPPRESS,
+        help="Method that produced the labels: copytyping or others. "
         "Non-copytyping skips init normal, purity sweep, trace, count histograms.",
     )
     parser.add_argument("--sample", required=True, type=str, help="sample name")
@@ -477,64 +489,16 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
         help="h5ad file for spatial neighbors (joincount + visium plots)",
     )
     parser.add_argument(
-        "--n_neighs",
-        required=False,
-        type=int,
-        default=6,
-        help="Number of spatial neighbors (default: 6)",
-    )
-    parser.add_argument(
         "-o", "--out_dir", required=True, type=str, help="output directory"
-    )
-    parser.add_argument(
-        "--dpi",
-        required=False,
-        type=int,
-        default=200,
-        help="DPI for plots (default: 200)",
-    )
-    parser.add_argument(
-        "--min_snp_count",
-        required=False,
-        type=int,
-        default=300,
-        help="min SNP count per adaptive BBC bin for 1d scatter (default: 300)",
-    )
-    parser.add_argument(
-        "--max_bin_length",
-        required=False,
-        type=int,
-        default=5_000_000,
-        help="max bin length (bp) for adaptive BBC binning (default: 5000000)",
-    )
-    parser.add_argument(
-        "--heatmap_agg",
-        required=False,
-        type=int,
-        default=10,
-        help="aggregate observations in heatmap (default: 10)",
-    )
-    parser.add_argument(
-        "--purity_cutoff",
-        required=False,
-        type=str,
-        default="0.5,0.6,0.7",
-        help="comma-separated purity cutoffs for hard label evaluation "
-        "(default: 0.5,0.6,0.7). Spots with purity <= cutoff labeled normal.",
-    )
-    parser.add_argument(
-        "--post_cutoff",
-        required=False,
-        type=str,
-        default="0.5,0.6,0.7,0.8,0.9",
-        help="comma-separated max_posterior cutoffs (default: 0.5,0.6,0.7,0.8,0.9). "
-        "Tumor spots with max_posterior <= cutoff labeled NA (excluded from metrics).",
     )
     parser.add_argument(
         "-v",
         "--verbosity",
         required=False,
         type=int,
-        default=1,
-        help="Verbose level (default: 1)",
+        default=argparse.SUPPRESS,
+        help="Verbose level",
     )
+    add_arguments_inference_parameters(parser)
+    add_arguments_validate_parameters(parser)
+    return parser
