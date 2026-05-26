@@ -341,7 +341,6 @@ def initialize_bulk_cnp_copytyping(
     downstream. Returns a dict with:
         rdr_baf_params: (S, 2) (invphi, tau); a mutated copy of the input.
         base_props:     (G,) per-seg baseline (sums to 1).
-        clone_norm:     (M,) genome-wide per-clone RDR normalizer S_m.
         spot_purities:  (N,) θ_n, or None for single-cell.
         labels_init:    (N,) reference-cell EM labels — normal(0)/tumor(1) if
                         a normal clone is present, else per-tumor-clone.
@@ -390,9 +389,9 @@ def initialize_bulk_cnp_copytyping(
         cna_profile_seg[:, ref_clone],
         rdr_baf_states,
     )
-    clone_norm = get_clone_norm(base_props, cna_profile_seg, rdr_baf_states)
 
-    # 3) spot purity (spatial only)
+    # 3) spot purity (spatial only). ``estimate_spot_purity`` needs the
+    # per-clone S_m, so compute it just for this call — we do not store it.
     spot_purities = None
     if is_spot:
         spot_purities = estimate_spot_purity(
@@ -404,13 +403,12 @@ def initialize_bulk_cnp_copytyping(
             cna_mirrored_seg,
             rdr_baf_states,
             base_props,
-            clone_norm,
+            get_clone_norm(base_props, cna_profile_seg, rdr_baf_states),
         )
 
     return {
         "rdr_baf_params": rdr_baf_params,
         "base_props": base_props,
-        "clone_norm": clone_norm,
         "spot_purities": spot_purities,
         "labels_init": labels_init,
         "ref_clone": ref_clone,

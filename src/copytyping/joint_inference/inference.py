@@ -18,6 +18,7 @@ from copytyping.joint_inference.initialize import (
     adaptive_segmentation,
     perform_segmentation,
     initialize_bulk_cnp_copytyping,
+    get_clone_norm,
 )
 from copytyping.joint_inference.optimize import block_coordinate_ascent_fixed_cnp
 from copytyping.joint_inference.tmp_funcs import (
@@ -38,7 +39,6 @@ def bulk_cnp_copytyping(
     rdr_baf_states,
     rdr_baf_params,
     base_props,
-    clone_norm,
     masks,
     spot_purities=None,
     fit_mode="hybrid",
@@ -49,12 +49,18 @@ def bulk_cnp_copytyping(
     spot purity, dispersions, masks) come from
     ``initialize_bulk_cnp_copytyping``.
 
+    ``clone_norm`` (the per-clone genome-wide RDR normalizer S_m) is computed
+    here from the current ``cna_profile_seg`` so callers that grow the clone
+    set between EM passes (e.g. ``bulk_anchored_copytyping``) always see a
+    fresh value.
+
     ``fit_mode`` picks ``bb_mask = masks["IMBALANCED"]`` for ``hybrid /
     allele_only`` and ``nb_mask = masks["ANEUPLOID"]`` for ``hybrid /
     total_only``, then runs ``block_coordinate_ascent_fixed_cnp``. Returns ``(labels, pi, rdr_baf_params)``.
     """
     em_kwargs = em_kwargs or {}
     n_clones = cna_profile_seg.shape[1]
+    clone_norm = get_clone_norm(base_props, cna_profile_seg, rdr_baf_states)
 
     bb_mask = masks["IMBALANCED"] if fit_mode in ("hybrid", "allele_only") else None
     nb_mask = masks["ANEUPLOID"] if fit_mode in ("hybrid", "total_only") else None
@@ -241,7 +247,6 @@ def run(args=None):
             rdr_baf_states,
             rdr_baf_params=init_params["rdr_baf_params"],
             base_props=base_props,
-            clone_norm=init_params["clone_norm"],
             masks=masks,
             spot_purities=spot_purities,
             fit_mode=args["fit_mode"],
