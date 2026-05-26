@@ -13,6 +13,8 @@ from copytyping.utils import read_seg_ucn_file
 
 
 def read_cell_types(ct_file: str, req_cols: set):
+    if ct_file is None:
+        return None
     cell_type_df = pd.read_table(ct_file)
     for req_col in req_cols:
         assert req_col in cell_type_df.columns, (

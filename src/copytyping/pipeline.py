@@ -29,6 +29,7 @@ import pandas as pd
 
 from copytyping.plot.plot_common import plot_joincount_boxplot, plot_metrics_barplot
 
+from copytyping.copytyping_parser import check_arguments_inference
 from copytyping.inference.inference import run as run_inference
 from copytyping.inference.validation import _eval_subset
 from copytyping.utils import normalize_args
@@ -160,6 +161,7 @@ def _run_one(pipeline_args, base_args, run_dir):
 
     inf_args = {**pipeline_args, **base_args}
     inf_args["out_dir"] = run_dir
+    check_arguments_inference(inf_args)
     os.makedirs(run_dir, exist_ok=True)
 
     logging.info(f"RUN: {run_dir}")

@@ -64,12 +64,14 @@ def _build_ch_boundary(
 def _merge_exp_lines(abs_starts, abs_ends, exp_vals, chrs):
     """Merge adjacent bins with the same expected value into one line segment.
 
-    Skips bins with NaN positions (outside whitelist regions).
+    Skips bins with NaN positions (outside whitelist regions) or NaN expected
+    values (e.g. where the expectation is undefined / not applicable).
     """
-    valid = np.isfinite(abs_starts) & np.isfinite(abs_ends)
+    exp_vals = np.asarray(exp_vals, dtype=float)
+    valid = np.isfinite(abs_starts) & np.isfinite(abs_ends) & np.isfinite(exp_vals)
     abs_starts = np.asarray(abs_starts)[valid]
     abs_ends = np.asarray(abs_ends)[valid]
-    exp_vals = np.asarray(exp_vals)[valid]
+    exp_vals = exp_vals[valid]
     chr_arr = np.asarray(chrs)[valid]
 
     lines = []
@@ -82,6 +84,86 @@ def _merge_exp_lines(abs_starts, abs_ends, exp_vals, chrs):
         lines.append([(abs_starts[i], exp_vals[i]), (abs_ends[j - 1], exp_vals[i])])
         i = j
     return lines
+
+
+def plot_scatter_1d_pseudobulk(
+    ax,
+    positions,
+    obs_values,
+    chr_vlines,
+    chr_end,
+    xtick_chrs,
+    xlab_chrs=None,
+    exp_lines=None,
+    colors=None,
+    ylabel="value",
+    ylim=None,
+    markersize=20,
+    title=None,
+    show_xticklabels=True,
+):
+    """Scatter plot of per-bin pseudobulk values along the genome.
+
+    Args:
+        ax: matplotlib Axes to plot on.
+        positions: (G,) array of genomic positions (absolute coordinates).
+        obs_values: (G,) array of observed values (e.g. log2RDR or BAF).
+        chr_vlines: list of x positions for chromosome boundary lines.
+        chr_end: rightmost x coordinate.
+        xtick_chrs: list of x positions for chromosome tick marks.
+        xlab_chrs: list of chromosome labels. If None, xticklabels are hidden.
+        exp_lines: list of [(x_start, y), (x_end, y)] line segments for
+            expected values, or None.
+        colors: per-bin colors (length G), or None for default.
+        ylabel: y-axis label string.
+        ylim: (ymin, ymax) tuple, or None for auto.
+        markersize: scatter marker size.
+        title: axes title string, or None.
+        show_xticklabels: whether to show chromosome labels on x-axis.
+
+    Returns:
+        ax
+    """
+    valid = np.isfinite(obs_values) & np.isfinite(positions)
+    c = colors if colors is not None else "steelblue"
+    if isinstance(c, list):
+        c = [c[j] for j in np.where(valid)[0]]
+    ax.scatter(
+        positions[valid],
+        obs_values[valid],
+        s=markersize,
+        c=c,
+        edgecolors="black",
+        linewidths=0.1,
+    )
+    for coll in ax.collections:
+        coll.set_rasterized(True)
+    ax.vlines(
+        chr_vlines,
+        ymin=0,
+        ymax=1,
+        transform=ax.get_xaxis_transform(),
+        linewidth=0.5,
+        colors="k",
+    )
+    if exp_lines is not None:
+        ax.add_collection(
+            LineCollection(exp_lines, linewidth=1.5, colors=[(0, 0, 0, 1)])
+        )
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    ax.set_ylabel(ylabel, fontsize=12, fontweight="bold")
+    if title is not None:
+        ax.set_title(title, fontsize=12, fontweight="bold", loc="left")
+    ax.set_xlim(0, chr_end)
+    ax.set_xticks(xtick_chrs)
+    if show_xticklabels and xlab_chrs is not None:
+        ax.set_xticklabels(xlab_chrs, rotation=60, fontsize=11, fontweight="bold")
+    else:
+        ax.set_xticklabels([])
+        ax.tick_params(axis="x", bottom=False)
+    ax.grid(False)
+    return ax
 
 
 def plot_rdr_baf_1d_pseudobulk(
@@ -239,6 +321,8 @@ def plot_rdr_baf_1d_pseudobulk(
             ]
 
         # ── RDR panel ──
+        rdr_exp_lines = None
+        rdr_ylim_eff = rdr_ylim
         if base_props is not None:
             agg_x = np.sum(X[:, barcode_idxs], axis=1).astype(np.float64)
             agg_T = np.sum(T[barcode_idxs]).astype(np.float64)
@@ -249,28 +333,6 @@ def plot_rdr_baf_1d_pseudobulk(
                 log2_mask = rdr_valid & (obs_rdr > 0)
                 obs_rdr[log2_mask] = np.log2(obs_rdr[log2_mask])
                 obs_rdr[rdr_valid & ~log2_mask] = np.nan
-            valid = rdr_valid & np.isfinite(obs_rdr)
-            pos_rdr = positions[valid]
-            val_rdr = obs_rdr[valid]
-            rdr_colors = [bin_colors[j] for j in np.where(valid)[0]]
-            ax_rdr.scatter(
-                pos_rdr,
-                val_rdr,
-                s=markersize,
-                c=rdr_colors,
-                edgecolors="black",
-                linewidths=0.1,
-            )
-            for coll in ax_rdr.collections:
-                coll.set_rasterized(True)
-            ax_rdr.vlines(
-                chr_vlines,
-                ymin=0,
-                ymax=1,
-                transform=ax_rdr.get_xaxis_transform(),
-                linewidth=0.5,
-                colors="k",
-            )
             exp_vals = None
             if clone_C_full is not None:
                 denom = float(np.sum(base_props * clone_C_full))
@@ -279,84 +341,63 @@ def plot_rdr_baf_1d_pseudobulk(
                     if log2:
                         exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
             if exp_vals is not None:
-                ax_rdr.add_collection(
-                    LineCollection(
-                        _merge_exp_lines(
-                            abs_starts, abs_ends, exp_vals, cnv_blocks["#CHR"]
-                        ),
-                        linewidth=1.5,
-                        colors=[linecolor],
-                    )
+                rdr_exp_lines = _merge_exp_lines(
+                    abs_starts, abs_ends, exp_vals, cnv_blocks["#CHR"]
                 )
             if log2:
-                # Adaptive ylim: tighten to (-2, 2) if obs + expected all fit, else use rdr_ylim
-                candidates = [val_rdr]
+                candidates = [obs_rdr[np.isfinite(obs_rdr)]]
                 if exp_vals is not None:
                     candidates.append(np.asarray(exp_vals))
                 all_vals = np.concatenate(
-                    [c[np.isfinite(c)] for c in candidates if c.size > 0]
+                    [c[np.isfinite(c)] for c in candidates if len(c) > 0]
                 )
                 if all_vals.size > 0 and all_vals.min() >= -2 and all_vals.max() <= 2:
-                    ylim_eff = (-2, 2)
-                else:
-                    ylim_eff = rdr_ylim
-                ax_rdr.set_ylim(ylim_eff)
-                if len(val_rdr) > 0:
-                    n_below = int((val_rdr < ylim_eff[0]).sum())
-                    n_above = int((val_rdr > ylim_eff[1]).sum())
-                    if n_below + n_above > 0:
-                        logging.info(
-                            f"  {cell_label} log2RDR: {n_below} bins < {ylim_eff[0]}, "
-                            f"{n_above} bins > {ylim_eff[1]}"
-                        )
+                    rdr_ylim_eff = (-2, 2)
             else:
                 exp_max = float(exp_vals.max()) if exp_vals is not None else 1.0
-                ax_rdr.set_ylim(
-                    [-0.1, min(max(val_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0)]
+                valid_rdr = obs_rdr[np.isfinite(obs_rdr)]
+                rdr_ylim_eff = (
+                    (
+                        -0.1,
+                        min(max(valid_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0),
+                    )
+                    if valid_rdr.size > 0
+                    else (-0.1, 2.0)
                 )
-        ax_rdr.set_ylabel(rdr_label, fontsize=12, fontweight="bold")
+        else:
+            obs_rdr = np.full(len(positions), np.nan)
+
         feat_label = {"atac": "fragment", "gex": "umi"}.get(data_type, "count")
         total_counts = int(np.sum(X[:, barcode_idxs]))
         snp_counts = int(np.sum(D[:, barcode_idxs]))
         prop = round(100 * num_bcs / total_cells, 1) if total_cells > 0 else 0.0
-        ax_rdr.set_title(
+        rdr_title = (
             f"{cell_label} (n={num_bcs}, prop={prop}%,"
             f" {data_type}-{feat_label}={total_counts:,},"
-            f" snp-{feat_label}={snp_counts:,})",
-            fontsize=12,
-            fontweight="bold",
-            loc="left",
+            f" snp-{feat_label}={snp_counts:,})"
         )
-        plt.setp(ax_rdr, xlim=(0, chr_end), xticks=xtick_chrs)
-        ax_rdr.set_xticklabels([])
-        ax_rdr.tick_params(axis="x", bottom=False)
-        ax_rdr.grid(False)
+        plot_scatter_1d_pseudobulk(
+            ax_rdr,
+            positions,
+            obs_rdr,
+            chr_vlines,
+            chr_end,
+            xtick_chrs,
+            xlab_chrs,
+            exp_lines=rdr_exp_lines,
+            colors=bin_colors,
+            ylabel=rdr_label,
+            ylim=rdr_ylim_eff,
+            markersize=markersize,
+            title=rdr_title,
+            show_xticklabels=False,
+        )
 
         # ── BAF panel ──
-        agg_bcounts = np.sum(Y[:, barcode_idxs], axis=1)
-        agg_tcounts = np.sum(D[:, barcode_idxs], axis=1)
-        baf_valid = agg_tcounts > 0
-        agg_bafs = agg_bcounts[baf_valid] / agg_tcounts[baf_valid]
-        pos_baf = positions[baf_valid]
-        baf_colors = [bin_colors[j] for j in np.where(baf_valid)[0]]
-        ax_baf.scatter(
-            pos_baf,
-            agg_bafs,
-            s=markersize,
-            c=baf_colors,
-            edgecolors="black",
-            linewidths=0.1,
-        )
-        for coll in ax_baf.collections:
-            coll.set_rasterized(True)
-        ax_baf.vlines(
-            chr_vlines,
-            ymin=0,
-            ymax=1,
-            transform=ax_baf.get_xaxis_transform(),
-            linewidth=0.5,
-            colors="k",
-        )
+        agg_bcounts = np.sum(Y[:, barcode_idxs], axis=1).astype(np.float64)
+        agg_tcounts = np.sum(D[:, barcode_idxs], axis=1).astype(np.float64)
+        obs_baf = np.where(agg_tcounts > 0, agg_bcounts / agg_tcounts, np.nan)
+        baf_exp_lines = None
         if (
             is_inferred
             and exp_bafs is not None
@@ -365,20 +406,24 @@ def plot_rdr_baf_1d_pseudobulk(
         ):
             clone_idx = sx_data.clones.index(cell_label)
             clone_baf = exp_bafs[:, clone_idx].copy()
-            ax_baf.add_collection(
-                LineCollection(
-                    _merge_exp_lines(
-                        abs_starts, abs_ends, clone_baf, cnv_blocks["#CHR"]
-                    ),
-                    linewidth=1.5,
-                    colors=[linecolor],
-                )
+            baf_exp_lines = _merge_exp_lines(
+                abs_starts, abs_ends, clone_baf, cnv_blocks["#CHR"]
             )
-        ax_baf.set_ylim([-0.05, 1.05])
-        ax_baf.set_ylabel("BAF", fontsize=12, fontweight="bold")
-        plt.setp(ax_baf, xlim=(0, chr_end), xticks=xtick_chrs)
-        ax_baf.set_xticklabels(xlab_chrs, rotation=60, fontsize=11, fontweight="bold")
-        ax_baf.grid(False)
+        plot_scatter_1d_pseudobulk(
+            ax_baf,
+            positions,
+            obs_baf,
+            chr_vlines,
+            chr_end,
+            xtick_chrs,
+            xlab_chrs,
+            exp_lines=baf_exp_lines,
+            colors=bin_colors,
+            ylabel="BAF",
+            ylim=(-0.05, 1.05),
+            markersize=markersize,
+            show_xticklabels=True,
+        )
 
     # ── Bottom rows: CNP profile + legend ──
     if has_cnp:

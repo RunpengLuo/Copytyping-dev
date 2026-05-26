@@ -11,6 +11,9 @@ verbosity: 0
 # inference — model fit
 # fit_mode: hybrid | allele_only | total_only
 fit_mode: hybrid
+# If true, assume no normal cells: drop the normal clone column from the CN
+# profile, skip the bb_normal normal-vs-tumor split, and force fit_mode=allele_only.
+no_normal: false
 niters: 100
 # baf_clip: cell model uses 0.001; spot model often uses 0.1 (mixture tolerance)
 baf_clip: 0.001

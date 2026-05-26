@@ -558,6 +558,7 @@ def plot_ascn_profile(
                             transform=ax.get_xaxis_transform(),
                             linewidth=0,
                             alpha=1.0 if cnb == 0 else 0.5,
+                            rasterized=True,
                         )
                     )
                     ax.add_patch(
@@ -570,6 +571,7 @@ def plot_ascn_profile(
                             transform=ax.get_xaxis_transform(),
                             linewidth=0,
                             alpha=1.0 if cna == 0 else 0.5,
+                            rasterized=True,
                         )
                     )
 

@@ -8,18 +8,12 @@ from scipy.stats import zscore
 from copytyping.sx_data.sx_data import SX_Data
 
 
-def _parse_bounds(s):
-    """Parse comma-separated bounds string like '1.0,1e6' into (float, float)."""
-    lo, hi = s.split(",")
-    return (float(lo), float(hi))
-
-
 def prepare_params(args, cnv_blocks, platform, data_types):
     """Build init_params and fix_params dicts from CLI args and CNV profile."""
     K = len(cnv_blocks["PROPS"].iloc[0].split(";"))
     pi_init = np.ones(K) / K
-    tau_bounds = _parse_bounds(args["tau_bounds"])
-    invphi_bounds = _parse_bounds(args["invphi_bounds"])
+    tau_bounds = (args["min_tau"], args["max_tau"])
+    invphi_bounds = (args["min_invphi"], args["max_invphi"])
     init_params = {
         "pi": pi_init,
         "pi_alpha": args["pi_alpha"],

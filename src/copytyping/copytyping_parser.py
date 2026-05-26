@@ -52,6 +52,15 @@ def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
         "CN profiles (matched by CLUSTER ID).",
     )
     parser.add_argument(
+        "--no_normal",
+        required=False,
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="If set, assume the sample has no normal cells: skip the bb_normal "
+        "normal-vs-tumor split, drop the normal clone column from the CN profile, "
+        "and force --fit_mode=allele_only (no normal-derived read-depth baseline).",
+    )
+    parser.add_argument(
         "--cell_type",
         required=False,
         type=str,
@@ -335,6 +344,25 @@ def check_arguments_inference(args: dict):
     assert os.path.exists(args["bbc_phases"]), f"invalid --bbc_phases file"
     if args["solfile"] is not None:
         assert os.path.exists(args["solfile"]), f"invalid --solfile: {args['solfile']}"
+    assert args["region_bed"] is not None and os.path.exists(args["region_bed"]), (
+        f"invalid --region_bed: {args['region_bed']}"
+    )
+
+    def _parse_bounds(s):
+        """Parse comma-separated bounds string like '1.0,1e6' into (float, float)."""
+        lo, hi = s.split(",")
+        return (float(lo), float(hi))
+
+    min_tau, max_tau = _parse_bounds(args["tau_bounds"])
+    min_invphi, max_invphi = _parse_bounds(args["invphi_bounds"])
+    args["min_tau"] = min_tau
+    args["max_tau"] = max_tau
+    args["min_invphi"] = min_invphi
+    args["max_invphi"] = max_invphi
+
+    # --no_normal forces allele_only (no normal-derived read-depth baseline)
+    if args["no_normal"]:
+        args["fit_mode"] = "allele_only"
 
     return args
 
