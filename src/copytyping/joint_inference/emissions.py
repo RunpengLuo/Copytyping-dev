@@ -3,13 +3,48 @@
 same function — both evaluated only at precomputed nonzero entries.
 """
 
+from typing import Any
+
 import numpy as np
+from scipy import sparse
 from scipy.special import betaln, gammaln, logsumexp
 
 
+def bb_logpmf_nz(
+    B_nz: np.ndarray,
+    A_nz: np.ndarray,
+    comb_nz: np.ndarray,
+    alpha: np.ndarray,
+    beta: np.ndarray,
+) -> np.ndarray:
+    return comb_nz + betaln(B_nz + alpha, A_nz + beta) - betaln(alpha, beta)
+
+
+def nb_logpmf_zero(invphi: np.ndarray, mu: np.ndarray) -> np.ndarray:
+    return invphi * (np.log(invphi) - np.log(invphi + mu))
+
+
+def nb_logpmf_nz_adjustment(
+    X_nz: np.ndarray,
+    logfact_nz: np.ndarray,
+    invphi: np.ndarray,
+    mu: np.ndarray,
+) -> np.ndarray:
+    return (
+        gammaln(X_nz + invphi)
+        - gammaln(invphi)
+        - logfact_nz
+        + X_nz * (np.log(mu) - np.log(invphi + mu))
+    )
+
+
 def do_estep_clone_label(
-    log_pi, bb_args=None, nb_args=None, spot_purities=None, chunk_size=1000
-):
+    log_pi: np.ndarray,
+    bb_args: dict[str, Any] | None = None,
+    nb_args: dict[str, Any] | None = None,
+    spot_purities: np.ndarray | None = None,
+    chunk_size: int = 1000,
+) -> tuple[np.ndarray, float]:
     """E-step: sums BB and/or NB conditional log-PMFs, adds ``log_pi``,
     softmaxes over clones. Returns ``(resp, total_ll)`` with ``resp`` of shape
     (N, M) and ``total_ll = sum_n logsumexp_m``.
@@ -39,23 +74,23 @@ def do_estep_clone_label(
 
 
 def cond_betabin_logpmf(
-    B,
-    C,
-    cna_profile,
-    cna_mirrored,
-    rdr_baf_states,
-    rdr_baf_params,
-    nz_seg,
-    nz_cell,
-    B_nz,
-    A_nz,
-    comb_nz,
-    base_props=None,
-    clone_norm=None,
-    spot_purities=None,
-    eps=1e-12,
-    chunk_size=1000,
-):
+    B: sparse.csr_matrix,
+    C: sparse.csr_matrix,
+    cna_profile: np.ndarray,
+    cna_mirrored: np.ndarray,
+    rdr_baf_states: np.ndarray,
+    rdr_baf_params: np.ndarray,
+    nz_seg: np.ndarray,
+    nz_cell: np.ndarray,
+    B_nz: np.ndarray,
+    A_nz: np.ndarray,
+    comb_nz: np.ndarray,
+    base_props: np.ndarray | None = None,
+    clone_norm: np.ndarray | None = None,
+    spot_purities: np.ndarray | None = None,
+    eps: float = 1e-12,
+    chunk_size: int = 1000,
+) -> np.ndarray:
     """BetaBinomial log-likelihood, returns shape (N, M).
 
     ``BetaBin(b | c=0, .) = 1``, so zero-total-allele bins contribute 0 — we
@@ -84,12 +119,9 @@ def cond_betabin_logpmf(
     if spot_purities is None:
         alpha_gm = tau_gm * p_gm
         beta_gm = tau_gm * (1.0 - p_gm)
-        neg_betaln_gm = -betaln(alpha_gm, beta_gm)  # (G, M)
         for m in range(M):
-            contrib = (
-                comb_nz
-                + betaln(B_nz + alpha_gm[nz_seg, m], A_nz + beta_gm[nz_seg, m])
-                + neg_betaln_gm[nz_seg, m]
+            contrib = bb_logpmf_nz(
+                B_nz, A_nz, comb_nz, alpha_gm[nz_seg, m], beta_gm[nz_seg, m]
             )
             ll_nm[:, m] = np.bincount(nz_cell, weights=contrib, minlength=N)
         return ll_nm
@@ -108,29 +140,29 @@ def cond_betabin_logpmf(
         numer = rdr_norm * theta_nz * p_gm[nz_seg, m] + (1.0 - theta_nz) * 0.5
         denom = rdr_norm * theta_nz + (1.0 - theta_nz)
         p_hat = np.clip(numer / np.clip(denom, eps, None), eps, 1.0 - eps)
-        a = tau_gm[nz_seg, m] * p_hat
-        b = tau_gm[nz_seg, m] * (1.0 - p_hat)
-        contrib = comb_nz + betaln(B_nz + a, A_nz + b) - betaln(a, b)
+        alpha = tau_gm[nz_seg, m] * p_hat
+        beta = tau_gm[nz_seg, m] * (1.0 - p_hat)
+        contrib = bb_logpmf_nz(B_nz, A_nz, comb_nz, alpha, beta)
         ll_nm[:, m] = np.bincount(nz_cell, weights=contrib, minlength=N)
     return ll_nm
 
 
 def cond_negbin_logpmf(
-    X,
-    T,
-    cna_profile,
-    rdr_baf_states,
-    rdr_baf_params,
-    base_props,
-    clone_norm,
-    nz_seg,
-    nz_cell,
-    X_nz,
-    logfact_nz,
-    spot_purities=None,
-    eps=1e-12,
-    chunk_size=1000,
-):
+    X: sparse.csr_matrix,
+    T: np.ndarray,
+    cna_profile: np.ndarray,
+    rdr_baf_states: np.ndarray,
+    rdr_baf_params: np.ndarray,
+    base_props: np.ndarray,
+    clone_norm: np.ndarray | None,
+    nz_seg: np.ndarray,
+    nz_cell: np.ndarray,
+    X_nz: np.ndarray,
+    logfact_nz: np.ndarray,
+    spot_purities: np.ndarray | None = None,
+    eps: float = 1e-12,
+    chunk_size: int = 1000,
+) -> np.ndarray:
     """NegBinomial log-likelihood, returns shape (N, M).
 
     Factors per-bin sum into a dense normalization term (every bin,
@@ -159,13 +191,11 @@ def cond_negbin_logpmf(
     )
     rdr_norm_gm = mu_gm / np.clip(S_m[None, :], eps, None)  # (G, M)
     pi_gm = base_props[:, None] * rdr_norm_gm  # (G, M) single-cell read fraction
-    log_ip = np.log(invphi_gm)  # (G, M)
 
     spot = spot_purities is not None
 
-    # dense normalization term, accumulated over cell chunks (bounded memory)
+    # dense baseline term: sum_g log P(x=0 | mu, invphi), accumulated in cell chunks
     ll_nm = np.empty((N, M), dtype=np.float64)
-    norm_const_m = (invphi_gm * log_ip).sum(axis=0)  # (M,)
     ip_g1m = invphi_gm[:, None, :]  # (G, 1, M)
     for start in range(0, N, chunk_size):
         end = min(start + chunk_size, N)
@@ -183,9 +213,9 @@ def cond_negbin_logpmf(
         else:
             mu_gnm = pi_gm[:, None, :] * T_ch[None, :, None]  # (G, cs, M)
         mu_gnm = np.clip(mu_gnm, eps, None)
-        ll_nm[start:end] = norm_const_m - (ip_g1m * np.log(ip_g1m + mu_gnm)).sum(axis=0)
+        ll_nm[start:end] = nb_logpmf_zero(ip_g1m, mu_gnm).sum(axis=0)
 
-    # sparse read-count term over the read-depth nonzeros
+    # sparse adjustment: log P(x | mu, invphi) - log P(x=0 | mu, invphi), at x > 0
     theta_nz = spot_purities[nz_cell] if spot else None
     for m in range(M):
         invphi = invphi_gm[nz_seg, m]  # (nnz,)
@@ -198,11 +228,6 @@ def cond_negbin_logpmf(
         else:
             mu = pi_gm[nz_seg, m] * T[nz_cell]
         mu = np.clip(mu, eps, None)
-        contrib = (
-            gammaln(X_nz + invphi)
-            - gammaln(invphi)
-            - logfact_nz
-            + X_nz * (np.log(mu) - np.log(invphi + mu))
-        )
+        contrib = nb_logpmf_nz_adjustment(X_nz, logfact_nz, invphi, mu)
         ll_nm[:, m] += np.bincount(nz_cell, weights=contrib, minlength=N)
     return ll_nm

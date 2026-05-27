@@ -1,10 +1,14 @@
-"""EM loop (``block_coordinate_ascent_fixed_cnp``) and M-step per-state dispersion MLE
-(``update_nb_bb_dispersion``); the E-step lives in ``emissions``.
+"""EM loop (``block_coordinate_ascent_fixed_cnp``), M-step per-state
+dispersion MLE (``update_nb_bb_dispersion``), and the BB / NB
+sufficient-statistic builders (``build_bb_args`` / ``build_nb_args``); the
+E-step lives in ``emissions``.
 """
 
 import logging
+from typing import Any
 
 import numpy as np
+from scipy import sparse
 from scipy.optimize import minimize_scalar
 from scipy.special import betaln, gammaln
 
@@ -14,25 +18,138 @@ from copytyping.joint_inference.emissions import do_estep_clone_label
 _GRID_BUDGET = 2_000_000
 
 
+def build_bb_args(
+    B_seg: sparse.csr_matrix,
+    C_seg: sparse.csr_matrix,
+    cna_profile_seg: np.ndarray,
+    cna_mirrored_seg: np.ndarray,
+    rdr_baf_states: np.ndarray,
+    model_params: dict[str, Any],
+    clone_norm: np.ndarray | None,
+    bb_mask: np.ndarray,
+) -> dict[str, Any]:
+    """BetaBinomial sufficient-statistic bundle for the BB E-step emissions
+    and the anchored-objective helpers.
+
+    Carries the mask-restricted allele matrices ``(B, C)``, the COO indices
+    of ``C``'s nonzeros (``nz_seg`` / ``nz_cell``) plus the per-nonzero
+    count split ``(B_nz, A_nz)`` — these are the data-only sufficient stats
+    for the BB log-PMF — and the data-only log-binomial-coefficient term
+    ``comb_nz`` = ``gammaln(b+a+1) - gammaln(b+1) - gammaln(a+1)``. The rest
+    are references the emission code needs: masked ``cna_profile`` /
+    ``cna_mirrored`` / ``base_props``, genome-wide ``clone_norm``,
+    ``rdr_baf_states``, ``rdr_baf_params``.
+
+    Every shared array — including ``rdr_baf_params`` — is held by
+    reference, so M-step in-place mutations flow through without rebuild.
+    """
+    rdr_baf_params = model_params["rdr_baf_params"]
+    base_props = model_params["base_props"]
+
+    B_al = B_seg[bb_mask]
+    C_al = C_seg[bb_mask]
+    state_al = cna_profile_seg[bb_mask]
+    mirror_al = cna_mirrored_seg[bb_mask]
+    base_al = None if base_props is None else base_props[bb_mask]
+    C_coo = C_al.tocoo()
+    allele_bin, allele_cell = C_coo.row, C_coo.col
+    allele_total = C_coo.data.astype(np.float64)
+    b_allele = (
+        np.asarray(B_al.tocsr()[allele_bin, allele_cell]).ravel().astype(np.float64)
+    )
+    a_allele = allele_total - b_allele
+    allele_logcomb = (
+        gammaln(allele_total + 1) - gammaln(b_allele + 1) - gammaln(a_allele + 1)
+    )
+    return dict(
+        B=B_al,
+        C=C_al,
+        cna_profile=state_al,
+        cna_mirrored=mirror_al,
+        rdr_baf_states=rdr_baf_states,
+        rdr_baf_params=rdr_baf_params,
+        nz_seg=allele_bin,
+        nz_cell=allele_cell,
+        B_nz=b_allele,
+        A_nz=a_allele,
+        comb_nz=allele_logcomb,
+        base_props=base_al,
+        clone_norm=clone_norm,
+    )
+
+
+def build_nb_args(
+    X_seg: sparse.csr_matrix,
+    T_seg: np.ndarray,
+    cna_profile_seg: np.ndarray,
+    rdr_baf_states: np.ndarray,
+    model_params: dict[str, Any],
+    clone_norm: np.ndarray | None,
+    nb_mask: np.ndarray,
+) -> dict[str, Any]:
+    """NegBinomial sufficient-statistic bundle for the NB E-step emissions
+    and the anchored-objective helpers.
+
+    Carries the mask-restricted depth matrix ``X`` and per-cell library
+    sizes ``T``, the COO indices of ``X``'s nonzeros (``nz_seg`` /
+    ``nz_cell``) and per-nonzero counts ``X_nz`` — the data-only sufficient
+    stats for the NB log-PMF — plus the data-only ``logfact_nz`` =
+    ``gammaln(x+1)``. The rest are references the emission code needs:
+    masked ``cna_profile`` / ``base_props``, genome-wide ``clone_norm``,
+    ``rdr_baf_states``, ``rdr_baf_params``.
+
+    Every shared array — including ``rdr_baf_params`` — is held by
+    reference, so M-step in-place mutations flow through without rebuild.
+    """
+    rdr_baf_params = model_params["rdr_baf_params"]
+    base_props = model_params["base_props"]
+
+    X_dp = X_seg[nb_mask]
+    state_dp = cna_profile_seg[nb_mask]
+    base_dp = base_props[nb_mask]
+    X_coo = X_dp.tocoo()
+    depth_bin, depth_cell = X_coo.row, X_coo.col
+    depth_count = X_coo.data.astype(np.float64)
+    depth_logfact = gammaln(depth_count + 1)
+    return dict(
+        X=X_dp,
+        T=T_seg,
+        cna_profile=state_dp,
+        rdr_baf_states=rdr_baf_states,
+        rdr_baf_params=rdr_baf_params,
+        base_props=base_dp,
+        clone_norm=clone_norm,
+        nz_seg=depth_bin,
+        nz_cell=depth_cell,
+        X_nz=depth_count,
+        logfact_nz=depth_logfact,
+    )
+
+
 def update_nb_bb_dispersion(
-    labels,
-    bb_args=None,
-    nb_args=None,
-    min_tau=50.0,
-    max_tau=5000.0,
-    min_invphi=20.0,
-    max_invphi=5000.0,
-    update_tau=True,
-    update_invphi=True,
-    eps=1e-12,
-):
+    labels: np.ndarray,
+    em_kwargs: dict[str, Any],
+    bb_args: dict[str, Any] | None = None,
+    nb_args: dict[str, Any] | None = None,
+) -> None:
     """Per-canonical-state 1-D bounded MLE for BB ``tau`` (col 1 of
     ``rdr_baf_params``) and NB ``invphi`` (col 0); mutates in place.
+
+    Reads ``min_tau`` / ``max_tau`` / ``min_invphi`` / ``max_invphi`` /
+    ``update_tau`` / ``update_invphi`` / ``eps`` from ``em_kwargs`` and
+    ignores any other keys it carries.
 
     Skeleton: assign each nonzero to its clone's canonical CN state, then
     minimize the negative Q per state. Reuses the E-step kwargs bundles;
     either may be None (BB-only or NB-only EM), leaving that param untouched.
     """
+    min_tau = em_kwargs["min_tau"]
+    max_tau = em_kwargs["max_tau"]
+    min_invphi = em_kwargs["min_invphi"]
+    max_invphi = em_kwargs["max_invphi"]
+    update_tau = em_kwargs["update_tau"]
+    update_invphi = em_kwargs["update_invphi"]
+    eps = em_kwargs["eps"]
 
     def neg_Q_bb(log_tau, buckets):
         """Negative BetaBinomial Q(tau) over unique (B, A) buckets per effective BAF."""
@@ -195,103 +312,80 @@ def update_nb_bb_dispersion(
 
 
 def block_coordinate_ascent_fixed_cnp(
-    B_seg,
-    C_seg,
-    X_seg,
-    T_seg,
-    cna_profile_seg,
-    cna_mirrored_seg,
-    rdr_baf_states,
-    rdr_baf_params,
-    base_props,
-    clone_norm,
-    bb_mask,
-    nb_mask,
-    spot_purities=None,
-    niters=100,
-    tol=1e-4,
-    min_tau=50.0,
-    max_tau=5000.0,
-    min_invphi=20.0,
-    max_invphi=5000.0,
-    update_tau=True,
-    update_invphi=True,
-    chunk_size=1000,
-):
-    """EM over bulk-derived clones. Returns ``(labels, pi, rdr_baf_params)``.
+    B_seg: sparse.csr_matrix,
+    C_seg: sparse.csr_matrix,
+    X_seg: sparse.csr_matrix,
+    T_seg: np.ndarray,
+    cna_profile_seg: np.ndarray,
+    cna_mirrored_seg: np.ndarray,
+    rdr_baf_states: np.ndarray,
+    model_params: dict[str, Any],
+    clone_norm: np.ndarray | None,
+    bb_mask: np.ndarray | None,
+    nb_mask: np.ndarray | None,
+    em_kwargs: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    """EM over bulk-derived clones.
+
+    Reads ``rdr_baf_params`` / ``base_props`` / ``spot_purities`` from
+    ``model_params``. Mutates ``model_params["rdr_baf_params"]`` in place
+    through the array reference (M-step τ / inv_phi MLE) and writes the
+    final mixing weights to ``model_params["pi"]``.
+
+    Reads ``niters`` / ``tol`` / ``chunk_size`` from ``em_kwargs`` (the
+    ``update_nb_bb_dispersion`` M-step pulls its own bounds from the same
+    dict). Extra keys are ignored, so the shared dict can carry
+    wrapper-only knobs (``is_spot``, ``fit_mode``, …) too.
 
     Caller controls which bins and clones via ``bb_mask`` / ``nb_mask`` (either
     may be None — at least one required) and via pre-subsetting
     ``cna_profile_seg`` / ``cna_mirrored_seg`` columns. ``base_props`` is
     restricted to the masked bins internally; ``clone_norm`` stays genome-wide
     and must match the number of clones in the passed profile.
+
+    Returns ``(labels, resp)``: MAP clone assignments (N,) and the posterior
+    responsibility matrix (N, M).
     """
+    spot_purities = model_params["spot_purities"]
+
+    niters = em_kwargs["niters"]
+    tol = em_kwargs["tol"]
+    chunk_size = em_kwargs["chunk_size"]
+
     n_cells = B_seg.shape[1]
     n_clones = cna_profile_seg.shape[1]
-    run_allele = bb_mask is not None
-    run_depth = nb_mask is not None
-    if not (run_allele or run_depth):
+    if bb_mask is None and nb_mask is None:
         raise ValueError(
             "block_coordinate_ascent_fixed_cnp: at least one of bb_mask, nb_mask must be given"
         )
 
-    # allele (BetaBinomial) inputs: nonzeros of C over the allele bins
-    bb_args = None
-    if run_allele:
-        B_al = B_seg[bb_mask]
-        C_al = C_seg[bb_mask]
-        state_al = cna_profile_seg[bb_mask]
-        mirror_al = cna_mirrored_seg[bb_mask]
-        base_al = None if base_props is None else base_props[bb_mask]
-        C_coo = C_al.tocoo()
-        allele_bin, allele_cell = C_coo.row, C_coo.col
-        allele_total = C_coo.data.astype(np.float64)
-        b_allele = (
-            np.asarray(B_al.tocsr()[allele_bin, allele_cell]).ravel().astype(np.float64)
+    bb_args = (
+        build_bb_args(
+            B_seg,
+            C_seg,
+            cna_profile_seg,
+            cna_mirrored_seg,
+            rdr_baf_states,
+            model_params,
+            clone_norm,
+            bb_mask,
         )
-        a_allele = allele_total - b_allele
-        allele_logcomb = (
-            gammaln(allele_total + 1) - gammaln(b_allele + 1) - gammaln(a_allele + 1)
+        if bb_mask is not None
+        else None
+    )
+    nb_args = (
+        build_nb_args(
+            X_seg,
+            T_seg,
+            cna_profile_seg,
+            rdr_baf_states,
+            model_params,
+            clone_norm,
+            nb_mask,
         )
-        bb_args = dict(
-            B=B_al,
-            C=C_al,
-            cna_profile=state_al,
-            cna_mirrored=mirror_al,
-            rdr_baf_states=rdr_baf_states,
-            rdr_baf_params=rdr_baf_params,
-            nz_seg=allele_bin,
-            nz_cell=allele_cell,
-            B_nz=b_allele,
-            A_nz=a_allele,
-            comb_nz=allele_logcomb,
-            base_props=base_al,
-            clone_norm=clone_norm,
-        )
-
-    # depth (NegBinomial) inputs: nonzeros of X over the depth bins
-    nb_args = None
-    if run_depth:
-        X_dp = X_seg[nb_mask]
-        state_dp = cna_profile_seg[nb_mask]
-        base_dp = base_props[nb_mask]
-        X_coo = X_dp.tocoo()
-        depth_bin, depth_cell = X_coo.row, X_coo.col
-        depth_count = X_coo.data.astype(np.float64)
-        depth_logfact = gammaln(depth_count + 1)
-        nb_args = dict(
-            X=X_dp,
-            T=T_seg,
-            cna_profile=state_dp,
-            rdr_baf_states=rdr_baf_states,
-            rdr_baf_params=rdr_baf_params,
-            base_props=base_dp,
-            clone_norm=clone_norm,
-            nz_seg=depth_bin,
-            nz_cell=depth_cell,
-            X_nz=depth_count,
-            logfact_nz=depth_logfact,
-        )
+        if nb_mask is not None
+        else None
+    )
 
     pi = np.ones(n_clones, dtype=np.float64) / n_clones
     log_pi = np.log(pi)
@@ -321,21 +415,12 @@ def block_coordinate_ascent_fixed_cnp(
 
         # M-step: per-canonical-state dispersion MLEs (tau, invphi). Reuses the
         # E-step kwargs bundles; either may be None (BB-only or NB-only EM).
-        update_nb_bb_dispersion(
-            labels,
-            bb_args,
-            nb_args,
-            min_tau=min_tau,
-            max_tau=max_tau,
-            min_invphi=min_invphi,
-            max_invphi=max_invphi,
-            update_tau=update_tau,
-            update_invphi=update_invphi,
-        )
+        update_nb_bb_dispersion(labels, em_kwargs, bb_args, nb_args)
 
         if t % 10 == 0:
             logging.info(
                 f"  EM iter {t}: LL={total_ll:.1f}, pi=[{', '.join(f'{p:.3f}' for p in pi)}]"
             )
 
-    return resp.argmax(axis=1), pi, rdr_baf_params
+    model_params["pi"] = pi
+    return resp.argmax(axis=1), resp

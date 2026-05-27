@@ -79,8 +79,10 @@ def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
         required=False,
         type=str,
         default=argparse.SUPPRESS,
-        choices=["copytyping", "kmeans"],
-        help="copytyping (EM model) or kmeans (feature-based clustering)",
+        choices=["copytyping", "bulk_anchored_copytyping", "kmeans"],
+        help="copytyping (bulk-CNP-fixed EM), bulk_anchored_copytyping "
+        "(divisive clone-adding outer loop on top of the EM), or kmeans "
+        "(feature-based clustering)",
     )
     parser.add_argument("-o", "--out_dir", required=True, type=str)
     parser.add_argument(
@@ -276,6 +278,47 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
         type=int,
         default=argparse.SUPPRESS,
         help="max bin length (bp) for adaptive BBC binning",
+    )
+    # --- bulk-anchored divisive copy-typing ---
+    parser.add_argument(
+        "--max_clones",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="hard cap on the total clone count after divisive splits "
+        "(bulk_anchored_copytyping). Loop also stops when no split has Δ > tol.",
+    )
+    parser.add_argument(
+        "--n_bootstrap",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="per-tmp-segment cell resample size: #cells drawn (with "
+        "replacement) under the segment's residual-NLL sampling probability "
+        "to vote for the parent clone (bulk_anchored_copytyping).",
+    )
+    parser.add_argument(
+        "--rng_seed",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="RNG seed for the per-segment cell resampling (bulk_anchored_copytyping).",
+    )
+    parser.add_argument(
+        "--anchored_tol",
+        required=False,
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Δ-stop threshold: accept a candidate split only if its "
+        "objective gain exceeds this (bulk_anchored_copytyping).",
+    )
+    parser.add_argument(
+        "--top_segments",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Number of top-ranked candidate segments (by total NLL, "
+        "descending) to evaluate per divisive iter (bulk_anchored_copytyping).",
     )
     return parser
 

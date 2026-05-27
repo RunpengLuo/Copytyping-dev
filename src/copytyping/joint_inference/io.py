@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -7,7 +8,12 @@ from scipy import sparse
 from copytyping.utils import read_seg_ucn_file, sort_df_chr
 
 
-def load_single_cell_data(args, data_types, cell_type_df=None, celltype_col=None):
+def load_single_cell_data(
+    args: dict[str, Any],
+    data_types: list[str],
+    cell_type_df: pd.DataFrame | None = None,
+    celltype_col: str | None = None,
+) -> tuple[pd.DataFrame, sparse.csc_matrix, sparse.csc_matrix, sparse.csc_matrix]:
     """Load + hstack per-modality BBC-level counts. Returns
     ``(barcodes_df, X_bbc, B_bbc, C_bbc)``; matrices are (G_bbc, N) sparse CSC,
     with ``C = A + B``. If ``cell_type_df`` / ``celltype_col`` are given, that
@@ -66,24 +72,26 @@ def load_single_cell_data(args, data_types, cell_type_df=None, celltype_col=None
     B_bbc = sparse.hstack(B_parts, format="csc")
     C_bbc = sparse.hstack(C_parts, format="csc")
     logging.info(
-        f"concatenated: {len(barcodes_df)} barcodes, "
+        f"loaded: {len(barcodes_df)} barcodes, "
         f"X={X_bbc.shape}, B={B_bbc.shape}, C={C_bbc.shape}"
     )
     return barcodes_df, X_bbc, B_bbc, C_bbc
 
 
-def load_bulk_phases(bbc_phases_file: str):
+def load_bulk_phases(
+    bbc_phases_file: str,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
     """Load BBC-level bulk WGS phasing. Returns
-    ``(bbc_df, phase_post_bbc, phase_map_bbc, switchprobs_bbc)``;
-    ``phase_map_bbc`` is 1=keep B, 0=swap A/B; ``phase_post_bbc`` starts equal
+    ``(bbc_df, phase_post_bbc, phase_bbc, switchprobs_bbc)``;
+    ``phase_bbc`` is 1=keep B, 0=swap A/B; ``phase_post_bbc`` starts equal
     to it.
     """
     bbc_df = pd.read_table(bbc_phases_file, sep="\t")
     bbc_df = sort_df_chr(bbc_df, pos="START")
 
-    phase_map_bbc = bbc_df["PHASE"].to_numpy().astype(np.int32)
+    phase_bbc = bbc_df["PHASE"].to_numpy().astype(np.int32)
     # posterior phase equals the bulk phase map initially
-    phase_post_bbc = phase_map_bbc.copy()
+    phase_post_bbc = phase_bbc.copy()
 
     switchprobs_bbc = np.zeros(len(bbc_df), dtype=np.float64)
     if "switchprobs" in bbc_df.columns:
@@ -91,17 +99,18 @@ def load_bulk_phases(bbc_phases_file: str):
 
     logging.info(
         f"loaded bulk phases: {len(bbc_df)} BBC bins, "
-        f"{int(phase_map_bbc.sum())}/{len(bbc_df)} phase=1"
+        f"{int(phase_bbc.sum())}/{len(bbc_df)} phase=1"
     )
-    return bbc_df, phase_post_bbc, phase_map_bbc, switchprobs_bbc
+    return bbc_df, phase_post_bbc, phase_bbc, switchprobs_bbc
 
 
 def load_bulk_cnp(
     seg_ucn_file: str,
     bbc_df: pd.DataFrame,
-    solfile=None,
-    baf_clip=1e-3,
-):
+    solfile: str | None = None,
+    baf_clip: float = 1e-3,
+    no_normal: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Map HATCHet seg.ucn.tsv to BBC-level. Returns
     ``(cna_int_states, rdr_baf_states, cna_profile, cna_mirrored,
     bulk_segmentation, clone_ids)``.
@@ -112,6 +121,10 @@ def load_bulk_cnp(
     [baf_clip, 1-baf_clip])``. ``bulk_segmentation`` IDs BBC bins by identical
     ``(state, mirror)`` CNP across all clones. ``solfile``, if given,
     overrides the CN profiles in ``seg_ucn_file``.
+
+    ``no_normal=True`` drops the normal clone column from ``cna_profile`` /
+    ``cna_mirrored`` and from ``clone_ids`` before ``bulk_segmentation`` is
+    built, so every downstream array sees only tumor clones.
     """
     from copytyping.io_utils import _apply_solfile
 
@@ -212,6 +225,21 @@ def load_bulk_cnp(
     cna_profile[mapped] = seg_profile[seg_ids[mapped]]
     cna_mirrored[mapped] = mirror_seg[seg_ids[mapped]]
 
+    # canonical clone identifiers: index 0 = normal, 1..K-1 = tumor clones
+    clone_ids = ["normal"] + [f"clone{i}" for i in range(1, n_clones)]
+
+    # --no_normal: strip the normal column from cna_profile / cna_mirrored /
+    # clone_ids *before* bulk_segmentation is built, so the segmentation
+    # groups bins by the tumor-only CNP tuple (and every downstream array
+    # consistently lacks the normal column).
+    if no_normal:
+        assert clone_ids[0] == "normal", clone_ids
+        clone_ids = clone_ids[1:]
+        cna_profile = cna_profile[:, 1:]
+        cna_mirrored = cna_mirrored[:, 1:]
+        n_clones -= 1
+        logging.info(f"no_normal: dropped normal clone -> {clone_ids}")
+
     # --- build bulk_segmentation: group BBC bins by identical (state, mirror) CNP ---
     unique_cnps = {}
     seg_counter = 0
@@ -222,9 +250,6 @@ def load_bulk_cnp(
             unique_cnps[key] = seg_counter
             seg_counter += 1
         bulk_segmentation[g] = unique_cnps[key]
-
-    # canonical clone identifiers: index 0 = normal, 1..K-1 = tumor clones
-    clone_ids = ["normal"] + [f"clone{i}" for i in range(1, n_clones)]
 
     logging.info(
         f"loaded bulk CNP: {n_states} canonical CN states, "

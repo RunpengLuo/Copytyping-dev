@@ -3,9 +3,12 @@ import os
 
 import numpy as np
 import pandas as pd
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.colors import LogNorm
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from scipy import sparse
 
 from copytyping.plot.plot_scatter_1d import plot_scatter_1d_pseudobulk, _merge_exp_lines
 from copytyping.plot.plot_common import build_wl_coords
@@ -14,13 +17,20 @@ from copytyping.plot.plot_copynumber import (
     plot_ascn_profile,
     plot_ascn_legend,
 )
+from copytyping.plot.plot_heatmap import plot_heatmap
 from copytyping.utils import read_whitelist_segments
 
 
 # ============================== inference helpers ==============================
 
 
-def build_cnp_df(coord_df, cna_profile, cna_mirrored, cna_int_states, clone_names=None):
+def build_cnp_df(
+    genome_coords: pd.DataFrame,
+    cna_profile: np.ndarray,
+    cna_mirrored: np.ndarray,
+    cna_int_states: np.ndarray,
+    clone_names: list[str] | None = None,
+) -> pd.DataFrame:
     """Merge contiguous same-CNP same-chrom bins into an ASCN-style block table.
 
     Effective ``(A, B)`` per (seg, clone) = canonical state with mirror applied.
@@ -50,9 +60,9 @@ def build_cnp_df(coord_df, cna_profile, cna_mirrored, cna_int_states, clone_name
 
     df = pd.DataFrame(
         {
-            "#CHR": coord_df["#CHR"].to_numpy(),
-            "START": coord_df["START"].to_numpy(),
-            "END": coord_df["END"].to_numpy(),
+            "#CHR": genome_coords["#CHR"].to_numpy(),
+            "START": genome_coords["START"].to_numpy(),
+            "END": genome_coords["END"].to_numpy(),
             **cn_data,
         }
     )
@@ -72,7 +82,11 @@ def build_cnp_df(coord_df, cna_profile, cna_mirrored, cna_int_states, clone_name
     return df.groupby(seg_id, sort=False).agg(**agg).reset_index(drop=True)
 
 
-def get_masks_from_cna_profile(cna_int_states, cna_profile, cna_mirrored):
+def get_masks_from_cna_profile(
+    cna_int_states: np.ndarray,
+    cna_profile: np.ndarray,
+    cna_mirrored: np.ndarray,
+) -> dict[str, np.ndarray]:
     """Partition bins by CN-state pattern. Reconstructs effective ``(A, B)``
     from canonical state + mirror, then returns masks:
       * ``IMBALANCED``        — any clone has A ≠ B.
@@ -108,20 +122,20 @@ def get_masks_from_cna_profile(cna_int_states, cna_profile, cna_mirrored):
 
 
 def plot_pseudobulk_baf(
-    coord_df_seg,
-    B_agg,
-    C_agg,
-    barcodes_df,
-    region_bed,
-    sample,
-    out_dir,
-    out_prefix,
-    markersize=10,
-    dpi=150,
-):
+    genome_coords_seg: pd.DataFrame,
+    B_agg: sparse.csr_matrix,
+    C_agg: sparse.csr_matrix,
+    barcodes_df: pd.DataFrame,
+    region_bed: str,
+    sample: str,
+    out_dir: str,
+    out_prefix: str,
+    markersize: int = 10,
+    dpi: int = 150,
+) -> None:
     """Per-rep pseudobulk BAF scatter (one PDF page per REP_ID)."""
     wl_segments = read_whitelist_segments(region_bed)
-    wl = build_wl_coords(coord_df_seg, wl_segments)
+    wl = build_wl_coords(genome_coords_seg, wl_segments)
     positions = wl["positions"]
     chr_vlines = wl["chr_vlines"]
     chr_end = wl["chr_end"]
@@ -164,25 +178,25 @@ def plot_pseudobulk_baf(
 
 
 def plot_clone_rdr_baf(
-    coord_df_seg,
-    X_seg,
-    B_seg,
-    C_seg,
-    T_seg,
-    labels,
-    base_props,
-    cnp_df,
-    barcodes_df,
-    region_bed,
-    sample,
-    out_dir,
-    out_prefix,
-    out_name="clone_rdr_baf",
-    clone_names=None,
-    exp_valid=None,
-    markersize=6,
-    dpi=150,
-):
+    genome_coords_seg: pd.DataFrame,
+    X_seg: sparse.csr_matrix,
+    B_seg: sparse.csr_matrix,
+    C_seg: sparse.csr_matrix,
+    T_seg: np.ndarray,
+    labels: np.ndarray,
+    base_props: np.ndarray,
+    cnp_df: pd.DataFrame,
+    barcodes_df: pd.DataFrame | None,
+    region_bed: str,
+    sample: str,
+    out_dir: str,
+    out_prefix: str,
+    out_name: str = "clone_rdr_baf",
+    clone_names: list[str] | None = None,
+    exp_valid: np.ndarray | None = None,
+    markersize: int = 6,
+    dpi: int = 150,
+) -> None:
     """Per-clone, per-rep pseudobulk log2RDR over BAF, with expected step-lines.
 
     One PDF page per REP_ID; each clone gets an RDR panel above a BAF panel; a
@@ -198,11 +212,11 @@ def plot_clone_rdr_baf(
     ``cnp_df`` (from ``build_cnp_df``) is the merged ASCN block table — one row
     per contiguous same-CNP block, with one ``cn_<clone>`` column per clone.
     Per-seg ``(A, B)`` is recovered via per-chrom ``searchsorted`` from
-    ``coord_df_seg``. ``exp_valid`` (G, M) bool mask blanks expected lines
+    ``genome_coords_seg``. ``exp_valid`` (G, M) bool mask blanks expected lines
     where the expectation is undefined (e.g. tumor meta-group on subclonal segs).
     """
     wl_segments = read_whitelist_segments(region_bed)
-    wl = build_wl_coords(coord_df_seg, wl_segments)
+    wl = build_wl_coords(genome_coords_seg, wl_segments)
     G = X_seg.shape[0]
     cn_cols = [c for c in cnp_df.columns if c.startswith("cn_")]
     n_clones = len(cn_cols)
@@ -221,10 +235,10 @@ def plot_clone_rdr_baf(
         A_cnp[:, m] = parts[:, 0].astype(np.int32)
         B_cnp[:, m] = parts[:, 1].astype(np.int32)
 
-    # map each seg in coord_df_seg to its containing cnp_df row (per-chrom
+    # map each seg in genome_coords_seg to its containing cnp_df row (per-chrom
     # searchsorted on START — cnp_df rows are sorted, contiguous within chrom)
-    chrs_seg = coord_df_seg["#CHR"].to_numpy()
-    starts_seg = coord_df_seg["START"].to_numpy()
+    chrs_seg = genome_coords_seg["#CHR"].to_numpy()
+    starts_seg = genome_coords_seg["START"].to_numpy()
     chrs_cnp = cnp_df["#CHR"].to_numpy()
     starts_cnp = cnp_df["START"].to_numpy()
     seg_to_cnp = np.full(G, -1, dtype=np.int64)
@@ -280,10 +294,16 @@ def plot_clone_rdr_baf(
     os.makedirs(plot_dir, exist_ok=True)
     pdf_path = os.path.join(plot_dir, f"{out_prefix}.{out_name}.pdf")
 
-    rep_ids = barcodes_df["REP_ID"].unique()
+    if barcodes_df is None:
+        rep_ids = [None]
+    else:
+        rep_ids = list(barcodes_df["REP_ID"].unique())
     with PdfPages(pdf_path) as pdf:
         for rep_id in rep_ids:
-            rep_mask = (barcodes_df["REP_ID"] == rep_id).to_numpy()
+            if rep_id is None:
+                rep_mask = np.ones(labels.size, dtype=bool)
+            else:
+                rep_mask = (barcodes_df["REP_ID"] == rep_id).to_numpy()
 
             # layout: n_clones (RDR over BAF) rows + a shared bottom (CN profile + legend)
             fig = plt.figure(figsize=(20, 3 * n_clones + 2))
@@ -363,10 +383,96 @@ def plot_clone_rdr_baf(
             ax_cnp.set_xlim(0, wl["chr_end"])
             plot_ascn_legend(ax_leg)
 
-            fig.suptitle(
-                f"{sample} rep={rep_id}", fontsize=14, fontweight="bold", y=0.99
-            )
+            page_title = sample if rep_id is None else f"{sample} rep={rep_id}"
+            fig.suptitle(page_title, fontsize=14, fontweight="bold", y=0.99)
             pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
             plt.close(fig)
 
     logging.info(f"saved clone RDR/BAF ({len(rep_ids)} pages) to {pdf_path}")
+
+
+def plot_cnp_segments_nll_probs(
+    nll: np.ndarray,
+    sampling_probs: np.ndarray,
+    clone_labels: np.ndarray,
+    cnp_segments_df: pd.DataFrame,
+    clone_ids: list[str],
+    region_bed: str,
+    out_path: str,
+    sample: str = "",
+    figsize: tuple[float, float] = (20, 13),
+    dpi: int = 150,
+) -> None:
+    """Cell × candidate-seg heatmap PDF for both NLL and sampling probability.
+
+    Two pages: one heatmap per value type. Cells (rows) are sorted by clone
+    label so each clone forms a contiguous block; candidate segments (cols)
+    are laid out genome-wide via ``plot_heatmap``. Below each heatmap, the
+    merged ASCN profile (cn_<clone> from ``cnp_segments_df``) is rendered for
+    context. Both colormaps use ``LogNorm`` (NLL spans orders of magnitude;
+    sampling probs span ~1/N to 1).
+
+    ``nll`` and ``sampling_probs`` are both ``(N, n_cand)`` matching
+    ``cnp_segments_df`` on the seg axis. ``cnp_segments_df`` must have
+    ``#CHR / START / END`` plus one ``cn_<clone>`` column per clone (which it
+    does by construction from ``derive_cnp_segments``).
+    """
+    order = np.argsort(clone_labels, kind="stable")
+    nll_ord = nll[order]
+    probs_ord = sampling_probs[order]
+    labels_named = np.array([clone_ids[c] for c in clone_labels[order]])
+
+    wl_fragments = read_whitelist_segments(region_bed)
+    n_cells = nll.shape[0]
+
+    # build cnv_blocks with CNP = ";cn_<clone1>;cn_<clone2>;..." for plot_ascn_profile
+    cn_cols = [c for c in cnp_segments_df.columns if c.startswith("cn_")]
+    cnv_blocks = cnp_segments_df[["#CHR", "START", "END"]].copy()
+    cnv_blocks["CNP"] = ";" + cnp_segments_df[cn_cols].agg(";".join, axis=1)
+
+    with PdfPages(out_path) as pdf:
+        for matrix, value_name, vmin in [
+            (nll_ord, "NLL", 1.0),
+            (probs_ord, "sampling prob", 1.0 / n_cells),
+        ]:
+            vmax = max(float(matrix.max()), vmin * 10.0)
+            cmap = plt.get_cmap("Reds").copy()
+            cmap.set_bad("white")
+            norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
+
+            fig, axes = plt.subplots(
+                nrows=3,
+                ncols=1,
+                figsize=figsize,
+                gridspec_kw={"height_ratios": [10, 2, 2]},
+            )
+            fig.subplots_adjust(top=0.97, right=0.93, hspace=0.05)
+
+            plot_heatmap(
+                axes[0],
+                labels_named,
+                cnp_segments_df,
+                matrix,
+                wl_fragments,
+                height=10,
+                cmap=cmap,
+                norm=norm,
+            )
+            plot_ascn_profile(axes[1], cnv_blocks, wl_fragments, plot_chrname=False)
+            plot_ascn_legend(axes[2])
+
+            title = f"{sample} per-cell × cand-seg {value_name}".strip()
+            fig.suptitle(title, y=0.995, fontsize=14, fontweight="bold")
+            fig.tight_layout(rect=[0, 0, 0.93, 0.985])
+
+            fig.canvas.draw()
+            bbox = axes[0].get_position()
+            cax = fig.add_axes([bbox.x1 + 0.015, bbox.y0, 0.012, bbox.height / 4])
+            sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+            sm.set_array([])
+            fig.colorbar(sm, cax=cax, label=value_name)
+
+            pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+
+    logging.info(f"saved cnp_segments NLL/probs heatmap PDF to {out_path}")
