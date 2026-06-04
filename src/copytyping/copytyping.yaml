@@ -11,8 +11,7 @@ verbosity: 0
 # inference — model fit
 # fit_mode: hybrid | allele_only | total_only
 fit_mode: hybrid
-# If true, assume no normal cells: drop the normal clone column from the CN
-# profile, skip the bb_normal normal-vs-tumor split, and force fit_mode=allele_only.
+# If true, use major clone CNP to derive baseline.
 no_normal: false
 niters: 100
 # baf_clip: cell model uses 0.001; spot model often uses 0.1 (mixture tolerance)
@@ -39,21 +38,7 @@ update_invphi: false
 method: copytyping
 
 ##################################################
-# inference — bulk-anchored divisive copy-typing (--method bulk_anchored_copytyping)
-# Hard cap on the total clone count after divisive splits. The loop also stops
-# early when no candidate split yields a positive objective gain.
-max_clones: 8
-# Number of cells re-sampled (with replacement) per tmp segment under that
-# segment's residual-NLL sampling probability; the resampled set votes for the
-# parent clone and seeds the local CN-state search.
-n_bootstrap: 500
-# RNG seed for the per-segment cell resampling.
-rng_seed: 0
-# Δ-stop threshold: accept a split only if the objective gain exceeds this.
-anchored_tol: 0.0
-# Number of top-ranked candidate segments (by total NLL, descending) to
-# evaluate per divisive iter.
-top_segments: 3
+# inference — shared knobs
 # ref_label column name in --cell_type
 ref_label: cell_type
 # Comma-separated ref_label values to exclude from analysis. Requires --cell_type.
@@ -108,3 +93,28 @@ post_cutoff: "0.5,0.6,0.7,0.8,0.9"
 sol_pattern: "*sol{SOLID}*.tsv"
 # Force re-run even if existing annotations.tsv is present.
 force: false
+
+##################################################
+# cnphmm_copytyping — factorial CNP-HMM
+# cnphmm_method: baum_welch (forward-backward) | block_ascent (Viterbi coordinate)
+cnphmm_method: baum_welch
+# baum_welch per-cell decode: map (posterior) | viterbi (joint-MAP).
+decode: map
+# Max total copy number for the (a,b) state grid.
+c_max: 6
+# State-space mask: full | bulk | bulk_neighbor
+mask_mode: bulk
+# Dirichlet concentration s for the transition prior.
+prior_s: 10.0
+# Bulk-vs-baseline mix weight (0=baseline only, 1=bulk only).
+prior_omega: 0.5
+# Baseline self-transition probability.
+prior_t: 0.99
+# Smoothing constant for bulk transition counts.
+prior_eps: 0.1
+# Fix BB tau / NB inv_phi at init instead of updating in M-step (default: update).
+fix_dispersion: false
+# Heatmap cell ordering: lexsort | cnt_nj | cnt_upgma | cnt_complete (CNT-distance trees).
+cluster_method: cnt_upgma
+# Max clones per REP for flat clustering of decoded paths (CNT-distance).
+n_clones: 8

@@ -56,9 +56,7 @@ def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
         required=False,
         action="store_true",
         default=argparse.SUPPRESS,
-        help="If set, assume the sample has no normal cells: skip the bb_normal "
-        "normal-vs-tumor split, drop the normal clone column from the CN profile, "
-        "and force --fit_mode=allele_only (no normal-derived read-depth baseline).",
+        help="If set, use major clone CNP to derive baseline.",
     )
     parser.add_argument(
         "--cell_type",
@@ -279,47 +277,6 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
         default=argparse.SUPPRESS,
         help="max bin length (bp) for adaptive BBC binning",
     )
-    # --- bulk-anchored divisive copy-typing ---
-    parser.add_argument(
-        "--max_clones",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="hard cap on the total clone count after divisive splits "
-        "(bulk_anchored_copytyping). Loop also stops when no split has Δ > tol.",
-    )
-    parser.add_argument(
-        "--n_bootstrap",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="per-tmp-segment cell resample size: #cells drawn (with "
-        "replacement) under the segment's residual-NLL sampling probability "
-        "to vote for the parent clone (bulk_anchored_copytyping).",
-    )
-    parser.add_argument(
-        "--rng_seed",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="RNG seed for the per-segment cell resampling (bulk_anchored_copytyping).",
-    )
-    parser.add_argument(
-        "--anchored_tol",
-        required=False,
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Δ-stop threshold: accept a candidate split only if its "
-        "objective gain exceeds this (bulk_anchored_copytyping).",
-    )
-    parser.add_argument(
-        "--top_segments",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Number of top-ranked candidate segments (by total NLL, "
-        "descending) to evaluate per divisive iter (bulk_anchored_copytyping).",
-    )
     return parser
 
 
@@ -403,10 +360,113 @@ def check_arguments_inference(args: dict):
     args["min_invphi"] = min_invphi
     args["max_invphi"] = max_invphi
 
-    # --no_normal forces allele_only (no normal-derived read-depth baseline)
-    if args["no_normal"]:
-        args["fit_mode"] = "allele_only"
+    return args
 
+
+def add_arguments_cnphmm_parameters(parser: argparse.ArgumentParser):
+    """Factorial CNP-HMM knobs (all defaulted in copytyping.yaml)."""
+    parser.add_argument(
+        "--cnphmm_method",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        choices=["baum_welch", "block_ascent"],
+        help="baum_welch (forward-backward) or block_ascent (Viterbi coordinate)",
+    )
+    parser.add_argument(
+        "--decode",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        choices=["map", "viterbi"],
+        help="baum_welch per-cell decode: map (posterior) or viterbi (joint-MAP)",
+    )
+    parser.add_argument(
+        "--c_max",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Max total copy number for the (a,b) state grid",
+    )
+    parser.add_argument(
+        "--mask_mode",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        choices=["full", "bulk", "bulk_neighbor"],
+        help="State-space mask: full grid, bulk-observed, or bulk+neighbors",
+    )
+    parser.add_argument(
+        "--prior_s",
+        required=False,
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Dirichlet concentration s for the transition prior",
+    )
+    parser.add_argument(
+        "--prior_omega",
+        required=False,
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Bulk-vs-baseline mix weight (0=baseline, 1=bulk)",
+    )
+    parser.add_argument(
+        "--prior_t",
+        required=False,
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Baseline self-transition probability",
+    )
+    parser.add_argument(
+        "--prior_eps",
+        required=False,
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Smoothing constant for bulk transition counts",
+    )
+    parser.add_argument(
+        "--fix_dispersion",
+        required=False,
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Fix BB tau / NB inv_phi at init instead of updating them in M-step "
+        "(default: update both)",
+    )
+    parser.add_argument(
+        "--cluster_method",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        choices=["lexsort", "cnt_nj", "cnt_upgma", "cnt_complete"],
+        help="Heatmap cell ordering: lexsort, or a CNT-distance tree "
+        "(cnt_nj / cnt_upgma / cnt_complete); distance methods fall back to "
+        "lexsort above ~2000 unique profiles",
+    )
+    parser.add_argument(
+        "--n_clones",
+        required=False,
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Max clones per REP for flat clustering of decoded paths (CNT-distance)",
+    )
+    return parser
+
+
+def add_arguments_cnphmm(parser: argparse.ArgumentParser):
+    add_arguments_inference_inputs(parser)
+    add_arguments_inference_parameters(parser)
+    add_arguments_cnphmm_parameters(parser)
+    return parser
+
+
+def check_arguments_cnphmm(args: dict):
+    """Validate shared inference inputs, then the CNP-HMM-specific knobs."""
+    args = check_arguments_inference(args)
+    assert args["c_max"] >= 1, f"--c_max must be >= 1, got {args['c_max']}"
+    assert 0.0 <= args["prior_omega"] <= 1.0, "--prior_omega must be in [0, 1]"
+    assert 0.0 < args["prior_t"] < 1.0, "--prior_t must be in (0, 1)"
+    assert args["prior_s"] > 0, "--prior_s must be > 0"
+    assert args["prior_eps"] > 0, "--prior_eps must be > 0"
     return args
 
 

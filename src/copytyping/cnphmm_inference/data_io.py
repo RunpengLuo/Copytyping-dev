@@ -6,6 +6,7 @@ import pandas as pd
 from scipy import sparse
 
 from copytyping.utils import read_seg_ucn_file, sort_df_chr
+from copytyping.io_utils import _apply_solfile
 
 
 def load_single_cell_data(
@@ -110,24 +111,21 @@ def load_bulk_cnp(
     solfile: str | None = None,
     baf_clip: float = 1e-3,
     no_normal: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Map HATCHet seg.ucn.tsv to BBC-level. Returns
-    ``(cna_int_states, rdr_baf_states, cna_profile, cna_mirrored,
-    bulk_segmentation, clone_ids)``.
+    ``(cna_int_states, rdr_baf_states, cna_profile, bulk_segmentation,
+    clone_ids)``.
 
-    Canonical states have ``major >= minor``; ``cna_mirrored[g, k]=1`` means
-    the B-allele is the major copy (effective ``(A, B) = (minor, major)``).
-    ``rdr_baf_states`` stores ``(rdr=total/2, baf=minor/total clipped to
-    [baf_clip, 1-baf_clip])``. ``bulk_segmentation`` IDs BBC bins by identical
-    ``(state, mirror)`` CNP across all clones. ``solfile``, if given,
-    overrides the CN profiles in ``seg_ucn_file``.
+    States are ``(A, B)`` tuples directly — both ``(A, B)`` and ``(B, A)``
+    are separate states if either appears in the bulk CNP (no
+    major-minor canonicalization, no mirror flag). ``rdr_baf_states[k] =
+    (rdr=total/2, baf=B/total clipped to [baf_clip, 1-baf_clip])``.
+    ``bulk_segmentation`` IDs BBC bins by identical state-CNP across all
+    clones. ``solfile``, if given, overrides the CN profiles.
 
-    ``no_normal=True`` drops the normal clone column from ``cna_profile`` /
-    ``cna_mirrored`` and from ``clone_ids`` before ``bulk_segmentation`` is
-    built, so every downstream array sees only tumor clones.
+    ``no_normal=True`` drops the normal clone column before
+    ``bulk_segmentation`` is built.
     """
-    from copytyping.io_utils import _apply_solfile
-
     seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
     if "SAMPLE" in seg_df.columns:
         first_sample = seg_df["SAMPLE"].iloc[0]
@@ -178,29 +176,21 @@ def load_bulk_cnp(
             seg_df[f"cn_{clone}"].apply(lambda x: int(str(x).split("|")[1])).to_numpy()
         )
 
-    # --- canonicalize to major>=minor states + a per-(seg,clone) mirror flag ---
-    # canonical state stores (major, minor); mirror=1 means the B-allele is the
-    # major copy, i.e. the actual (A, B) is (minor, major).
-    major_seg = np.maximum(A_seg, B_seg)
-    minor_seg = np.minimum(A_seg, B_seg)
-    mirror_seg = (B_seg > A_seg).astype(np.int8)
-
-    # collect unique canonical (major, minor) pairs across all segments and clones
-    state_to_idx = {}
+    # --- collect unique (A, B) pairs directly (orientation-aware) ---
+    state_to_idx: dict[tuple[int, int], int] = {}
     for s in range(n_seg):
         for m in range(n_clones):
-            key = (int(major_seg[s, m]), int(minor_seg[s, m]))
+            key = (int(A_seg[s, m]), int(B_seg[s, m]))
             if key not in state_to_idx:
                 state_to_idx[key] = len(state_to_idx)
     n_states = len(state_to_idx)
 
-    # cna_int_states: (S, 2) int array — canonical (major, minor), major >= minor
     cna_int_states = np.zeros((n_states, 2), dtype=np.int32)
-    for (major, minor), idx in state_to_idx.items():
-        cna_int_states[idx] = (major, minor)
+    for (a, b), idx in state_to_idx.items():
+        cna_int_states[idx] = (a, b)
 
-    # rdr_baf_states: (S, 2) — (rdr=total/2, baf=minor/total clipped). The mirrored
-    # BAF (B-allele = major) is 1 - baf, recovered downstream via cna_mirrored.
+    # rdr_baf_states[k] = (rdr=total/2, baf=B/total). B/total is the canonical
+    # BAF — no mirror flip needed since state encodes orientation directly.
     totals = cna_int_states[:, 0] + cna_int_states[:, 1]
     rdrs = totals / 2.0
     bafs = np.where(
@@ -210,56 +200,44 @@ def load_bulk_cnp(
     )
     rdr_baf_states = np.column_stack([rdrs, bafs])
 
-    # seg-level canonical state index
+    # seg-level state index
     seg_profile = np.zeros((n_seg, n_clones), dtype=np.int32)
     for s in range(n_seg):
         for m in range(n_clones):
-            seg_profile[s, m] = state_to_idx[
-                (int(major_seg[s, m]), int(minor_seg[s, m]))
-            ]
+            seg_profile[s, m] = state_to_idx[(int(A_seg[s, m]), int(B_seg[s, m]))]
 
-    # --- map to BBC level ---
     cna_profile = np.zeros((n_bbc, n_clones), dtype=np.int32)
-    cna_mirrored = np.zeros((n_bbc, n_clones), dtype=np.int8)
     mapped = seg_ids >= 0
     cna_profile[mapped] = seg_profile[seg_ids[mapped]]
-    cna_mirrored[mapped] = mirror_seg[seg_ids[mapped]]
 
-    # canonical clone identifiers: index 0 = normal, 1..K-1 = tumor clones
     clone_ids = ["normal"] + [f"clone{i}" for i in range(1, n_clones)]
 
-    # --no_normal: strip the normal column from cna_profile / cna_mirrored /
-    # clone_ids *before* bulk_segmentation is built, so the segmentation
-    # groups bins by the tumor-only CNP tuple (and every downstream array
-    # consistently lacks the normal column).
     if no_normal:
         assert clone_ids[0] == "normal", clone_ids
         clone_ids = clone_ids[1:]
         cna_profile = cna_profile[:, 1:]
-        cna_mirrored = cna_mirrored[:, 1:]
         n_clones -= 1
         logging.info(f"no_normal: dropped normal clone -> {clone_ids}")
 
-    # --- build bulk_segmentation: group BBC bins by identical (state, mirror) CNP ---
-    unique_cnps = {}
+    # bulk_segmentation: group BBC bins by identical state CNP across clones.
+    unique_cnps: dict[tuple, int] = {}
     seg_counter = 0
     bulk_segmentation = np.zeros(n_bbc, dtype=np.int32)
     for g in range(n_bbc):
-        key = (tuple(cna_profile[g]), tuple(cna_mirrored[g]))
+        key = tuple(cna_profile[g])
         if key not in unique_cnps:
             unique_cnps[key] = seg_counter
             seg_counter += 1
         bulk_segmentation[g] = unique_cnps[key]
 
     logging.info(
-        f"loaded bulk CNP: {n_states} canonical CN states, "
-        f"{seg_counter} bulk segments, {n_clones} clones {clone_ids}"
+        f"loaded bulk CNP: {n_states} CN states, {seg_counter} bulk segments, "
+        f"{n_clones} clones {clone_ids}"
     )
     return (
         cna_int_states,
         rdr_baf_states,
         cna_profile,
-        cna_mirrored,
         bulk_segmentation,
         clone_ids,
     )

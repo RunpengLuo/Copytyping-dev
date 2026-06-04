@@ -132,7 +132,7 @@ def plot_heatmap(
         ax.add_patch(rect)
 
         yticks.append(0.5 * (y0 + y1))
-        yticklabels.append(f"{label}\n{proportion}%")
+        yticklabels.append(f"{label} ({proportion}%)")
 
     ax.set_yticks(yticks)
     ax.set_yticklabels(yticklabels, fontsize=11, fontweight="bold")

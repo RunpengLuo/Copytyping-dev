@@ -101,7 +101,6 @@ def perform_segmentation(
     B_bbc: sparse.spmatrix,
     C_bbc: sparse.spmatrix,
     cna_profile: np.ndarray,
-    cna_mirrored: np.ndarray,
     phase_bbc: np.ndarray,
     switchprobs_bbc: np.ndarray,
 ) -> tuple[
@@ -111,31 +110,21 @@ def perform_segmentation(
     np.ndarray,
     np.ndarray,
     np.ndarray,
-    np.ndarray,
 ]:
     """Apply bulk phase correction and aggregate BBC-level matrices to segments.
 
     ``B_corr`` (B-allele after applying the BBC-level ``phase_bbc``) is
     aggregated into ``B_seg``, so at seg level the data is in the phase-
     corrected orientation by construction — the per-seg phase label is 1
-    everywhere. The returned ``phase_seg`` reflects that baseline; downstream
-    models (e.g. the divisive loop's ``phase_chain``) start from these 1s
-    and flip entries as accepted splits propose phase changes.
+    everywhere.
 
-    Per-segment CNP / switchprob attributes take the first BBC in each
-    group; the segment's left-boundary switchprob is therefore preserved
-    while internal-BBC switchprobs are absorbed by the merge.
-
-    Returns ``(X_seg, B_seg, C_seg, cna_profile_seg, cna_mirrored_seg,
-    phase_seg, switchprobs_seg)``.
+    Returns ``(X_seg, B_seg, C_seg, cna_profile_seg, phase_seg,
+    switchprobs_seg)``.
     """
     B = B_bbc.tocsr() if sparse.issparse(B_bbc) else sparse.csr_matrix(B_bbc)
     C = C_bbc.tocsr() if sparse.issparse(C_bbc) else sparse.csr_matrix(C_bbc)
     X = X_bbc.tocsr() if sparse.issparse(X_bbc) else sparse.csr_matrix(X_bbc)
 
-    # phase correction at BBC level: B_corr = B if phase=1 else A = C - B.
-    # Caller folds the diploid → phase=1 rule into ``phase_bbc`` upfront,
-    # so no per-bin mask is needed here.
     phases = phase_bbc.astype(np.float64)[:, None]
     B_corr = B.multiply(phases) + (C - B).multiply(1 - phases)
 
@@ -146,88 +135,16 @@ def perform_segmentation(
     n_seg = agg_mat.shape[0]
     first_bbc_per_group = np.array([agg_mat[g].indices[0] for g in range(n_seg)])
     cna_profile_seg = cna_profile[first_bbc_per_group]
-    cna_mirrored_seg = cna_mirrored[first_bbc_per_group]
-    # B_seg is already phase-corrected → the per-seg phase label is 1
-    # everywhere by construction.
     phase_seg = np.ones(n_seg, dtype=np.int8)
     switchprobs_seg = switchprobs_bbc[first_bbc_per_group]
 
+    n_entries = X_seg.shape[0] * X_seg.shape[1]
     logging.info(
         f"perform_segmentation: X={X_seg.shape}, B={B_seg.shape}, C={C_seg.shape}, "
         f"cna_profile={cna_profile_seg.shape}, n_seg={n_seg}"
     )
-    return (
-        X_seg,
-        B_seg,
-        C_seg,
-        cna_profile_seg,
-        cna_mirrored_seg,
-        phase_seg,
-        switchprobs_seg,
+    logging.info(
+        f"  X sparsity: {1 - X_seg.nnz / n_entries:.3%} ({X_seg.nnz}/{n_entries} nonzero), "
+        f"C sparsity: {1 - C_seg.nnz / n_entries:.3%} ({C_seg.nnz}/{n_entries} nonzero)"
     )
-
-
-# =========================== CNP-breakpoint helpers ===========================
-
-
-def derive_cnp_segments(
-    genome_coords: pd.DataFrame,
-    cna_profile_seg: np.ndarray,
-    cna_mirrored_seg: np.ndarray,
-    cna_int_states: np.ndarray,
-    clone_ids: list[str],
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Group bin-level segs into candidate segs by current CNP layout.
-
-    A candidate seg is a maximal contiguous run of bin-level segs that share
-    the same ``(state, mirror)`` tuple across all clones AND lie on the same
-    chromosome.
-
-    Returns:
-        cand_idx: (G_seg,) int array mapping each bin-seg to its candidate-seg
-            index in [0, n_cand).
-        segments_df: one row per candidate seg with columns ``#CHR``, ``START``,
-            ``END``, and ``cn_<clone>`` per clone — the effective ``A|B`` copy
-            number (mirror flag folded; ``mirror=1`` swaps canonical to
-            ``B|A``).
-    """
-    cn_cols = [f"cn_{name}" for name in clone_ids]
-    G = cna_profile_seg.shape[0]
-    if G == 0:
-        return np.zeros(0, dtype=np.int64), pd.DataFrame(
-            columns=["#CHR", "START", "END", "LENGTH", *cn_cols]
-        )
-
-    chr_arr = genome_coords["#CHR"].to_numpy()
-    starts = genome_coords["START"].to_numpy()
-    ends = genome_coords["END"].to_numpy()
-    chr_change = chr_arr[1:] != chr_arr[:-1]
-    combined = (cna_profile_seg.astype(np.int64) << 8) | (
-        cna_mirrored_seg.astype(np.int64) & 0xFF
-    )
-    cnp_change = np.any(combined[1:] != combined[:-1], axis=1)
-    breakpoints = np.r_[True, chr_change | cnp_change]
-
-    cand_idx = breakpoints.cumsum() - 1
-    first_g = np.flatnonzero(breakpoints)  # (n_cand,) — cand-seg starts
-    last_g = np.r_[first_g[1:] - 1, G - 1]  # (n_cand,) — cand-seg ends
-    seg_starts = starts[first_g]
-    seg_ends = ends[last_g]
-    seg_lengths = seg_ends - seg_starts
-
-    rows: dict[str, np.ndarray | list[str]] = {
-        "#CHR": chr_arr[first_g],
-        "START": seg_starts,
-        "END": seg_ends,
-        "LENGTH": seg_lengths,
-    }
-    for m, name in enumerate(clone_ids):
-        state_idx = cna_profile_seg[first_g, m]
-        mirror = cna_mirrored_seg[first_g, m]
-        a_copy = cna_int_states[state_idx, 0]
-        b_copy = cna_int_states[state_idx, 1]
-        major = np.where(mirror == 0, a_copy, b_copy)
-        minor = np.where(mirror == 0, b_copy, a_copy)
-        rows[f"cn_{name}"] = [f"{a}|{b}" for a, b in zip(major, minor)]
-
-    return cand_idx, pd.DataFrame(rows)
+    return X_seg, B_seg, C_seg, cna_profile_seg, phase_seg, switchprobs_seg

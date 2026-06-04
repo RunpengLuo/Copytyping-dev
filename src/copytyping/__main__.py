@@ -1,12 +1,13 @@
 import argparse
 
 from copytyping.copytyping_parser import (
+    add_arguments_cnphmm,
     add_arguments_inference,
     add_arguments_pipeline,
     add_arguments_validate,
 )
+from copytyping.cnphmm_inference.inference import run as copytyping_cnphmm
 from copytyping.inference.inference import run as copytyping_inference
-from copytyping.joint_inference.inference import run as copytyping_joint_inference
 from copytyping.pipeline import run as copytyping_pipeline
 from copytyping.utils import log_arguments, setup_logging
 from copytyping.validation.validate import run as copytyping_validate
@@ -24,11 +25,11 @@ def main(argv=None):
     add_arguments_pipeline(p_pipe)
     p_pipe.set_defaults(func=copytyping_pipeline)
 
-    p_joint = subparsers.add_parser(
-        "joint_inference", help="run joint inference on one sample"
+    p_cnphmm = subparsers.add_parser(
+        "cnphmm_copytyping", help="run factorial CNP-HMM copy-typing on one sample"
     )
-    add_arguments_inference(p_joint)
-    p_joint.set_defaults(func=copytyping_joint_inference)
+    add_arguments_cnphmm(p_cnphmm)
+    p_cnphmm.set_defaults(func=copytyping_cnphmm)
 
     p_val = subparsers.add_parser("validate", help="evaluate labels against reference")
     add_arguments_validate(p_val)
