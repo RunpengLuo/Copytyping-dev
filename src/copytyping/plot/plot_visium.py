@@ -204,7 +204,7 @@ def plot_visium_panel(
     """Single-page PDF visium panel per slice.
 
     Rows: H&E, path_label, ref purity, inferred purity, clone x purity,
-          [best cutoff clone x purity], CQ.
+          [best cutoff clone x purity].
 
     best_cutoff_label: column name in anns for best (pcut, post) cutoff labels.
     best_cutoff_metrics: dict with ARI_clone, f1 for the row title.
@@ -219,7 +219,6 @@ def plot_visium_panel(
     has_path = path_label in slices[0][1].columns
     ref_purity_col = f"{path_label}-tumor_purity"
     has_ref_purity = ref_purity_col in slices[0][1].columns
-    has_cq = "CQ" in slices[0][1].columns
 
     row_labels = ["H&E"]
     if has_path:
@@ -251,8 +250,6 @@ def plot_visium_panel(
             cutoff_parts.append(f"post={pt}")
         cutoff_str = ", ".join(cutoff_parts) if cutoff_parts else best_cutoff_label
         row_labels.append(f"{cutoff_str}\nARI={ari:.3f} F1={f1:.3f}")
-    if has_cq:
-        row_labels.append("CQ score")
 
     nrows = len(row_labels)
     ncols = len(slices)
@@ -374,26 +371,6 @@ def plot_visium_panel(
             old_legend = axes[ri, ci].get_legend()
             if old_legend:
                 old_legend.remove()
-
-        # 7. CQ score (no H&E)
-        if has_cq:
-            ri += 1
-            cq_vals = anns_vis["CQ"].values.copy().astype(float)
-            cq_vals = np.clip(cq_vals, 0, 30)
-            vis_adata.obs["CQ_clipped"] = cq_vals
-            sq.pl.spatial_scatter(
-                vis_adata,
-                color="CQ_clipped",
-                size=size,
-                library_id=rep_id,
-                ax=axes[ri, ci],
-                img=False,
-                alpha=alpha,
-                edgecolors="none",
-                cmap="RdYlGn",
-                vmin=0,
-                vmax=30,
-            )
 
     # Shared legend on clone x purity row
     all_cats = set()

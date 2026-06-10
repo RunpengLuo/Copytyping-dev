@@ -309,39 +309,20 @@ class Base_Model:
         self.gamma_trace = gamma_trace
         return params, ll_trace[-1] if ll_trace else -np.inf
 
-    def _map_estimation(self, gamma, params, label, as_df=True, eps=1e-10):
-        r"""Flat MAP estimation.
-
-        1. Flat MAP: z_n = argmax_k γ_nk (k=0 is normal)
-        2. CQ score: conditional clone confidence for tumor-labeled spots
-        """
+    def _map_estimation(self, gamma, params, label, as_df=True):
+        r"""Flat MAP estimation: z_n = argmax_k γ_nk (k=0 is normal)."""
         N = len(gamma)
         clone_names = np.array(self.clones)  # ["normal", "clone1", ...]
         map_k = gamma.argmax(axis=1)
         labels = clone_names[map_k]
         max_post = gamma[np.arange(N), map_k]
 
-        r_n0 = gamma[:, 0]
-        r_nT = 1 - r_n0
-
-        # CQ for tumor-labeled spots (conditional clone confidence)
-        r_tilde = gamma[:, 1:] / np.maximum(r_nT[:, None], eps)
-        clone_map_k = r_tilde.argmax(axis=1)
-        max_r_tilde = r_tilde[np.arange(N), clone_map_k]
-        tumor = labels != "normal"
-        cq = np.rint(
-            np.where(tumor, -10 * np.log10(1 - max_r_tilde + eps), 0.0)
-        ).astype(int)
-
         if not as_df:
             return {"labels": labels, "max_posterior": max_post}
 
         anns = self.barcodes.copy(deep=True)
         anns.loc[:, self.clones] = gamma
-        anns["r_normal"] = r_n0
-        anns["r_tumor"] = r_nT
         anns["max_posterior"] = max_post
-        anns["CQ"] = cq
         anns[label] = labels
         return anns
 
@@ -353,7 +334,6 @@ class Base_Model:
 
         1. Normal vs tumor gate
         2. Clone MAP within tumor branch
-        3. CQ score
         """
         gamma = self._e_step(fit_mode, params)
         anns = self._map_estimation(gamma, params, label)

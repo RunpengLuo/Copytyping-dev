@@ -166,7 +166,7 @@ class Spot_Model(Base_Model):
         gamma = np.exp(global_lls - logsumexp(global_lls, axis=1, keepdims=True))
         return gamma
 
-    def _map_estimation(self, gamma, params, label, as_df=True, eps=1e-10):
+    def _map_estimation(self, gamma, params, label, as_df=True):
         """MAP over tumor clones only. Normal assigned by purity threshold."""
         N = len(gamma)
         clone_names = np.array(self.tumor_clones)
@@ -174,24 +174,19 @@ class Spot_Model(Base_Model):
         labels = clone_names[map_k]
         max_post = gamma[np.arange(N), map_k]
 
-        # CQ
-        cq = np.rint(-10 * np.log10(1 - max_post + eps)).astype(int)
-
         if not as_df:
             return {"labels": labels, "max_posterior": max_post}
 
         anns = self.barcodes.copy(deep=True)
         anns.loc[:, self.tumor_clones] = gamma
         anns["max_posterior"] = max_post
-        anns["CQ"] = cq
         anns[label] = labels
         return anns
 
     def predict(self, fit_mode, params, label, **kwargs):
         """Predict clone labels via MAP. Purity reported but does not affect labels.
 
-        1. Clone MAP: z_n = argmax_k gamma_nk (over tumor clones)
-        2. CQ score
+        Clone MAP: z_n = argmax_k gamma_nk (over tumor clones).
         """
         gamma = self._e_step(fit_mode, params)
         theta = params[f"{self.data_types[0]}-theta"]
@@ -201,15 +196,10 @@ class Spot_Model(Base_Model):
         labels = clone_names[map_k]
         max_post = gamma[np.arange(self.N), map_k]
 
-        # CQ
-        eps = 1e-10
-        cq = np.rint(-10 * np.log10(1 - max_post + eps)).astype(int)
-
         anns = self.barcodes.copy(deep=True)
         anns.loc[:, self.tumor_clones] = gamma
         anns["max_posterior"] = max_post
         anns["tumor_purity"] = theta
-        anns["CQ"] = cq
         anns[label] = labels
 
         clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}
