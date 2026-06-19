@@ -6,11 +6,8 @@ import pandas as pd
 
 from scipy.special import logsumexp
 
-from copytyping.inference.model_utils import mle_invphi, mle_tau
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.sx_data.sx_data import SX_Data
-
-allowed_fit_mode = {"hybrid", "allele_only", "total_only"}
 
 
 class Base_Model:
@@ -26,21 +23,24 @@ class Base_Model:
         modality_masks: dict = None,
         allele_mask_id: str = "IMBALANCED",
         total_mask_id: str = "ANEUPLOID",
+        args: dict | None = None,
     ) -> None:
         self.barcodes = barcodes
         self.data_types = data_types
         self.platform = platform
         self.data_sources = data_sources
         self.clones = self.data_sources[self.data_types[0]].clones
-        self.N = self.num_barcodes = len(barcodes)
-        self.K = self.num_clones = len(self.clones)
+        self.num_barcodes = len(barcodes)
+        self.num_clones = len(self.clones)
         self.work_dir = work_dir
         self.prefix = prefix
         self.verbose = verbose
         self.allele_mask_id = allele_mask_id
         self.total_mask_id = total_mask_id
         if modality_masks is None:
-            modality_masks = {dt: np.ones(self.N, dtype=bool) for dt in data_types}
+            modality_masks = {
+                dt: np.ones(self.num_barcodes, dtype=bool) for dt in data_types
+            }
         self.modality_masks = modality_masks
 
         # Per-rep grouping (used for per-rep pi / tau / inv_phi)
@@ -48,21 +48,60 @@ class Base_Model:
         self.rep_ids = list(dict.fromkeys(rep_series.tolist()))
         rep_to_idx = {r: i for i, r in enumerate(self.rep_ids)}
         self.rep_idx = np.array([rep_to_idx[r] for r in rep_series], dtype=np.int64)
-        self.R = len(self.rep_ids)
+        self.num_reps = len(self.rep_ids)
+
+        self.args = args
+        # reference cells + clone; used by plotting for the RDR baseline
+        self.is_reference = None
+        self.ref_clone = 0
+        self.model_tols = {"tol": 1e-4, "eps": 1e-10}  # EM convergence tolerances
+        self.model_params, self.fix_model_params = {}, {}
+        if args is not None:
+            self.model_params = {
+                "pi": np.ones(self.num_clones) / self.num_clones,
+                "pi_alpha": args["pi_alpha"],
+                "tau_bounds": (args["min_tau"], args["max_tau"]),
+                "invphi_bounds": (args["min_invphi"], args["max_invphi"]),
+                "ref_label": args["ref_label"],
+                "niters": args["niters"],
+            }
+            self.fix_model_params = {"pi": not args["update_pi"]}
+            for data_type in data_types:
+                self.fix_model_params[f"{data_type}-theta"] = True  # fixed after init
+                self.fix_model_params[f"{data_type}-tau"] = not args["update_tau"]
+                self.fix_model_params[f"{data_type}-inv_phi"] = not args[
+                    "update_invphi"
+                ]
+
+    def _finalize_fix_params(self, params: dict) -> None:
+        """Expand fix flags to cover every model-state key (lambda, etc.), keeping
+        the user's update_* choices. Mutates self.fix_model_params in place."""
+        user_flags = self.fix_model_params
+        fix = {key: False for key in params}
+        for key in user_flags:
+            if key in fix:
+                fix[key] = user_flags[key]
+        self.fix_model_params = fix
 
     # ------------------------------------------------------------------
     # Initialization helpers
     # ------------------------------------------------------------------
-    def _identify_normal_cells(self, init_fix_params, init_params):
-        """Identify normal cells/spots via allele-only sub-EM.
+    def _estimate_reference_cells(self):
+        """Pick the reference-cell set + reference clone via allele-only sub-EM.
 
-        Uses only clonal imbalanced bins (IMBALANCED & ~SUBCLONAL)
-        so that the BB model discriminates normal vs tumor without
-        inter-clone confusion.
+        Default (has-normal): cluster cells on clonal imbalanced bins
+        (IMBALANCED & ~SUBCLONAL) and use the cells labeled "normal" (clone 0,
+        diploid) as the reference. With ``--no_normal`` there is no diploid
+        reference, so cluster on all IMBALANCED bins and use the *major clone*
+        (most-assigned) as the reference, with a CNP-corrected baseline. The
+        sub-model inherits this model's args. Returns
+        ``(is_reference, ref_clone, init_labeling)``.
         """
         from copytyping.inference.cell_model import Cell_Model
 
-        logging.info("infer normal cells using allele-only BB model")
+        no_normal = self.args["no_normal"]
+        mask_id = "IMBALANCED" if no_normal else "CLONAL_IMBALANCED"
+        logging.info(f"estimate reference cells via allele-only BB model ({mask_id})")
         for dt in self.data_types:
             sx = self.data_sources[dt]
             n_clonal = int(sx.MASK["CLONAL_IMBALANCED"].sum())
@@ -75,122 +114,60 @@ class Base_Model:
             self.data_sources,
             work_dir=self.work_dir,
             modality_masks=self.modality_masks,
-            allele_mask_id="CLONAL_IMBALANCED",
+            allele_mask_id=mask_id,
+            args=self.args,
         )
-        cell_init = {k: v for k, v in init_params.items() if k != "pi"}
-        allele_params, _ = pure_model.fit(
-            "allele_only",
-            fix_params=init_fix_params,
-            init_params=cell_init,
-            max_iter=init_params["niters"],
-        )
+        allele_params, _ = pure_model.fit("allele_only")
         allele_anns, _ = pure_model.predict(
             "allele_only",
             allele_params,
-            label="allele_only-label",
+            label="allele_only_label",
         )
-        init_labels = allele_anns["allele_only-label"].to_numpy()
-        is_normal = init_labels == "normal"
+        init_labels = allele_anns["allele_only_label"].to_numpy()
 
-        n_normal = int(is_normal.sum())
-        n_tumor = int(self.num_barcodes - n_normal)
-        logging.info(f"#normal={n_normal}, #tumor={n_tumor} / {self.num_barcodes}")
-        assert n_normal > 0, "no normal cells/spots found for baseline estimation"
+        if no_normal:
+            # major clone among tumor clones (normal ignored under --no_normal)
+            tumor_counts = [int((init_labels == c).sum()) for c in self.clones[1:]]
+            ref_clone = 1 + int(np.argmax(tumor_counts))
+            is_reference = init_labels == self.clones[ref_clone]
+            n_ref = int(is_reference.sum())
+            logging.info(
+                f"no_normal: ref_clone={self.clones[ref_clone]} (idx={ref_clone}), "
+                f"{n_ref}/{self.num_barcodes} ref cells"
+            )
+            assert n_ref > 0, "no reference cells found for baseline estimation"
+        else:
+            ref_clone = 0  # normal clone (1|1 everywhere)
+            is_reference = init_labels == "normal"
+            n_normal = int(is_reference.sum())
+            n_tumor = int(self.num_barcodes - n_normal)
+            logging.info(f"#normal={n_normal}, #tumor={n_tumor} / {self.num_barcodes}")
+            assert n_normal > 0, "no normal cells/spots found for baseline estimation"
+
         init_labeling = {
             "labels": init_labels,
             "max_posterior": allele_anns["max_posterior"].to_numpy(),
         }
-        return is_normal, init_labeling
+        self.is_reference = is_reference
+        self.ref_clone = ref_clone
+        return is_reference, ref_clone, init_labeling
 
-    def _init_lambda(self, params, is_normal):
-        """Compute baseline proportions from normal cells for all data types."""
+    def _init_lambda(self, params, is_reference, ref_clone):
+        """Baseline read-depth proportions from the reference cells per data type.
+
+        Under ``--no_normal`` the reference clone may be non-diploid, so divide
+        out its copy ratio (CNP-corrected baseline); otherwise diploid.
+        """
+        no_normal = self.args["no_normal"]
         for data_type in self.data_types:
             sx_data = self.data_sources[data_type]
+            ref_cn = sx_data.C[:, ref_clone] if no_normal else None
             params[f"{data_type}-lambda"] = compute_baseline_proportions(
                 sx_data.X,
                 sx_data.T,
-                is_normal,
+                is_reference,
+                ref_cn=ref_cn,
             )
-
-    def _init_tau_from_normals(self, data_type, is_normal, tau_bounds):
-        """Estimate BB tau per rep via MLE on normal cells at imbalanced segments.
-
-        Returns (R,) array. First fits a global tau (all normals pooled) as a
-        fallback, then per-rep fits. Reps with no normals inherit the global tau.
-        """
-        sx_data = self.data_sources[data_type]
-        imb = sx_data.MASK["IMBALANCED"]
-        # Global tau (pooled across all normals) — used as fallback for empty reps
-        Yg = sx_data.Y[imb][:, is_normal][:, :, None].astype(np.float64)
-        Dg = sx_data.D[imb][:, is_normal][:, :, None].astype(np.float64)
-        tau_global = mle_tau(
-            Yg, Dg, np.full_like(Yg, 0.5), np.ones_like(Yg), tau_bounds=tau_bounds
-        )
-        logging.info(
-            f"{data_type}: pooled tau={tau_global:.2f} from "
-            f"{int(is_normal.sum())} normals × {int(imb.sum())} imb"
-        )
-        tau_arr = np.full(self.R, tau_global, dtype=np.float64)
-        for r in range(self.R):
-            mask_r = (self.rep_idx == r) & is_normal
-            n_r = int(mask_r.sum())
-            if n_r == 0:
-                logging.warning(
-                    f"  {data_type} rep={self.rep_ids[r]}: no normals, "
-                    f"using pooled tau={tau_global:.2f}"
-                )
-                continue
-            Y = sx_data.Y[imb][:, mask_r][:, :, None].astype(np.float64)
-            D = sx_data.D[imb][:, mask_r][:, :, None].astype(np.float64)
-            tau_arr[r] = mle_tau(
-                Y, D, np.full_like(Y, 0.5), np.ones_like(Y), tau_bounds=tau_bounds
-            )
-            logging.info(
-                f"  {data_type} rep={self.rep_ids[r]}: tau={tau_arr[r]:.2f} from {n_r} normals"
-            )
-        return tau_arr
-
-    def _init_invphi_from_normals(self, data_type, lambda_g, is_normal, invphi_bounds):
-        """Estimate NB inv_phi per rep via MLE on normal cells at aneuploid segments.
-
-        Returns (R,) array. First fits a global inv_phi (all normals pooled) as a
-        fallback, then per-rep fits. Reps with no normals inherit the global inv_phi.
-        """
-        sx_data = self.data_sources[data_type]
-        aneu = sx_data.MASK["ANEUPLOID"]
-        # Global inv_phi (pooled across all normals) — fallback for empty reps
-        Xg = sx_data.X[aneu][:, is_normal][:, :, None].astype(np.float64)
-        mug = (sx_data.T[is_normal][None, :, None] * lambda_g[aneu, None, None]).astype(
-            np.float64
-        )
-        invphi_global = mle_invphi(
-            Xg, mug, np.ones_like(Xg), invphi_bounds=invphi_bounds
-        )
-        logging.info(
-            f"{data_type}: pooled inv_phi={invphi_global:.2f} from "
-            f"{int(is_normal.sum())} normals × {int(aneu.sum())} aneu"
-        )
-        invphi_arr = np.full(self.R, invphi_global, dtype=np.float64)
-        for r in range(self.R):
-            mask_r = (self.rep_idx == r) & is_normal
-            n_r = int(mask_r.sum())
-            if n_r == 0:
-                logging.warning(
-                    f"  {data_type} rep={self.rep_ids[r]}: no normals, "
-                    f"using pooled inv_phi={invphi_global:.2f}"
-                )
-                continue
-            X = sx_data.X[aneu][:, mask_r][:, :, None].astype(np.float64)
-            mu = (sx_data.T[mask_r][None, :, None] * lambda_g[aneu, None, None]).astype(
-                np.float64
-            )
-            invphi_arr[r] = mle_invphi(
-                X, mu, np.ones_like(X), invphi_bounds=invphi_bounds
-            )
-            logging.info(
-                f"  {data_type} rep={self.rep_ids[r]}: inv_phi={invphi_arr[r]:.2f} from {n_r} normals"
-            )
-        return invphi_arr
 
     # ------------------------------------------------------------------
     # E-step
@@ -204,17 +181,24 @@ class Base_Model:
         gamma = np.exp(global_lls - logsumexp(global_lls, axis=1, keepdims=True))
         return gamma
 
+    @staticmethod
+    def _harden(gamma: np.ndarray) -> np.ndarray:
+        """Hard-EM: collapse soft posteriors to MAP one-hot assignments (N, K_eff)."""
+        z = np.zeros_like(gamma)
+        z[np.arange(len(gamma)), gamma.argmax(axis=1)] = 1.0
+        return z
+
     # ------------------------------------------------------------------
     # M-step helpers
     # ------------------------------------------------------------------
-    def _update_pi(self, gamma, params, fix_params, N_eff, K_eff):
+    def _update_pi(self, gamma, params, N_eff, K_eff):
         """MAP per-rep pi update with Dirichlet prior. pi has shape (R, K_eff)."""
-        if fix_params["pi"]:
+        if self.fix_model_params["pi"]:
             return
         alpha = self._pi_alpha
         pi = params["pi"]  # (R, K_eff)
         new_pi = np.zeros_like(pi)
-        for r in range(self.R):
+        for r in range(self.num_reps):
             mask = self.rep_idx == r
             n_r = int(mask.sum())
             if n_r == 0:
@@ -230,23 +214,9 @@ class Base_Model:
     # ------------------------------------------------------------------
     # Fit (common EM loop)
     # ------------------------------------------------------------------
-    def fit(
-        self,
-        fit_mode="hybrid",
-        fix_params=None,
-        init_params=None,
-        max_iter=100,
-        tol=1e-4,
-        eps=1e-10,
-        **kwargs,
-    ):
-        if fix_params is None:
-            fix_params = {}
-        if init_params is None:
-            init_params = {}
-
-        assert fit_mode in allowed_fit_mode
-
+    def fit(self, fit_mode="hybrid", **kwargs):
+        tol = self.model_tols["tol"]
+        eps = self.model_tols["eps"]
         n_allele_bins = sum(
             int(sx.MASK[self.allele_mask_id].sum()) for sx in self.data_sources.values()
         )
@@ -262,20 +232,25 @@ class Base_Model:
                 f"no {self.allele_mask_id} or {self.total_mask_id} bins for hybrid"
             )
 
-        self._pi_alpha = init_params["pi_alpha"]
-        self._tau_bounds = init_params["tau_bounds"]
-        self._invphi_bounds = init_params["invphi_bounds"]
-        params, fix_params, init_labeling = self._init_params(
-            fit_mode, fix_params, init_params
-        )
+        self._pi_alpha = self.model_params["pi_alpha"]
+        self._tau_bounds = self.model_params["tau_bounds"]
+        self._invphi_bounds = self.model_params["invphi_bounds"]
+        max_iter = self.model_params["niters"]
+        params, init_labeling = self._init_params(fit_mode)
 
         # pre-allocate LL matrices — updated in-place by compute_log_likelihood
-        K_em = getattr(self, "_K_em", self.K)
+        num_em_clones = getattr(self, "num_em_clones", self.num_clones)
         for dt in self.data_types:
             G = self.data_sources[dt].G
-            params[f"{dt}-ll_allele"] = np.zeros((G, self.N, K_em), dtype=np.float64)
-            params[f"{dt}-ll_total"] = np.zeros((G, self.N, K_em), dtype=np.float64)
-        params["ll_global"] = np.zeros((self.N, K_em), dtype=np.float64)
+            params[f"{dt}-ll_allele"] = np.zeros(
+                (G, self.num_barcodes, num_em_clones), dtype=np.float64
+            )
+            params[f"{dt}-ll_total"] = np.zeros(
+                (G, self.num_barcodes, num_em_clones), dtype=np.float64
+            )
+        params["ll_global"] = np.zeros(
+            (self.num_barcodes, num_em_clones), dtype=np.float64
+        )
 
         ll_trace, gamma_trace = [], []
         self.labeling_trace = [init_labeling]
@@ -284,9 +259,13 @@ class Base_Model:
         for t in range(1, max_iter):
             gamma = self._e_step(fit_mode, params, t)
             gamma_trace.append(gamma.copy())
-            self._m_step(fit_mode, gamma, params, fix_params, t=t, eps=eps)
+            # Hard EM: MAP one-hot assignments drive the M-step
+            z = self._harden(gamma)
+            self._m_step(fit_mode, z, params, t=t)
 
-            ll, _, _ = self.compute_log_likelihood(fit_mode, params)
+            _, _, global_lls = self.compute_log_likelihood(fit_mode, params)
+            # hard objective: sum_i max_k global_lls[i,k]
+            ll = float(global_lls.max(axis=1).sum())
             ll_trace.append(ll)
             lt = self._map_estimation(gamma, params, "_", as_df=False)
             theta_key = f"{self.data_types[0]}-theta"

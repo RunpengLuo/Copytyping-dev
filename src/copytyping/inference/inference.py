@@ -10,7 +10,7 @@ from scipy import sparse
 from copytyping.copytyping_parser import check_arguments_inference
 from copytyping.inference.cell_model import Cell_Model
 from copytyping.inference.clustering import kmeans_copytyping
-from copytyping.inference.model_utils import prepare_params
+from copytyping.inference.model_utils import make_baseline_fn
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.io_utils import (
     read_cell_types,
@@ -145,7 +145,6 @@ def run(args=None):
     )
 
     barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
-    init_params, fix_params = prepare_params(args, cnv_blocks, platform, data_types)
 
     instance = {"single_cell": Cell_Model, "spatial": Spot_Model}[platform](
         barcodes,
@@ -156,13 +155,9 @@ def run(args=None):
         out_prefix,
         args["verbosity"],
         modality_masks=modality_masks,
+        args=args,
     )
-    model_params, final_ll = instance.fit(
-        fit_mode=args["fit_mode"],
-        fix_params=fix_params,
-        init_params=init_params,
-        max_iter=args["niters"],
-    )
+    model_params, final_ll = instance.fit(fit_mode=args["fit_mode"])
 
     label = f"{args['method']}-label"
     if args["method"] == "kmeans":

@@ -8,35 +8,41 @@ from scipy.stats import zscore
 from copytyping.sx_data.sx_data import SX_Data
 
 
-def prepare_params(args, cnv_blocks, platform, data_types):
-    """Build init_params and fix_params dicts from CLI args and CNV profile."""
-    K = len(cnv_blocks["PROPS"].iloc[0].split(";"))
-    pi_init = np.ones(K) / K
-    tau_bounds = (args["min_tau"], args["max_tau"])
-    invphi_bounds = (args["min_invphi"], args["max_invphi"])
-    init_params = {
-        "pi": pi_init,
-        "pi_alpha": args["pi_alpha"],
-        "tau_bounds": tau_bounds,
-        "invphi_bounds": invphi_bounds,
-        "ref_label": args["ref_label"],
-        "niters": args["niters"],
-    }
-    fix_params = {"pi": not args["update_pi"]}
-    for data_type in data_types:
-        fix_params[f"{data_type}-theta"] = True  # theta is fixed after init
-        fix_params[f"{data_type}-tau"] = not args["update_tau"]
-        fix_params[f"{data_type}-inv_phi"] = not args["update_invphi"]
-    return init_params, fix_params
-
-
 def compute_baseline_proportions(
-    X: np.ndarray, T: np.ndarray, normal_labels: np.ndarray
+    X: np.ndarray,
+    T: np.ndarray,
+    ref_labels: np.ndarray,
+    ref_cn: np.ndarray | None = None,
+    eps: float = 1e-12,
 ) -> np.ndarray:
-    X_normal = X[:, normal_labels]
-    T_normal = T[normal_labels]
-    base_props = np.sum(X_normal, axis=1) / np.sum(T_normal)
-    return base_props
+    """Per-bin read-depth baseline from the reference-cell pseudobulk.
+
+    ref_cn=None assumes a diploid reference (normal cells): lambda_g =
+    sum_ref X_g / sum_ref T. When ref_cn (per-bin total CN of the reference
+    clone) is given, divide out that clone's copy ratio so a non-diploid major
+    clone yields the diploid baseline: lambda_g = (sum_ref X_g / (ref_cn_g/2)),
+    normalized to sum 1. The two are identical when ref_cn == 2 everywhere.
+    """
+    X_ref = np.sum(X[:, ref_labels], axis=1)
+    if ref_cn is None:
+        return X_ref / np.sum(T[ref_labels])
+    base = X_ref / np.clip(ref_cn / 2.0, eps, None)
+    total = base.sum()
+    return base / total if total > 0 else np.ones_like(base) / len(base)
+
+
+def make_baseline_fn(ref_cells, ref_clone=0, no_normal=False):
+    """Return ``sx -> RDR baseline`` (reference-cell pseudobulk, CNP-corrected
+    under no_normal). Returns None when there are no reference cells. Lets plotting
+    consume the copytyping baseline without knowing how it's computed."""
+
+    def baseline_fn(sx):
+        if ref_cells is None or int(ref_cells.sum()) == 0:
+            return None
+        ref_cn = sx.C[:, ref_clone] if no_normal else None
+        return compute_baseline_proportions(sx.X, sx.T, ref_cells, ref_cn=ref_cn)
+
+    return baseline_fn
 
 
 def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray):

@@ -36,6 +36,7 @@ class Spot_Model(Base_Model):
         modality_masks=None,
         allele_mask_id="IMBALANCED",
         total_mask_id="ANEUPLOID",
+        args=None,
     ):
         super().__init__(
             barcodes,
@@ -48,43 +49,37 @@ class Spot_Model(Base_Model):
             modality_masks=modality_masks,
             allele_mask_id=allele_mask_id,
             total_mask_id=total_mask_id,
+            args=args,
         )
-        self.K_tumor = self.K - 1  # number of tumor clones (exclude normal)
-        self._K_em = self.K_tumor  # EM operates on tumor clones only
+        self.num_tumor_clones = self.num_clones - 1  # exclude normal
+        self.num_em_clones = self.num_tumor_clones  # EM operates on tumor clones only
         self.tumor_clones = self.clones[1:]  # ["clone1", "clone2", ...]
 
-    def _init_params(self, fit_mode, init_fix_params, init_params):
-        is_normal, init_labeling = self._identify_normal_cells(
-            init_fix_params, init_params
-        )
+    def _init_params(self, fit_mode):
+        assert not self.args["no_normal"], "no_normal is single-cell only"
+        is_reference, ref_clone, init_labeling = self._estimate_reference_cells()
         # pi per rep over tumor clones only: shape (R, K_tumor)
-        bulk_pi = init_params.get("pi", np.ones(self.K) / self.K)
-        tumor_pi = bulk_pi[1:]
+        tumor_pi = self.model_params["pi"][1:]
         tumor_pi = tumor_pi / tumor_pi.sum()
-        pi_per_rep = np.tile(tumor_pi, (self.R, 1))  # (R, K_tumor)
+        pi_per_rep = np.tile(tumor_pi, (self.num_reps, 1))  # (R, K_tumor)
         params = {"pi": pi_per_rep}
-        self._init_lambda(params, is_normal)
+        self._init_lambda(params, is_reference, ref_clone)
 
+        # Hard-EM init: dispersions at max bound (BB->Binomial, NB->Poisson)
+        tau_bounds = self.model_params["tau_bounds"]
+        invphi_bounds = self.model_params["invphi_bounds"]
         for dt in self.data_types:
             sx = self.data_sources[dt]
             lg = params[f"{dt}-lambda"]
-            tau_per_rep = inv_phi_per_rep = None
+            tau_init = invphi_init = None
             if fit_mode in {"allele_only", "hybrid"}:
-                tau_per_rep = self._init_tau_from_normals(
-                    dt, is_normal, init_params["tau_bounds"]
-                )
-                params[f"{dt}-tau"] = tau_per_rep  # (R,)
+                params[f"{dt}-tau"] = np.full(self.num_reps, tau_bounds[1])  # (R,)
+                tau_init = float(tau_bounds[1])
             if fit_mode in {"total_only", "hybrid"}:
-                inv_phi_per_rep = self._init_invphi_from_normals(
-                    dt, lg, is_normal, init_params["invphi_bounds"]
-                )
-                params[f"{dt}-inv_phi"] = inv_phi_per_rep  # (R,)
-            # estimate_tumor_proportion uses scalar dispersion;
-            # use the pooled (mean) value as a representative.
-            tau_init = float(np.mean(tau_per_rep)) if tau_per_rep is not None else None
-            invphi_init = (
-                float(np.mean(inv_phi_per_rep)) if inv_phi_per_rep is not None else None
-            )
+                params[f"{dt}-inv_phi"] = np.full(
+                    self.num_reps, invphi_bounds[1]
+                )  # (R,)
+                invphi_init = float(invphi_bounds[1])
             params[f"{dt}-theta"] = estimate_tumor_proportion(
                 sx, lg, tau_init, invphi_init, fit_mode=fit_mode
             )
@@ -94,13 +89,8 @@ class Spot_Model(Base_Model):
             params[f"{dt}-allele_mask"] = sx.MASK[self.allele_mask_id] & (lg > 0)
             params[f"{dt}-total_mask"] = sx.MASK[self.total_mask_id] & (lg > 0)
 
-        fix_params = {key: False for key in params}
-        if init_fix_params is not None:
-            for key in init_fix_params:
-                if key in fix_params:
-                    fix_params[key] = init_fix_params[key]
-
-        return params, fix_params, init_labeling
+        self._finalize_fix_params(params)
+        return params, init_labeling
 
     def compute_log_likelihood(self, fit_mode, params):
         """Compute log-likelihood over tumor clones only (K_tumor components)."""
@@ -155,10 +145,9 @@ class Spot_Model(Base_Model):
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
-    def _m_step(self, fit_mode, gamma, params, fix_params, t=0, eps=1e-10):
-        # Mixture weights: standard simplex update.
-        # theta is fixed after init (see estimate_tumor_proportion).
-        self._update_pi(gamma, params, fix_params, self.N, self.K_tumor)
+    def _m_step(self, fit_mode, gamma, params, t=0):
+        # pi simplex update; theta fixed after init
+        self._update_pi(gamma, params, self.num_barcodes, self.num_tumor_clones)
 
     def _e_step(self, fit_mode, params, t=0):
         """E-step: posterior over K_tumor clones."""
@@ -194,7 +183,7 @@ class Spot_Model(Base_Model):
         clone_names = np.array(self.tumor_clones)
         map_k = gamma.argmax(axis=1)
         labels = clone_names[map_k]
-        max_post = gamma[np.arange(self.N), map_k]
+        max_post = gamma[np.arange(self.num_barcodes), map_k]
 
         anns = self.barcodes.copy(deep=True)
         anns.loc[:, self.tumor_clones] = gamma
