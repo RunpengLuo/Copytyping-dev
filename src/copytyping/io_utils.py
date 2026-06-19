@@ -5,7 +5,7 @@ import pandas as pd
 from scipy import sparse
 from scipy.sparse import csr_matrix
 
-from copytyping.utils import read_seg_ucn_file
+from copytyping.utils import read_seg_ucn_file, sort_df_chr
 
 ##################################################
 # preprocess IOs
@@ -22,84 +22,79 @@ def read_cell_types(ct_file: str, req_cols: set):
         )
     return cell_type_df
 
-
-def load_modality_data(
-    bc_file: str,
-    bbc_file: str,
-    x_count_file: str,
-    a_allele_file: str,
-    b_allele_file: str,
+def read_bbc_phases(
     bbc_phases_file: str,
-    data_type: str,
-    seg_ucn_file: str,
-    solfile=None,
-    cell_type_df=None,
-    ref_label=None,
-    exclude_labels=None,
-):
-    """Load bbc count matrices, apply phase correction, and aggregate.
-
-    Returns:
-        barcodes_df: DataFrame with BARCODE, REP_ID columns.
-        seg_df: Segment-level DataFrame with CNP, PROPS columns.
-        X_seg, Y_seg, D_seg: Dense int32 count matrices (G_seg, N).
-        bbc_df: BBC-level DataFrame with seg_id and CNP columns.
-        X_bbc, Y_bbc, D_bbc: Sparse count matrices (G_bbc, N).
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
+    """Load BBC-level bulk WGS phasing. Returns
+    ``(bbc_df, phase_post_bbc, phase_bbc, switchprobs_bbc)``;
+    ``phase_bbc`` is 1=keep B, 0=swap A/B; ``phase_post_bbc`` starts equal
+    to it.
     """
-    barcodes_df = pd.read_table(
-        bc_file, sep="\t", header=None, names=["BARCODE"], dtype=str
-    )
-    # REP_ID is everything after the first underscore (e.g. "ACGT-1_U1" -> "U1",
-    # "ACGT-1_a_b_c" -> "a_b_c").
-    barcodes_df["REP_ID"] = barcodes_df["BARCODE"].str.split("_", n=1).str[1]
+    bbc_df = pd.read_table(bbc_phases_file, sep="\t")
+    bbc_df = sort_df_chr(bbc_df, pos="START")
 
-    X_bbc = sparse.load_npz(x_count_file)
-    A_bbc = sparse.load_npz(a_allele_file)
-    B_bbc = sparse.load_npz(b_allele_file)
+    phase_bbc = bbc_df["PHASE"].to_numpy().astype(np.int32)
 
-    bbc_df = pd.read_table(bbc_file, sep="\t")
-    assert X_bbc.shape[0] == len(bbc_df), (
-        f"X rows ({X_bbc.shape[0]}) != bbc bins ({len(bbc_df)})"
-    )
-
-    # Load BBC phases and merge PHASE column into bbc_df
-    phases_df = pd.read_table(bbc_phases_file, sep="\t")
-    bbc_df = pd.merge(
-        bbc_df,
-        phases_df[["#CHR", "START", "END", "PHASE"]],
-        on=["#CHR", "START", "END"],
-        how="left",
-    )
-    assert bbc_df["PHASE"].notna().all(), (
-        "some BBC blocks have no matching phase in --bbc_phases"
-    )
-
-    # Apply phase correction: PHASE=1 -> B-allele is B; PHASE=0 -> B-allele is A (swap)
-    phases = bbc_df["PHASE"].to_numpy()[:, None]
-    Y_bbc = A_bbc.multiply(1 - phases) + B_bbc.multiply(phases)
-    Y_bbc.data = np.rint(Y_bbc.data).astype(np.int32)
-    D_bbc = A_bbc + B_bbc
+    switchprobs_bbc = np.zeros(len(bbc_df), dtype=np.float64)
+    if "switchprobs" in bbc_df.columns:
+        switchprobs_bbc = bbc_df["switchprobs"].to_numpy().astype(np.float64)
 
     logging.info(
-        f"[{data_type}] phase correction applied: "
-        f"{int(bbc_df['PHASE'].sum())}/{len(bbc_df)} BBC blocks flipped"
+        f"loaded bulk phases: {len(bbc_df)} BBC bins, "
+        f"{int(phase_bbc.sum())}/{len(bbc_df)} phase=1"
     )
+    return bbc_df, phase_bbc, switchprobs_bbc
 
-    # Load segments and apply solfile before any BBC mapping
+
+def load_bulk_cnprofile(
+    seg_ucn_file: str,
+    solfile: str | None = None,
+) -> tuple[pd.DataFrame, list[str], list[float]]:
+    """Load bulk HATCHet seg.ucn CN profile. Returns ``(seg_df, clones,
+    clone_props)``; keeps the first SAMPLE and applies ``solfile`` if given.
+    """
     seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
     if "SAMPLE" in seg_df.columns:
         first_sample = seg_df["SAMPLE"].iloc[0]
         seg_df = seg_df[seg_df["SAMPLE"] == first_sample].reset_index(drop=True)
     if solfile is not None:
         seg_df, clones, clone_props = _apply_solfile(seg_df, solfile)
+    logging.info(f"loaded bulk CN profile: {len(seg_df)} segments, clones={clones}")
+    return seg_df, clones, clone_props
 
-    seg_df, X_sp, Y_sp, D_sp = aggregate_bbc_to_seg(
-        bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=data_type
+def load_bbc_modality(
+    args: dict,
+    data_type: str,
+    cell_type_df: pd.DataFrame | None = None,
+    ref_label: str | None = None,
+    exclude_labels: set | None = None,
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    sparse.csr_matrix,
+    sparse.csr_matrix,
+    sparse.csr_matrix,
+]:
+    """Load one modality's BBC-level counts + barcodes; merge cell types and
+    drop excluded labels.
+
+    Returns ``(barcodes_df, bbc_df, X_bbc, a_bbc, b_bbc)``: barcodes carry
+    BARCODE, REP_ID (+ ref_label); a_bbc/b_bbc are raw pre-phasing alleles.
+    """
+    barcodes_df = pd.read_table(
+        args[f"{data_type}_barcodes"], sep="\t", header=None, names=["BARCODE"], dtype=str
     )
-    seg_df["LENGTH"] = seg_df["END"] - seg_df["START"]
-    X_seg = X_sp.toarray().astype(np.int32)
-    Y_seg = Y_sp.toarray().astype(np.int32)
-    D_seg = D_sp.toarray().astype(np.int32)
+    # REP_ID is everything after the first underscore ("ACGT-1_U1" -> "U1").
+    barcodes_df["REP_ID"] = barcodes_df["BARCODE"].str.split("_", n=1).str[1]
+
+    X_bbc = sparse.load_npz(args[f"{data_type}_X_count"])
+    a_bbc = sparse.load_npz(args[f"{data_type}_A_allele"])
+    b_bbc = sparse.load_npz(args[f"{data_type}_B_allele"])
+
+    bbc_df = pd.read_table(args[f"{data_type}_cnv_segments"], sep="\t")
+    assert X_bbc.shape[0] == len(bbc_df), (
+        f"X rows ({X_bbc.shape[0]}) != bbc bins ({len(bbc_df)})"
+    )
 
     if cell_type_df is not None and ref_label is not None:
         from copytyping.inference.inference_utils import merge_celltype_into_barcodes
@@ -108,46 +103,67 @@ def load_modality_data(
             barcodes_df, cell_type_df, ref_label, data_type
         )
         if exclude_labels:
-            barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc = exclude_barcodes(
-                barcodes_df,
-                exclude_labels,
-                ref_label,
-                X_seg,
-                Y_seg,
-                D_seg,
-                X_bbc,
-                Y_bbc,
-                D_bbc,
+            barcodes_df, X_bbc, a_bbc, b_bbc = exclude_barcodes(
+                barcodes_df, exclude_labels, ref_label, X_bbc, a_bbc, b_bbc
             )
+    return barcodes_df, bbc_df, X_bbc, a_bbc, b_bbc
 
-    return barcodes_df, seg_df, X_seg, Y_seg, D_seg, bbc_df, X_bbc, Y_bbc, D_bbc
+
+def apply_bbc_phasing(
+    bbc_df: pd.DataFrame,
+    bbc_phases: pd.DataFrame,
+    a_bbc: sparse.csr_matrix,
+    b_bbc: sparse.csr_matrix,
+    data_type: str = "",
+) -> tuple[pd.DataFrame, sparse.csr_matrix, sparse.csr_matrix]:
+    """Merge bulk PHASE into bbc_df and phase-correct allele counts.
+
+    Returns ``(bbc_df, B_bbc, N_bbc)``: B_bbc = phase-corrected B-allele
+    (PHASE=1 keeps B, PHASE=0 swaps A/B); N_bbc = total A+B.
+    """
+    bbc_df = pd.merge(
+        bbc_df,
+        bbc_phases[["#CHR", "START", "END", "PHASE"]],
+        on=["#CHR", "START", "END"],
+        how="left",
+    )
+    assert bbc_df["PHASE"].notna().all(), (
+        "some BBC blocks have no matching phase in --bbc_phases"
+    )
+
+    phases = bbc_df["PHASE"].to_numpy()[:, None]
+    B_bbc = a_bbc.multiply(1 - phases) + b_bbc.multiply(phases)
+    B_bbc.data = np.rint(B_bbc.data).astype(np.int32)
+    N_bbc = a_bbc + b_bbc
+
+    tag = f"[{data_type}] " if data_type else ""
+    logging.info(
+        f"{tag}phase correction applied: "
+        f"{int(bbc_df['PHASE'].sum())}/{len(bbc_df)} BBC blocks flipped"
+    )
+    return bbc_df, B_bbc, N_bbc
 
 
-def exclude_barcodes(
-    barcodes_df, exclude_labels, ref_label, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
-):
-    """Exclude barcodes whose ref_label is in exclude_labels.
+def exclude_barcodes(barcodes_df, exclude_labels, ref_label, *mats):
+    """Drop barcodes whose ref_label is in exclude_labels and column-subset
+    each aligned matrix in ``mats``.
 
-    Returns filtered (barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc).
+    Returns ``(barcodes_df, *mats)`` filtered to kept cells.
     """
     if ref_label not in barcodes_df.columns:
-        return barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
+        return (barcodes_df, *mats)
     keep = ~barcodes_df[ref_label].isin(exclude_labels)
     n_excl = int((~keep).sum())
     if n_excl == 0:
-        return barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
+        return (barcodes_df, *mats)
     idx = np.where(keep.values)[0]
     barcodes_df = barcodes_df[keep].reset_index(drop=True)
-    X_seg = X_seg[:, idx]
-    Y_seg = Y_seg[:, idx]
-    D_seg = D_seg[:, idx]
-    X_bbc = X_bbc[:, idx]
-    Y_bbc = Y_bbc[:, idx]
-    D_bbc = D_bbc[:, idx]
+    mats = tuple(m[:, idx] for m in mats)
     logging.info(
-        f"excluded {n_excl} cells with ref_label in {exclude_labels}, {len(barcodes_df)} remaining"
+        f"excluded {n_excl} cells with ref_label in {exclude_labels}, "
+        f"{len(barcodes_df)} remaining"
     )
-    return barcodes_df, X_seg, Y_seg, D_seg, X_bbc, Y_bbc, D_bbc
+    return (barcodes_df, *mats)
 
 
 def union_align_barcodes(data_dict, data_types):
@@ -277,22 +293,24 @@ def _apply_solfile(seg_df, solfile):
     return seg_df, clones, clone_props
 
 
-def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=""):
+def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, B_bbc, N_bbc, data_type=""):
     """Map bbc-level bins to segments and aggregate count matrices.
 
     Args:
         bbc_df: DataFrame with bbc-level cnv_segments (#CHR, START, END, bbc_id).
         seg_df: Segment-level DataFrame (already loaded, with solfile applied).
         X_bbc: (G_bbc, N) sparse or dense count matrix (read depth).
-        Y_bbc: (G_bbc, N) sparse or dense count matrix (B-allele).
-        D_bbc: (G_bbc, N) sparse or dense count matrix (total allele).
+        B_bbc: (G_bbc, N) sparse or dense count matrix (B-allele).
+        N_bbc: (G_bbc, N) sparse or dense count matrix (total allele).
         data_type: Modality tag used to prefix log messages (e.g. "gex").
 
     Returns:
-        seg_df: Segment-level DataFrame with CNP, PROPS, seg_id columns.
-        X_seg, Y_seg, D_seg: (G_seg, N) aggregated count matrices (sparse).
+        seg_df: Segment-level DataFrame with CNP, PROPS, seg_id, LENGTH columns
+            (a copy; the input bulk seg_df is left unmutated).
+        X_seg, B_seg, N_seg: (G_seg, N) dense int32 aggregated count matrices.
     """
     tag = f"[{data_type}] " if data_type else ""
+    seg_df = seg_df.copy()  # don't mutate the shared bulk seg_df across modalities
     seg_df["seg_id"] = np.arange(len(seg_df))
     n_seg = len(seg_df)
     n_bbc = len(bbc_df)
@@ -343,14 +361,10 @@ def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=""):
         shape=(n_seg, n_bbc),
     )
 
-    if sparse.issparse(X_bbc):
-        X_seg = agg_matrix @ X_bbc
-        Y_seg = agg_matrix @ Y_bbc
-        D_seg = agg_matrix @ D_bbc
-    else:
-        X_seg = sparse.csr_matrix(agg_matrix @ X_bbc)
-        Y_seg = sparse.csr_matrix(agg_matrix @ Y_bbc)
-        D_seg = sparse.csr_matrix(agg_matrix @ D_bbc)
+    X_seg = (agg_matrix @ X_bbc).toarray().astype(np.int32)
+    B_seg = (agg_matrix @ B_bbc).toarray().astype(np.int32)
+    N_seg = (agg_matrix @ N_bbc).toarray().astype(np.int32)
+    seg_df["LENGTH"] = seg_df["END"] - seg_df["START"]
 
     # count BBC bins per segment
     bbc_per_seg = pd.Series(mapped_seg_ids).value_counts()
@@ -367,9 +381,9 @@ def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, Y_bbc, D_bbc, data_type=""):
 
     logging.info(
         f"{tag}segment-level matrices: "
-        f"X={X_seg.shape}, Y={Y_seg.shape}, D={D_seg.shape}"
+        f"X={X_seg.shape}, Y={B_seg.shape}, D={N_seg.shape}"
     )
-    return seg_df, X_seg, Y_seg, D_seg
+    return seg_df, X_seg, B_seg, N_seg
 
 
 ##################################################
