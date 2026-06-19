@@ -6,12 +6,12 @@ import pandas as pd
 import scanpy as sc
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 
 from copytyping.inference.inference_utils import compute_loh_baf
-from copytyping.utils import is_tumor_label, INVALID_LABELS, NA_CELLTYPE
+from copytyping.plot.plot_common import NORMAL_COLOR, build_label_colors
+from copytyping.utils import is_tumor_label, NA_CELLTYPE
 
 logging.getLogger("anndata").setLevel(logging.WARNING)
 
@@ -106,46 +106,6 @@ def build_visium_slices(anns, h5ad_source, ref_label):
             anns_vis[ref_label] = "Unknown"
         slices.append((rep_id, anns_vis, vis_adata))
     return slices
-
-
-# ── Unified color palette ──
-# normal=gray, NA=tab10[0], tumor clones=tab10[1:]
-NORMAL_COLOR = "lightgray"
-NA_COLOR = "darkgray"
-_TUMOR_COLORS = sns.color_palette("tab10", 10).as_hex()
-
-
-def _label_color_index(label):
-    """Stable color index for a label. clone1→0, clone2→1, etc. Others by sorted name."""
-    import re
-
-    m = re.match(r"clone(\d+)", label)
-    if m:
-        return int(m.group(1)) - 1
-    return hash(label) % len(_TUMOR_COLORS)
-
-
-def build_label_colors(categories: list, clone_indexed=True) -> list:
-    """Return color list for categories. Consistent regardless of subset/order.
-
-    - INVALID_LABELS → NA_COLOR
-    - "normal" → NORMAL_COLOR
-    - clone_indexed=True: "cloneN" → stable tab10 index by N, others by hash
-    - clone_indexed=False: non-normal labels get sequential distinct colors
-    """
-    colors = []
-    tumor_i = 0
-    for c in categories:
-        if c in INVALID_LABELS:
-            colors.append(NA_COLOR)
-        elif c == "normal":
-            colors.append(NORMAL_COLOR)
-        elif clone_indexed:
-            colors.append(_TUMOR_COLORS[_label_color_index(c) % len(_TUMOR_COLORS)])
-        else:
-            colors.append(_TUMOR_COLORS[tumor_i % len(_TUMOR_COLORS)])
-            tumor_i += 1
-    return colors
 
 
 def set_label_colors(adata, col, clone_indexed=True):

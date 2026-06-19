@@ -228,7 +228,15 @@ def run(args=None):
     os.makedirs(plot_dir, exist_ok=True)
     dpi = args["dpi"]
     heatmap_agg = args["heatmap_agg"]
-    is_normal = (anns[label] == "normal").to_numpy()
+    # RDR baseline from model reference cells; fall back to normal labels (kmeans)
+    is_reference = instance.is_reference
+    ref_clone = instance.ref_clone
+    no_normal = args["no_normal"]
+    if is_reference is None:
+        is_reference = (anns[label] == "normal").to_numpy()
+        ref_clone = 0
+        no_normal = False
+    baseline_fn = make_baseline_fn(is_reference, ref_clone, no_normal)
     plot_labels = [label]
     if ref_label in anns.columns:
         plot_labels.append(ref_label)
@@ -254,7 +262,8 @@ def run(args=None):
             bbc_data=bbc_data_by_dt[data_type],
             cnv_blocks=cnv_blocks,
             anns=anns,
-            is_normal=is_normal,
+            baseline_fn=baseline_fn,
+            cluster_base_props=model_params.get(f"{data_type}-lambda"),
             primary_label=label,
             plot_labels=plot_labels,
             theta=model_params.get(f"{data_type}-theta"),

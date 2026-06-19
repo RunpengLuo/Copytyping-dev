@@ -6,7 +6,6 @@ import os
 from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.inference.inference_utils import adaptive_bin_bbc
-from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.plot.plot_common import plot_cluster_observed_data
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
@@ -25,7 +24,7 @@ def plot_modality_panel(
     bbc_data,
     cnv_blocks,
     anns,
-    is_normal,
+    baseline_fn,
     primary_label,
     plot_labels,
     theta,
@@ -36,24 +35,28 @@ def plot_modality_panel(
     min_snp_count,
     max_bin_length,
     platform_str,
+    cluster_base_props=None,
     compute_baf_metrics=False,
     ascn_profile=False,
 ):
     """Per-modality + per-REP_ID plots: cluster_obs, cluster_2d, heatmap, 1d_scatter.
 
+    Cluster-level plots reuse the model's fitted baseline (``cluster_base_props``,
+    i.e. ``model_params["{dt}-lambda"]``); the finer-resolution heatmap (seg) and
+    1d_scatter (bbc) derive theirs via ``baseline_fn(sx)``.
+
     Files written:
         {plot_dir}/{prefix}.{data_type}.cluster_obs.{label}.pdf  (per plot_label)
         {plot_dir}/{prefix}.{data_type}.cluster_2d.pdf
-        {plot_dir}/{prefix}.{data_type}.heatmap.{label}.agg{agg}.pdf
-            (multi-page: rep_id outer × val inner)
+        {plot_dir}/{prefix}.{data_type}.heatmap.agg{agg}.pdf
+            (multi-page: rep_id outer × val inner; labels shown as color strips)
         {plot_dir}/{prefix}.{data_type}.1d_scatter.{label}.pdf
             (multi-page: one page per rep_id)
     """
     raw_lambda = (
-        compute_baseline_proportions(raw_clust.X, raw_clust.T, is_normal)
-        if is_normal.sum() > 0
-        else None
+        cluster_base_props if cluster_base_props is not None else baseline_fn(raw_clust)
     )
+    seg_lambda = baseline_fn(seg_sx)
 
     for obs_label in plot_labels:
         baf_metrics = None
@@ -86,7 +89,7 @@ def plot_modality_panel(
 
     bbc_df_dt, X_bbc, Y_bbc, D_bbc = bbc_data
     agg_bbc = None
-    if bbc_df_dt is not None and genome_size and region_bed:
+    if bbc_df_dt is not None:
         agg_bbc = adaptive_bin_bbc(
             bbc_df_dt,
             X_bbc,
@@ -96,56 +99,49 @@ def plot_modality_panel(
             min_snp_count,
             max_bin_length,
         )
+    agg_lambda = baseline_fn(agg_bbc) if agg_bbc is not None else None
 
     rep_ids = sorted(seg_sx.barcodes["REP_ID"].unique())
     rep_views = {}
     for rep_id in rep_ids:
         seg_sx_rep, rep_mask = seg_sx.subset_by_rep(rep_id)
-        is_normal_rep = is_normal[rep_mask]
         rep_views[rep_id] = {
             "seg_sx": seg_sx_rep,
-            "rep_mask": rep_mask,
             "anns": anns.iloc[rep_mask].reset_index(drop=True),
-            "is_normal": is_normal_rep,
-            "seg_lambda": (
-                compute_baseline_proportions(seg_sx_rep.X, seg_sx_rep.T, is_normal_rep)
-                if is_normal_rep.sum() > 0
-                else None
-            ),
             "theta": theta[rep_mask] if theta is not None else None,
         }
 
-    if region_bed:
-        for agg in [1, heatmap_agg]:
-            for my_label in plot_labels:
-                fname = os.path.join(
-                    plot_dir,
-                    f"{prefix}.{data_type}.heatmap.{my_label}.agg{agg}.pdf",
-                )
-                with PdfPages(fname) as pdf:
-                    for rep_id in rep_ids:
-                        v = rep_views[rep_id]
-                        for val in ["BAF", "log2RDR"]:
-                            if val == "log2RDR" and v["seg_lambda"] is None:
-                                continue
-                            plot_cnv_heatmap(
-                                sample,
-                                data_type,
-                                cnv_blocks,
-                                v["seg_sx"],
-                                v["anns"],
-                                region_bed,
-                                proportions=v["theta"],
-                                val=val,
-                                base_props=v["seg_lambda"],
-                                agg_size=agg,
-                                lab_type=my_label,
-                                pdf_pages=pdf,
-                                dpi=dpi,
-                                figsize=(20, 6 if agg > 1 else 15),
-                                title_info=f"rep={rep_id}",
-                                ascn_profile=ascn_profile,
-                            )
+    # one heatmap file per agg level; labels shown as color strips, no per-label spawn
+    for agg in [1, heatmap_agg]:
+        fname = os.path.join(
+            plot_dir,
+            f"{prefix}.{data_type}.heatmap.agg{agg}.pdf",
+        )
+        with PdfPages(fname) as pdf:
+            for rep_id in rep_ids:
+                v = rep_views[rep_id]
+                for val in ["BAF", "log2RDR"]:
+                    if val == "log2RDR" and seg_lambda is None:
+                        continue
+                    plot_cnv_heatmap(
+                        sample,
+                        data_type,
+                        cnv_blocks,
+                        v["seg_sx"],
+                        v["anns"],
+                        region_bed,
+                        proportions=v["theta"],
+                        val=val,
+                        base_props=seg_lambda,
+                        agg_size=agg,
+                        label_cols=plot_labels,
+                        primary_label=primary_label,
+                        pdf_pages=pdf,
+                        dpi=dpi,
+                        figsize=(20, 6 if agg > 1 else 15),
+                        rep_id=rep_id,
+                        ascn_profile=ascn_profile,
+                    )
 
     if agg_bbc is not None:
         for my_label in plot_labels:
@@ -156,17 +152,10 @@ def plot_modality_panel(
                 for rep_id in rep_ids:
                     v = rep_views[rep_id]
                     agg_bbc_rep, _ = agg_bbc.subset_by_rep(rep_id)
-                    agg_lambda_rep = (
-                        compute_baseline_proportions(
-                            agg_bbc_rep.X, agg_bbc_rep.T, v["is_normal"]
-                        )
-                        if v["is_normal"].sum() > 0
-                        else None
-                    )
                     plot_rdr_baf_1d_pseudobulk(
                         agg_bbc_rep,
                         v["anns"],
-                        agg_lambda_rep,
+                        agg_lambda,
                         sample,
                         data_type,
                         genome_size,

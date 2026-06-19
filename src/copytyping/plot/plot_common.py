@@ -1,12 +1,72 @@
 import logging
 import os
+import re
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.utils import NA_CELLTYPE, is_tumor_label
+from copytyping.utils import INVALID_LABELS, NA_CELLTYPE, is_tumor_label
+
+
+# ── Unified label color palette (shared by heatmap + visium) ──
+# normal-like -> gray, invalid/NA -> dark gray, tumor clones -> qualitative palette
+NORMAL_COLOR = "lightgray"
+NA_COLOR = "darkgray"
+_TUMOR_COLORS = [mcolors.to_hex(c) for c in plt.get_cmap("tab10").colors]
+
+
+def _is_normal_like(label: str) -> bool:
+    """True for the diploid/normal reference label (e.g. 'normal', 'Normal_cell')."""
+    return str(label).lower().startswith("normal")
+
+
+def _label_color_index(label: str) -> int:
+    """Stable color index for a label: clone1->0, clone2->1, ...; others by hash."""
+    m = re.match(r"clone(\d+)", str(label))
+    if m:
+        return int(m.group(1)) - 1
+    return hash(str(label)) % len(_TUMOR_COLORS)
+
+
+def build_label_colors(categories: list, clone_indexed: bool = True) -> list[str]:
+    """Clone-label colors: INVALID->NA_COLOR, 'normal'->NORMAL_COLOR, cloneN->tab10[N-1].
+
+    Consistent regardless of subset/order.
+    """
+    colors = []
+    tumor_i = 0
+    for c in categories:
+        if c in INVALID_LABELS:
+            colors.append(NA_COLOR)
+        elif c == "normal":
+            colors.append(NORMAL_COLOR)
+        elif clone_indexed:
+            colors.append(_TUMOR_COLORS[_label_color_index(c) % len(_TUMOR_COLORS)])
+        else:
+            colors.append(_TUMOR_COLORS[tumor_i % len(_TUMOR_COLORS)])
+            tumor_i += 1
+    return colors
+
+
+def build_categorical_colors(categories: list, palette: str = "Set2") -> list[str]:
+    """Arbitrary label set: normal-like -> gray, invalid/NA -> dark gray, rest from
+    `palette` (a qualitative cmap). Used for non-clone strips (e.g. cell_type)."""
+    base = [mcolors.to_hex(c) for c in plt.get_cmap(palette).colors]
+    colors = []
+    i = 0
+    for c in categories:
+        cs = str(c)
+        if cs in INVALID_LABELS or cs in NA_CELLTYPE:
+            colors.append(NA_COLOR)
+        elif _is_normal_like(cs):
+            colors.append(NORMAL_COLOR)
+        else:
+            colors.append(base[i % len(base)])
+            i += 1
+    return colors
 
 
 def build_wl_coords(cnv_blocks, wl_segments):
@@ -258,7 +318,7 @@ def plot_crosstab(
     sample: str,
     outfile: str,
     metric: dict,
-    acol="copytyping-label",
+    acol="copytyping_label",
     bcol="cell_type",
 ):
     """Plot cross-tabulation heatmap: rows = GT labels (bcol), cols = predicted (acol)."""

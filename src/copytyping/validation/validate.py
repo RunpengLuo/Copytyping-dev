@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from copytyping.inference.model_utils import make_baseline_fn
 from copytyping.io_utils import load_spatial_neighbors
 from copytyping.plot.plot_common import (
     plot_count_histograms,
@@ -309,8 +310,9 @@ def run(args=None):
     if cols:
         logging.info(f"\n{eval_df[cols].to_string(index=False)}")
 
-    # ── Determine is_normal (shared across modalities) ──
-    is_normal = (anns[best_label] == "normal").to_numpy()
+    # ── RDR baseline: validate has no model instance, so reference = "normal"
+    # labeled cells, no CNP correction ──
+    baseline_fn = make_baseline_fn((anns[best_label] == "normal").to_numpy())
 
     # ── Count histograms (copytyping only, all modalities) ──
     # Skip per-modality plots when seg matrices weren't saved at inference
@@ -341,7 +343,7 @@ def run(args=None):
             bbc_data=bbc_by_dt[data_type],
             cnv_blocks=cnp_df,
             anns=anns,
-            is_normal=is_normal,
+            baseline_fn=baseline_fn,
             primary_label=best_label,
             plot_labels=plot_labels,
             theta=params.get(f"{data_type}_theta"),

@@ -173,8 +173,8 @@ def plot_rdr_baf_1d_pseudobulk(
     sample: str,
     data_type: str,
     genome_file: str,
+    region_bed: str,
     haplo_blocks: pd.DataFrame = None,
-    region_bed: str = None,
     lab_type="cell_label",
     is_inferred=True,
     figsize=(20, 4),
@@ -207,8 +207,8 @@ def plot_rdr_baf_1d_pseudobulk(
     assert Y.shape[1] == len(cell_labels)
 
     # genome coordinates
-    wl_segments = read_whitelist_segments(region_bed) if region_bed else None
-    has_cnp = haplo_blocks is not None and wl_segments is not None
+    wl_segments = read_whitelist_segments(region_bed)
+    has_cnp = haplo_blocks is not None
     if has_cnp:
         wl = build_wl_coords(cnv_blocks, wl_segments)
         positions = wl["positions"]

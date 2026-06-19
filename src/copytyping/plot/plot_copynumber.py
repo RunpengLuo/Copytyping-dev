@@ -140,6 +140,17 @@ def plot_cnv_profile(
             line.set_clip_on(False)
     ch_coords.append(ch_offset)  # genome end
 
+    # black horizontal separators between adjacent clones
+    for k in range(1, num_clones):
+        ax.hlines(
+            k / num_clones,
+            xmin=0,
+            xmax=ch_offset,
+            transform=ax.get_xaxis_transform(),
+            linewidth=0.8,
+            colors=BLACK,
+        )
+
     ax.grid(False)
     ax.set_xlim(0, ch_offset)
     ax.set_xlabel("")
