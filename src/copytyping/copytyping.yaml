@@ -46,7 +46,7 @@ exclude: "Doublet,doublet,Unknown,NA"
 # Comma-separated whitelist of CNP rows (joint A|B per-clone format). null = keep all.
 keep_cn_row: null
 # Output prefix: <out_dir>/<out_prefix>.* (defaults to --sample when unset)
-out_prefix: sample
+out_prefix: null
 # If true, also save heavy processed_data files (~300MB/run). Always saved:
 # annotations.tsv, cnp_profile.tsv, metadata.tsv, model_params.npz.
 save_processed_data: false

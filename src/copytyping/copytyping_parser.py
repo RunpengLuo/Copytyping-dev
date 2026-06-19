@@ -344,8 +344,11 @@ def check_arguments_inference(args: dict):
     assert os.path.exists(args["bbc_phases"]), f"invalid --bbc_phases file"
     if args["solfile"] is not None:
         assert os.path.exists(args["solfile"]), f"invalid --solfile: {args['solfile']}"
-    assert args["region_bed"] is not None and os.path.exists(args["region_bed"]), (
+    assert os.path.exists(args["region_bed"]), (
         f"invalid --region_bed: {args['region_bed']}"
+    )
+    assert os.path.exists(args["genome_size"]), (
+        f"invalid --genome_size: {args['genome_size']}"
     )
 
     def _parse_bounds(s):
@@ -600,16 +603,14 @@ def add_arguments_validate(parser: argparse.ArgumentParser):
     parser.add_argument("--sample", required=True, type=str, help="sample name")
     parser.add_argument(
         "--genome_size",
-        required=False,
+        required=True,
         type=str,
-        default=None,
         help="Chromosome sizes file (for 1d scatter)",
     )
     parser.add_argument(
         "--region_bed",
-        required=False,
+        required=True,
         type=str,
-        default=None,
         help="Chromosome regions BED file (for heatmap/scatter)",
     )
     parser.add_argument(

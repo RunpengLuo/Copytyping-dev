@@ -128,7 +128,7 @@ def _eval_metrics(ann_file, eval_file, ref_label, platform, prefix, run_dir):
     metrics = {"log_likelihood": _read_loglik(run_dir, prefix)}
     anns = pd.read_table(ann_file)
     qry_labels = [
-        c for c in anns.columns if c.endswith("-label") and not c.endswith("-refined")
+        c for c in anns.columns if c.endswith("_label") and not c.endswith("-refined")
     ]
     if qry_labels and ref_label in anns.columns:
         qry_label = qry_labels[0]
@@ -173,7 +173,7 @@ def _run_one(pipeline_args, base_args, run_dir):
         qry_labels = [
             c
             for c in anns.columns
-            if c.endswith("-label") and not c.endswith("-refined")
+            if c.endswith("_label") and not c.endswith("-refined")
         ]
         if qry_labels and ref_label in anns.columns:
             qry_label = qry_labels[0]
@@ -187,7 +187,7 @@ def _run_one(pipeline_args, base_args, run_dir):
         val_args["sample"] = sample
         val_args["processed_data"] = os.path.join(run_dir, "processed_data")
         val_args["pred_labels"] = ann_file
-        val_args["pred_label"] = "copytyping-label"
+        val_args["pred_label"] = "copytyping_label"
         val_args["ref_labels"] = inf_args["cell_type"]
         val_args["ref_label"] = ref_label
         val_args["method"] = inf_args["method"]

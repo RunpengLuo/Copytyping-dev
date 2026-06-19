@@ -155,7 +155,7 @@ def run(args=None):
     )
     model_params, final_ll = instance.fit(fit_mode=args["fit_mode"])
 
-    label = f"{args['method']}-label"
+    label = f"{args['method']}_label"
     if args["method"] == "kmeans":
         anns, clone_props = kmeans_copytyping(
             data_sources, barcodes, ref_label, data_sources[data_types[0]].K, label
