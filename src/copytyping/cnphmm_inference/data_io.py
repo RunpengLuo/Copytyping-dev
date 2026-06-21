@@ -11,7 +11,7 @@ from copytyping.io_utils import _apply_solfile
 
 def load_single_cell_data(
     args: dict[str, Any],
-    data_types: list[str],
+    assay_types: list[str],
     cell_type_df: pd.DataFrame | None = None,
     celltype_col: str | None = None,
 ) -> tuple[pd.DataFrame, sparse.csc_matrix, sparse.csc_matrix, sparse.csc_matrix]:
@@ -24,33 +24,33 @@ def load_single_cell_data(
     X_parts = []
     B_parts = []
     C_parts = []
-    for data_type in data_types:
-        bc_dt = pd.read_table(
-            args[f"{data_type}_barcodes"],
+    for assay_type in assay_types:
+        bc_assay = pd.read_table(
+            args[f"{assay_type}_barcodes"],
             sep="\t",
             header=None,
             names=["BARCODE"],
             dtype=str,
         )
-        bc_dt["REP_ID"] = bc_dt["BARCODE"].str.split("_", n=1).str[1]
-        bc_dt["DATA_TYPE"] = data_type
+        bc_assay["REP_ID"] = bc_assay["BARCODE"].str.split("_", n=1).str[1]
+        bc_assay["ASSAY_TYPE"] = assay_type
 
-        X_dt = sparse.load_npz(args[f"{data_type}_X_count"])
-        A_dt = sparse.load_npz(args[f"{data_type}_A_allele"])
-        B_dt = sparse.load_npz(args[f"{data_type}_B_allele"])
+        X_assay = sparse.load_npz(args[f"{assay_type}_X_count"])
+        A_assay = sparse.load_npz(args[f"{assay_type}_A_allele"])
+        B_assay = sparse.load_npz(args[f"{assay_type}_B_allele"])
 
-        bbc_df = pd.read_table(args[f"{data_type}_cnv_segments"], sep="\t")
-        assert X_dt.shape[0] == len(bbc_df), (
-            f"[{data_type}] X rows ({X_dt.shape[0]}) != bbc bins ({len(bbc_df)})"
+        bbc_df = pd.read_table(args[f"{assay_type}_cnv_segments"], sep="\t")
+        assert X_assay.shape[0] == len(bbc_df), (
+            f"[{assay_type}] X rows ({X_assay.shape[0]}) != bbc bins ({len(bbc_df)})"
         )
 
-        C_dt = A_dt + B_dt
-        bc_parts.append(bc_dt)
-        X_parts.append(X_dt)
-        B_parts.append(B_dt)
-        C_parts.append(C_dt)
+        C_assay = A_assay + B_assay
+        bc_parts.append(bc_assay)
+        X_parts.append(X_assay)
+        B_parts.append(B_assay)
+        C_parts.append(C_assay)
         logging.info(
-            f"[{data_type}] loaded {X_dt.shape[1]} barcodes, {X_dt.shape[0]} BBC bins"
+            f"[{assay_type}] loaded {X_assay.shape[1]} barcodes, {X_assay.shape[0]} BBC bins"
         )
 
     barcodes_df = pd.concat(bc_parts, ignore_index=True)

@@ -138,15 +138,15 @@ def build_log_emissions(
     are per-state ``[rdr, baf]`` / ``[invphi, tau]`` ``(K, 2)`` tables. ``H`` is
     the ``(G,)`` shared phasing path (1=canonical, 0=flip).
 
-    ``fit_mode``: ``hybrid`` (BB+NB), ``allele_only`` (BB), ``total_only`` (NB).
+    ``fit_mode``: ``allele_total`` (BB+NB), ``allele`` (BB), ``total`` (NB).
 
     If ``return_bb_orient``, also returns the BB nonzero pack
     ``(cg, cn, bb0, bb1)`` (or ``None`` when BB is disabled) for the H-update.
     """
     G, n = X_sub.shape
     K = rdr_baf_cn.shape[0]
-    use_bb = fit_mode in ("hybrid", "allele_only")
-    use_nb = fit_mode in ("hybrid", "total_only")
+    use_bb = fit_mode in ("allele_total", "allele")
+    use_nb = fit_mode in ("allele_total", "total")
 
     rdr_k = np.ascontiguousarray(rdr_baf_cn[:, 0])
     baf_k = np.ascontiguousarray(rdr_baf_cn[:, 1])

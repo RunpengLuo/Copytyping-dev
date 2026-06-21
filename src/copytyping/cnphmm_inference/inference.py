@@ -416,14 +416,14 @@ def run(args: dict | None = None) -> None:
     args = check_arguments_cnphmm(args)
     sample = args["sample"]
     platform = args["platform"]
-    data_types = args["data_types"]
+    assay_types = args["assay_types"]
     ref_label = args["ref_label"]
     out_dir = args["out_dir"]
     out_prefix = args["out_prefix"] or str(sample)
     os.makedirs(out_dir, exist_ok=True)
     _file_handler = add_file_logging(out_dir, command="cnphmm_copytyping")
 
-    logging.info(f"sample={sample}, platform={platform}, data_types={data_types}")
+    logging.info(f"sample={sample}, platform={platform}, assay_types={assay_types}")
 
     genome_coords_bbc, _, phase_bbc, switchprobs_bbc = load_bulk_phases(
         args["bbc_phases"]
@@ -444,7 +444,7 @@ def run(args: dict | None = None) -> None:
 
     cell_type_df = read_cell_types(args["cell_type"], req_cols={"BARCODE", ref_label})
     barcodes_df, X_bbc, B_bbc, C_bbc = load_single_cell_data(
-        args, data_types, cell_type_df=cell_type_df, celltype_col=ref_label
+        args, assay_types, cell_type_df=cell_type_df, celltype_col=ref_label
     )
 
     # diploid segments carry no allelic signal — pin them to the bulk orientation
