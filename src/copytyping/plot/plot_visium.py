@@ -236,9 +236,7 @@ def plot_visium_panel(
         and best_cutoff_label in slices[0][1].columns
         and best_cutoff_label != spot_label
     )
-    best_cutoff_ri = None
     if has_best_cutoff:
-        best_cutoff_ri = len(row_labels)
         m = best_cutoff_metrics or {}
         ari = m.get("ARI_clone", float("nan"))
         f1 = m.get("f1", float("nan"))

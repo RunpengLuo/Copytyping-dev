@@ -266,8 +266,6 @@ def plot_rdr_baf_1d_pseudobulk(
             func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1
         ).to_numpy()
 
-    linecolor = (0, 0, 0, 1)
-
     if is_inferred:
         # Order: normal, clone1, clone2, ..., then other non-NA labels
         ordered_labels = (
