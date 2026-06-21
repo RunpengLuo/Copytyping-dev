@@ -5,17 +5,16 @@ import pandas as pd
 
 from scipy.special import logsumexp
 
-from copytyping.inference.count_data import CountData
+from copytyping.inference.count_data import Count_Data
 from copytyping.inference.model_utils import compute_baseline_proportions
 
 
 class Base_Model:
     def __init__(
         self,
-        count_data: dict[str, CountData],
+        count_data: dict[str, Count_Data],
         platform: str,
         assay_types: list[str],
-        work_dir: str | None = None,
         prefix: str = "copytyping",
         allele_mask_id: str = "IMBALANCED",
         total_mask_id: str = "ANEUPLOID",
@@ -28,19 +27,20 @@ class Base_Model:
         update_pi: bool = True,
         update_tau: bool = True,
         update_invphi: bool = True,
-    ) -> None:
+    ):
         self.assay_types = assay_types
         self.platform = platform
-        # count_data arrives dense from segment_count_data / smooth_spatial_neighbors
-        self.count_data = {a: count_data[a] for a in assay_types}
+        self.count_data = count_data
+
         self.barcodes = self.count_data[assay_types[0]].barcodes
+        self.num_barcodes = len(self.barcodes)
 
         # per-cell library size per modality
         self.T = {a: self.count_data[a].count_X.sum(axis=0) for a in assay_types}
         self.clones = self.count_data[assay_types[0]].clones
-        self.num_barcodes = len(self.barcodes)
         self.num_clones = len(self.clones)
-        self.work_dir = work_dir
+        self.tumor_clones = self.clones[1:]
+
         self.prefix = prefix
         self.allele_mask_id = allele_mask_id
         self.total_mask_id = total_mask_id
@@ -57,13 +57,14 @@ class Base_Model:
         self.ref_clone = 0
         self.model_tols = {"tol": 1e-4, "eps": 1e-10}  # EM convergence tolerances
 
+        # whether each parameter is updated in the M-step (theta is always fixed
+        # after init)
+        self.update_pi = update_pi
+        self.update_tau = update_tau
+        self.update_invphi = update_invphi
+
         # global clone mixture; tau/inv_phi/lambda added at fit init
         self.model_params = {"pi": np.ones(self.num_clones) / self.num_clones}
-        self.fix_model_params = {"pi": not update_pi}
-        for assay_type in assay_types:
-            self.fix_model_params[f"{assay_type}-theta"] = True  # fixed after init
-            self.fix_model_params[f"{assay_type}-tau"] = not update_tau
-            self.fix_model_params[f"{assay_type}-inv_phi"] = not update_invphi
 
     # ------------------------------------------------------------------
     # Initialization helpers
@@ -93,16 +94,15 @@ class Base_Model:
             count_data=self.count_data,
             platform=self.platform,
             assay_types=self.assay_types,
-            work_dir=self.work_dir,
             allele_mask_id=mask_id,
             no_normal=self.no_normal,
             pi_alpha=self.pi_alpha,
             tau_bounds=self.tau_bounds,
             invphi_bounds=self.invphi_bounds,
             niters=self.niters,
-            update_pi=not self.fix_model_params["pi"],
-            update_tau=not self.fix_model_params[f"{self.assay_types[0]}-tau"],
-            update_invphi=not self.fix_model_params[f"{self.assay_types[0]}-inv_phi"],
+            update_pi=self.update_pi,
+            update_tau=self.update_tau,
+            update_invphi=self.update_invphi,
         )
         pure_model.fit("allele")
         allele_anns, _ = pure_model.predict("allele", label="allele_label")
@@ -135,7 +135,7 @@ class Base_Model:
         self.ref_clone = ref_clone
         return is_reference, ref_clone, init_labeling
 
-    def _init_lambda(self, is_reference: np.ndarray, ref_clone: int) -> None:
+    def _init_lambda(self, is_reference: np.ndarray, ref_clone: int):
         """Baseline read-depth proportions from the reference cells per data type.
 
         Under ``--no_normal`` the reference clone may be non-diploid, so divide
@@ -174,9 +174,9 @@ class Base_Model:
     # ------------------------------------------------------------------
     # M-step helpers
     # ------------------------------------------------------------------
-    def _update_pi(self, gamma: np.ndarray, N_eff: float, K_eff: int) -> None:
+    def _update_pi(self, gamma: np.ndarray, N_eff: float, K_eff: int):
         """Global MAP pi update with Dirichlet(alpha) prior. pi has shape (K_eff,)."""
-        if self.fix_model_params["pi"]:
+        if not self.update_pi:
             return
         alpha = self.pi_alpha
         N_k = gamma.sum(axis=0)  # (K_eff,)
@@ -295,7 +295,7 @@ class Base_Model:
         self._log_posterior_stats(anns, label)
         return anns, clone_props
 
-    def _log_posterior_stats(self, anns: pd.DataFrame, group_label: str) -> None:
+    def _log_posterior_stats(self, anns: pd.DataFrame, group_label: str):
         """Log per-group posterior statistics."""
         logging.info("posterior statistics:")
         for grp, sub in anns.groupby(group_label, sort=True):

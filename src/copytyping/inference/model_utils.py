@@ -11,7 +11,7 @@ from copytyping.inference.likelihoods import (
 )
 
 if TYPE_CHECKING:
-    from copytyping.inference.count_data import CountData
+    from copytyping.inference.count_data import Count_Data
 
 
 ##################################################
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 ##################################################
 
 
-def model_kwargs_from_args(args: dict) -> dict:
+def model_kwargs_from_args(args: dict):
     """Extract the model config kwargs (the args the EM models consume) from the
     flat ``args`` dict, so callers can ``Model(..., **model_kwargs_from_args(args))``."""
     return {
@@ -39,7 +39,7 @@ def save_model_params(
     final_ll: float,
     assay_types: list[str],
     path: str,
-) -> None:
+):
     """Save the EM log-likelihood + per-assay lambda/theta/tau/inv_phi to ``path``."""
     param_dict = {"log_likelihood": np.array([final_ll])}
     for assay_type in assay_types:
@@ -61,7 +61,7 @@ def compute_baseline_proportions(
     ref_labels: np.ndarray,
     ref_cn: np.ndarray | None = None,
     eps: float = 1e-12,
-) -> np.ndarray:
+):
     """Per-bin read-depth baseline from the reference-cell pseudobulk.
 
     ref_cn=None assumes a diploid reference (normal cells): lambda_g =
@@ -79,11 +79,11 @@ def compute_baseline_proportions(
 
 
 def compute_rdr_baseline(
-    count_data: "CountData",
+    count_data: "Count_Data",
     ref_cells: np.ndarray | None,
     ref_clone: int = 0,
     no_normal: bool = False,
-) -> np.ndarray | None:
+):
     """RDR baseline (G,) from the reference-cell pseudobulk; None if no reference cells.
 
     CNP-corrected under ``no_normal`` (divides out the reference clone's copy ratio).
@@ -101,7 +101,7 @@ def compute_rdr_baseline(
 ##################################################
 
 
-def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray) -> np.ndarray:
+def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray):
     """compute mu_{g,k}=C[g,k] / sum_{g}{lam_g * C[g,k]}
 
     Args:
@@ -113,7 +113,7 @@ def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray) -> np.ndarray:
     return mu_gk
 
 
-def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray) -> np.ndarray:
+def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray):
     """compute pi_gk=lam_g * rdr_gk (linear scaling assumption)
 
     Args:
@@ -130,7 +130,7 @@ def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray) -> np.ndarray:
 ##################################################
 
 
-def empirical_baf_gn(Y: np.ndarray, D: np.ndarray, norm: bool = False) -> np.ndarray:
+def empirical_baf_gn(Y: np.ndarray, D: np.ndarray, norm: bool = False):
     baf_matrix = np.divide(
         Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
     )
@@ -146,7 +146,7 @@ def empirical_rdr_gn(
     base_props: np.ndarray,
     log2: bool = False,
     norm: bool = False,
-) -> np.ndarray:
+):
     """
     X: (G, N) G bin by spot/cell N count matrix
     T: (N,) total expression counts
@@ -174,13 +174,13 @@ def empirical_rdr_gn(
 
 
 def estimate_tumor_proportion(
-    count_data: "CountData",
+    count_data: "Count_Data",
     T: np.ndarray,
     base_props: np.ndarray,
     tau: float,
     inv_phi: float,
     fit_mode: str = "allele_total",
-) -> np.ndarray:
+):
     """Per-spot purity init using BB+NB on clonal-only segments (no gamma weighting).
 
     Mirrors the spot model E-step likelihood but evaluated on segments shared by
@@ -188,7 +188,7 @@ def estimate_tumor_proportion(
     over theta is therefore independent of clone assignment.
 
     Args:
-        count_data: CountData with count_X, count_B, count_C, cn_C, cn_BAF, allele_mask, total_mask.
+        count_data: Count_Data with count_X, count_B, count_C, cn_C, cn_BAF, allele_mask, total_mask.
         T: (N,) per-spot library size.
         base_props: (G,) baseline lambda from normal cells.
         tau: BB concentration scalar.

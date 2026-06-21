@@ -80,17 +80,14 @@ class Cell_Model(Base_Model):
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
-    def _m_step(self, fit_mode: str, gamma: np.ndarray, t: int = 0) -> None:
+    def _m_step(self, fit_mode: str, gamma: np.ndarray, t: int = 0):
         params = self.model_params
         self._update_pi(gamma, self.num_barcodes, self.num_clones)
-        fix_params = self.fix_model_params
 
         for assay_type in self.assay_types:
             count_data = self.count_data[assay_type]
 
-            if fit_mode in {"allele", "allele_total"} and not fix_params.get(
-                f"{assay_type}-tau", True
-            ):
+            if fit_mode in {"allele", "allele_total"} and self.update_tau:
                 am = count_data.allele_mask[self.allele_mask_id]
                 Y_am = count_data.count_B[am]
                 D_am = count_data.count_C[am]
@@ -103,9 +100,7 @@ class Cell_Model(Base_Model):
                     tau_bounds=self.tau_bounds,
                 )
 
-            if fit_mode in {"total", "allele_total"} and not fix_params.get(
-                f"{assay_type}-inv_phi", True
-            ):
+            if fit_mode in {"total", "allele_total"} and self.update_invphi:
                 lambda_g = params[f"{assay_type}-lambda"]
                 total_mask = count_data.total_mask[self.total_mask_id] & (lambda_g > 0)
                 props_gk = clone_pi_gk(lambda_g, count_data.cn_C)[total_mask, :]

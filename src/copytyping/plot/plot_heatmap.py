@@ -31,7 +31,7 @@ _STRIP_PALETTES = ["Set2", "Dark2", "Set3", "tab20b"]
 _LABEL_DISPLAY = {"copytyping_label": "Copy-typing"}
 
 
-def _display_name(name: str) -> str:
+def _display_name(name: str):
     return _LABEL_DISPLAY.get(name, name)
 
 
@@ -164,9 +164,7 @@ def plot_heatmap(
     return x_edges, y_edges, C
 
 
-def _row_layout(
-    cell_labels: np.ndarray, uniq_labels: list, agg_size: int
-) -> list[np.ndarray]:
+def _row_layout(cell_labels: np.ndarray, uniq_labels: list, agg_size: int):
     """Per-output-row original cell indices, grouping agg_size cells within each label.
 
     Rows are emitted in uniq_labels order (bottom-to-top in the heatmap).
@@ -181,7 +179,7 @@ def _row_layout(
     return groups
 
 
-def _aggregate_columns(mat: np.ndarray, row_groups: list[np.ndarray]) -> np.ndarray:
+def _aggregate_columns(mat: np.ndarray, row_groups: list[np.ndarray]):
     """Sum mat[:, group] over each row group -> (n_bins, n_rows)."""
     return np.column_stack([mat[:, g].sum(axis=1) for g in row_groups])
 
@@ -197,14 +195,14 @@ def prepare_rdr(
     row_groups: list[np.ndarray],
     base_props: np.ndarray,
     log2: bool = True,
-) -> np.ndarray:
+):
     library_size = read_counts.sum(axis=0)
     X = _aggregate_columns(read_counts, row_groups)
     T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
     return empirical_rdr_gn(X, T, base_props, log2=log2).T
 
 
-def prepare_pi_gk(read_counts: np.ndarray, row_groups: list[np.ndarray]) -> np.ndarray:
+def prepare_pi_gk(read_counts: np.ndarray, row_groups: list[np.ndarray]):
     library_size = read_counts.sum(axis=0)
     X = _aggregate_columns(read_counts, row_groups)
     T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
@@ -217,7 +215,7 @@ def prepare_baf(
     ballele_counts: np.ndarray,
     total_allele_counts: np.ndarray,
     row_groups: list[np.ndarray],
-) -> np.ndarray:
+):
     Y = _aggregate_columns(ballele_counts, row_groups)
     D = _aggregate_columns(total_allele_counts, row_groups)
     return empirical_baf_gn(Y, D).T
@@ -225,7 +223,7 @@ def prepare_baf(
 
 def build_label_color_maps(
     row_label_map: dict[str, np.ndarray], primary_label: str | None
-) -> dict[str, dict[str, str]]:
+):
     """Per-label {value: color} maps. The primary (clone) label uses the tab10
     clone scheme; each other label set gets its own distinct qualitative palette.
     Normal-like values are gray in every scheme (consistent with plot_visium)."""
@@ -251,7 +249,7 @@ def plot_label_strips(
     color_maps: dict[str, dict[str, str]],
     strip_width: float = 0.012,
     gap: float = 0.004,
-) -> list[tuple[str, dict[str, str], dict[str, float]]]:
+):
     """Draw vertical categorical color strips to the LEFT of base_ax, one per label.
 
     row_label_map maps label name -> (n_rows,) values in bottom-to-top row order.
@@ -305,7 +303,7 @@ def draw_label_legends(
     x0: float,
     entry_h: float = 0.038,
     gap: float = 0.06,
-) -> None:
+):
     """Stack one borderless categorical legend per label, top-aligned, at figure-x x0.
 
     Legend titles are bold; entries are large for readability. Each entry is

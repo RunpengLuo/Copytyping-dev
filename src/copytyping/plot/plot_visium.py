@@ -141,7 +141,7 @@ def set_label_colors(adata: sc.AnnData, col: str, clone_indexed: bool = True):
     )
 
 
-def build_legend(categories: list) -> list:
+def build_legend(categories: list):
     """Build legend handles using unified colors."""
     colors = build_label_colors(categories)
     return [mpatches.Patch(color=colors[i], label=c) for i, c in enumerate(categories)]

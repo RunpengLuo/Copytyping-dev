@@ -6,7 +6,7 @@ from copytyping.utils import ALL_PLATFORMS
 
 def add_arguments_inference_inputs(
     parser: argparse.ArgumentParser,
-) -> argparse.ArgumentParser:
+):
     """I/O paths and run-control flags for a single inference run."""
     parser.add_argument(
         "--platform",
@@ -117,7 +117,7 @@ def add_arguments_inference_inputs(
 
 def add_arguments_inference_parameters(
     parser: argparse.ArgumentParser,
-) -> argparse.ArgumentParser:
+):
     """Model, smoothing, and plot parameters (all defaulted, tunable from CLI)."""
     parser.add_argument(
         "--exclude",
@@ -286,13 +286,13 @@ def add_arguments_inference_parameters(
 
 def add_arguments_inference(
     parser: argparse.ArgumentParser,
-) -> argparse.ArgumentParser:
+):
     add_arguments_inference_inputs(parser)
     add_arguments_inference_parameters(parser)
     return parser
 
 
-def check_arguments_inference(args: dict) -> None:
+def check_arguments_inference(args: dict):
     gex_dir = args["gex_dir"]
     atac_dir = args["atac_dir"]
 
@@ -381,7 +381,7 @@ def check_arguments_inference(args: dict) -> None:
 
 def add_arguments_cnphmm_parameters(
     parser: argparse.ArgumentParser,
-) -> argparse.ArgumentParser:
+):
     """Factorial CNP-HMM knobs (all defaulted in copytyping.yaml)."""
     parser.add_argument(
         "--cnphmm_method",
@@ -472,14 +472,14 @@ def add_arguments_cnphmm_parameters(
 
 def add_arguments_cnphmm(
     parser: argparse.ArgumentParser,
-) -> argparse.ArgumentParser:
+):
     add_arguments_inference_inputs(parser)
     add_arguments_inference_parameters(parser)
     add_arguments_cnphmm_parameters(parser)
     return parser
 
 
-def check_arguments_cnphmm(args: dict) -> None:
+def check_arguments_cnphmm(args: dict):
     """Validate shared inference inputs, then the CNP-HMM-specific knobs."""
     args = check_arguments_inference(args)
     assert args["c_max"] >= 1, f"--c_max must be >= 1, got {args['c_max']}"
@@ -492,7 +492,7 @@ def check_arguments_cnphmm(args: dict) -> None:
 
 def add_arguments_pipeline(
     parser: argparse.ArgumentParser,
-) -> argparse.ArgumentParser:
+):
     parser.add_argument(
         "panel_tsv",
         type=str,

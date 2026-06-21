@@ -11,7 +11,7 @@ from scipy.special import betaln, gammaln
 ##################################################
 
 
-def _broadcast_dispersion(val: np.ndarray, G: int, N: int) -> np.ndarray:
+def _broadcast_dispersion(val: np.ndarray, G: int, N: int):
     """Reshape tau / inv_phi for (G, N, K) likelihood broadcast.
 
     Accepts scalar, (G,) per-bin, or (N,) per-spot/cell. Returns (G,1,1) or (1,N,1).
@@ -36,7 +36,7 @@ def cond_betabin_logpmf(
     D: np.ndarray,
     tau: np.ndarray,
     p: np.ndarray,
-) -> np.ndarray:
+):
     """Conditional BetaBinomial log-PMF: bb_ll_{g,n,k} = logP(Y_{g,n}|l_n=k;param).
 
     Args:
@@ -74,7 +74,7 @@ def cond_negbin_logpmf(
     pi_gk: np.ndarray,
     inv_phi: np.ndarray,
     eps: float = 1e-12,
-) -> np.ndarray:
+):
     """Conditional NegBinomial log-PMF: nb_ll_{g,n,k} = logP(X_{g,n}|l_n=k;param).
 
     Args:
@@ -112,7 +112,7 @@ def cond_betabin_logpmf_theta(
     rdrs_gk: np.ndarray,
     theta: np.ndarray,
     eps: float = 1e-12,
-) -> np.ndarray:
+):
     """Spot-level conditional BetaBinomial log-PMF with tumor purity.
 
     p_hat = (theta * mu * p + 0.5*(1-theta)) / (theta*mu + 1 - theta)
@@ -157,7 +157,7 @@ def cond_negbin_logpmf_theta(
     rdrs_gk: np.ndarray,
     theta: np.ndarray,
     eps: float = 1e-12,
-) -> np.ndarray:
+):
     """Spot-level conditional NegBinomial log-PMF with tumor purity.
 
     Returns:
@@ -197,7 +197,7 @@ def mle_invphi(
     weights: np.ndarray,
     invphi_bounds: tuple[float, float] = (1.0, 1e6),
     eps: float = 1e-12,
-) -> float:
+):
     """MLE of NB inv_phi within bounds."""
     mu_gnk = np.clip(mu_gnk, eps, None)
 
@@ -228,7 +228,7 @@ def mle_tau(
     p_gnk: np.ndarray,
     weights: np.ndarray,
     tau_bounds: tuple[float, float] = (1.0, 1e6),
-) -> float:
+):
     """MLE of BB tau within bounds (optimized in log-space)."""
     X_gnk = D_gnk - Y_gnk
     const = gammaln(D_gnk + 1.0) - gammaln(Y_gnk + 1.0) - gammaln(X_gnk + 1.0)

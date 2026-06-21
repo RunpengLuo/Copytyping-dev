@@ -15,12 +15,12 @@ NA_COLOR = "darkgray"
 _TUMOR_COLORS = [mcolors.to_hex(c) for c in plt.get_cmap("tab10").colors]
 
 
-def _is_normal_like(label: str) -> bool:
+def _is_normal_like(label: str):
     """True for the diploid/normal reference label (e.g. 'normal', 'Normal_cell')."""
     return str(label).lower().startswith("normal")
 
 
-def _label_color_index(label: str) -> int:
+def _label_color_index(label: str):
     """Stable color index for a label: clone1->0, clone2->1, ...; others by hash."""
     m = re.match(r"clone(\d+)", str(label))
     if m:
@@ -28,7 +28,7 @@ def _label_color_index(label: str) -> int:
     return hash(str(label)) % len(_TUMOR_COLORS)
 
 
-def build_label_colors(categories: list, clone_indexed: bool = True) -> list[str]:
+def build_label_colors(categories: list, clone_indexed: bool = True):
     """Clone-label colors: INVALID->NA_COLOR, 'normal'->NORMAL_COLOR, cloneN->tab10[N-1].
 
     Consistent regardless of subset/order.
@@ -48,7 +48,7 @@ def build_label_colors(categories: list, clone_indexed: bool = True) -> list[str
     return colors
 
 
-def build_categorical_colors(categories: list, palette: str = "Set2") -> list[str]:
+def build_categorical_colors(categories: list, palette: str = "Set2"):
     """Arbitrary label set: normal-like -> gray, invalid/NA -> dark gray, rest from
     `palette` (a qualitative cmap). Used for non-clone strips (e.g. cell_type)."""
     base = [mcolors.to_hex(c) for c in plt.get_cmap(palette).colors]
@@ -66,7 +66,7 @@ def build_categorical_colors(categories: list, palette: str = "Set2") -> list[st
     return colors
 
 
-def build_wl_coords(cnprofile: pd.DataFrame, wl_segments: pd.DataFrame) -> dict:
+def build_wl_coords(cnprofile: pd.DataFrame, wl_segments: pd.DataFrame):
     """Map bins to the wl_segments coordinate system (same as plot_cnv_profile).
 
     Returns a dict with:

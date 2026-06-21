@@ -9,7 +9,7 @@ from copytyping.inference.inference import run as copytyping_inference
 from copytyping.utils import log_arguments, setup_logging
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(prog="copytyping")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

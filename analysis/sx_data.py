@@ -20,7 +20,7 @@ class SX_Data:
         Y: np.ndarray,
         D: np.ndarray,
         baf_clip=0.01,
-    ) -> None:
+    ):
         """Construct from pre-loaded segment-level data.
 
         Args:

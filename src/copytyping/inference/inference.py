@@ -2,15 +2,13 @@ import logging
 import os
 
 import numpy as np
-import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.copytyping_parser import check_arguments_inference
-from copytyping.inference.base_model import Base_Model
 from copytyping.inference.cell_model import Cell_Model
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.count_data import (
-    CountData,
+    Count_Data,
     count_data_cnprofile,
     initialize_count_data,
     restrict_masks_to_cnp,
@@ -46,7 +44,7 @@ from copytyping.utils import (
 ##################################################
 
 
-def run(args: dict | None = None) -> None:
+def run(args: dict | None = None):
     """Validate args, load full inputs, then dispatch to the platform pipeline."""
     logging.info("run copytyping inference")
     args = normalize_args(args)
@@ -99,7 +97,14 @@ def run(args: dict | None = None) -> None:
     # ---- Copy-typing inference -------------------------------
     label = f"{args['method']}_label"
     model, anns, model_params = run_copytyping(
-        assay_types, bbc_count_datas, platform, label, spatial_graphs, args
+        assay_types,
+        bbc_count_datas,
+        platform,
+        label,
+        proc_dir,
+        out_prefix,
+        spatial_graphs,
+        args,
     )
 
     # ---- write annotations + model params -------------------------------
@@ -198,8 +203,6 @@ def run(args: dict | None = None) -> None:
                     anns_rep = anns.iloc[rep_mask].reset_index(drop=True)
                     theta_rep = theta[rep_mask] if theta is not None else None
                     for val in ["BAF", "log2RDR"]:
-                        if val == "log2RDR" and seg_baseline is None:
-                            continue
                         plot_cnv_heatmap(
                             sample_id,
                             assay_type,
@@ -290,24 +293,14 @@ def run(args: dict | None = None) -> None:
 
 def run_copytyping(
     assay_types: list[str],
-    bbc_data: dict[str, CountData],
+    bbc_data: dict[str, Count_Data],
     platform: str,
     label: str,
+    work_dir: str,
+    out_prefix: str,
     spatial_graphs: dict | None,
     args: dict,
-) -> tuple[Base_Model, pd.DataFrame, dict, float]:
-    """Cluster the annotated BBC CountData and fit the platform model.
-
-    Operates purely on the CountData ``bbc_data`` (+ spatial neighbor graphs).
-    Returns ``(model, anns, model_params,
-    model_ll)``. Single-cell / multiome run Cell_Model on the jointly-clustered
-    CountData. Spatial first smooths the clustered CountData over the spot
-    neighbor graphs (``smooth_spatial_neighbors``), then runs Spot_Model.
-    """
-    out_prefix = args["out_prefix"] or str(args["sample"])
-    proc_dir = os.path.join(args["out_dir"], "processed_data")
-
-    # joint cluster-level aggregation across modalities (CountData EM input)
+):
     cluster_count_data = segment_count_data(bbc_data, agg_level="cnp_cluster")
     restrict_masks_to_cnp(cluster_count_data, args["keep_cn_row"])
 
@@ -323,7 +316,6 @@ def run_copytyping(
             count_data=smoothed_count_data,
             platform=platform,
             assay_types=assay_types,
-            work_dir=proc_dir,
             prefix=out_prefix,
             **model_kwargs_from_args(args),
         )
@@ -332,7 +324,6 @@ def run_copytyping(
             count_data=cluster_count_data,
             platform=platform,
             assay_types=assay_types,
-            work_dir=proc_dir,
             prefix=out_prefix,
             **model_kwargs_from_args(args),
         )
@@ -352,24 +343,19 @@ def run_copytyping(
                     trace_dict[f"tumor_purity_{i}"] = lt["tumor_purity"]
             trace_dict["n_iters"] = np.array([len(model.labeling_trace)])
             np.savez(
-                os.path.join(proc_dir, f"{out_prefix}.labeling_trace.npz"), **trace_dict
+                os.path.join(work_dir, f"{out_prefix}.labeling_trace.npz"), **trace_dict
             )
         save_model_params(
             model_params,
             model_ll,
             assay_types,
-            os.path.join(proc_dir, f"{out_prefix}.model_params.npz"),
+            os.path.join(work_dir, f"{out_prefix}.model_params.npz"),
         )
 
     return model, anns, model_params
 
 
-##################################################
-# kmeans (disabled)
-##################################################
-
-
-def run_kmeans() -> None:
+def run_kmeans():
     # ---- kmeans baseline (disabled for now) -----------------------------
     # if args["method"] == "kmeans":
     #     barcodes, _ = union_align_barcodes(unsmoothed_data_sources, assay_types)

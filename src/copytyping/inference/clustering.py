@@ -5,14 +5,14 @@ import pandas as pd
 from scipy import stats
 from sklearn import cluster
 
-from copytyping.inference.count_data import CountData
+from copytyping.inference.count_data import Count_Data
 from copytyping.inference.model_utils import compute_baseline_proportions
 from copytyping.utils import is_tumor_label
 
 
 def prepare_rdr_baf_features(
-    count_data: CountData, base_props: np.ndarray, norm: bool = True
-) -> np.ndarray:
+    count_data: Count_Data, base_props: np.ndarray, norm: bool = True
+):
     """Build cell x feature matrix from BAF + log2RDR at informative bins."""
     Y = np.asarray(count_data.count_B)
     D = np.asarray(count_data.count_C)
@@ -52,12 +52,12 @@ def prepare_rdr_baf_features(
 
 
 def kmeans_copytyping(
-    data_sources: dict[str, CountData],
+    data_sources: dict[str, Count_Data],
     barcodes: pd.DataFrame,
     ref_label: str,
     K: int,
     label: str,
-) -> tuple[pd.DataFrame, dict[str, float]]:
+):
     """K-means clustering on BAF+RDR features. Returns (anns, clone_props).
 
     If ref_label is in barcodes, clusters get majority-voted normal/tumor names
@@ -98,7 +98,7 @@ def cluster_label_major_vote(
     cluster_labels: np.ndarray,
     cell_label: str = "raw_label",
     ref_label: str = "cell_type",
-) -> tuple[pd.DataFrame, dict[str, float]]:
+):
     """Assign cluster labels to normal or tumor based on majority vote vs ref_label."""
     anns[f"{cell_label}-raw"] = cluster_labels.astype(str)
     anns[cell_label] = "NA"

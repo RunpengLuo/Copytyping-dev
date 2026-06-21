@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
-from copytyping.inference.count_data import CountData
+from copytyping.inference.count_data import Count_Data
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
     estimate_tumor_proportion,
@@ -28,21 +28,18 @@ class Spot_Model(Base_Model):
 
     def __init__(
         self,
-        count_data: dict[str, CountData],
+        count_data: dict[str, Count_Data],
         platform: str,
         assay_types: list[str],
         **kwargs,
-    ) -> None:
+    ):
         super().__init__(count_data, platform, assay_types, **kwargs)
-        self.num_tumor_clones = self.num_clones - 1  # exclude normal
-        self.num_em_clones = self.num_tumor_clones  # EM operates on tumor clones only
-        self.tumor_clones = self.clones[1:]  # ["clone1", "clone2", ...]
+        self.num_em_clones = len(self.tumor_clones)
 
     def _init_params(self, fit_mode: str) -> dict:
         assert not self.no_normal, "no_normal is single-cell only"
         is_reference, ref_clone, init_labeling = self._estimate_reference_cells()
         params = self.model_params
-        # global tumor-clone mixture: shape (K_tumor,)
         tumor_pi = params["pi"][1:]
         params["pi"] = tumor_pi / tumor_pi.sum()
         self._init_lambda(is_reference, ref_clone)
@@ -120,9 +117,9 @@ class Spot_Model(Base_Model):
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
-    def _m_step(self, fit_mode: str, gamma: np.ndarray, t: int = 0) -> None:
+    def _m_step(self, fit_mode: str, gamma: np.ndarray, t: int = 0):
         # pi simplex update; theta fixed after init (_e_step inherited from Base_Model)
-        self._update_pi(gamma, self.num_barcodes, self.num_tumor_clones)
+        self._update_pi(gamma, self.num_barcodes, self.num_em_clones)
 
     def _map_estimation(
         self, gamma: np.ndarray, label: str, as_df: bool = True

@@ -302,7 +302,7 @@ def run(args):
         )
 
 
-def main(argv=None) -> None:
+def main(argv=None):
     parser = argparse.ArgumentParser(prog="pipeline")
     add_arguments_pipeline(parser)
     args = normalize_args(parser.parse_args(argv))

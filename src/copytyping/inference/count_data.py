@@ -18,7 +18,7 @@ def get_cnp_mask(
     cn_B: np.ndarray,
     cn_C: np.ndarray,
     and_mask: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
+):
     """Per-row informative-bin masks from the per-clone CN profile.
 
     Each value is a 1D boolean mask over genomic rows. ``and_mask`` (if given)
@@ -69,12 +69,12 @@ def get_cnp_mask(
 
 
 ##################################################
-# CountData container
+# Count_Data container
 ##################################################
 
 
 @dataclass
-class CountData:
+class Count_Data:
     """Segment-by-cell count container with an optional per-row CN profile.
 
     Count matrices are ``(num_segment, num_cell)``: rows are genomic segments
@@ -115,11 +115,11 @@ class CountData:
     total_mask: dict[str, np.ndarray] | None = None
 
     @property
-    def count_C(self) -> np.ndarray | sparse.csr_matrix:
+    def count_C(self):
         """Total-allele counts (count_A + count_B)."""
         return self.count_A + self.count_B
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         self.num_segment, self.num_cell = self.count_X.shape
         shape = (self.num_segment, self.num_cell)
         assert self.count_A.shape == shape, f"A shape {self.count_A.shape} != {shape}"
@@ -132,7 +132,7 @@ class CountData:
             f"num_segment ({self.num_segment})"
         )
 
-    def to_dense(self) -> None:
+    def to_dense(self):
         """Densify count_X/count_A/count_B in place (no-op if already dense)."""
         if sparse.issparse(self.count_X):
             self.count_X = np.asarray(self.count_X.todense())
@@ -141,8 +141,8 @@ class CountData:
         if sparse.issparse(self.count_B):
             self.count_B = np.asarray(self.count_B.todense())
 
-    def subset_by_rep(self, rep_id: str) -> tuple["CountData", np.ndarray]:
-        """Return ``(CountData, column_mask)`` restricted to ``REP_ID == rep_id``.
+    def subset_by_rep(self, rep_id: str):
+        """Return ``(Count_Data, column_mask)`` restricted to ``REP_ID == rep_id``.
 
         Only the cell axis (columns of count_X/count_A/count_B + ``barcodes``) is
         subset; the segment-axis fields (coordinates, cn_*, masks, clones) are shared.
@@ -166,7 +166,7 @@ class CountData:
         cn_B: np.ndarray,
         cn_C: np.ndarray,
         cn_BAF: np.ndarray,
-    ) -> None:
+    ):
         """Phase-correct A/B and attach the per-row CN profile (in place).
 
         ``bbc_phases`` (exact #CHR/START/END match) gives the per-row phase
@@ -210,9 +210,7 @@ class CountData:
 ##################################################
 
 
-def _map_bulk_seg_index(
-    coordinates: pd.DataFrame, bulk_profiles: pd.DataFrame
-) -> np.ndarray:
+def _map_bulk_seg_index(coordinates: pd.DataFrame, bulk_profiles: pd.DataFrame):
     """Map each row's midpoint to the containing ``bulk_profiles`` row index."""
     mid = (
         (coordinates["START"].to_numpy() + coordinates["END"].to_numpy()) / 2
@@ -246,8 +244,8 @@ def initialize_count_data(
     cell_type_df: pd.DataFrame | None = None,
     ref_label: str | None = None,
     exclude_labels: set[str] | None = None,
-) -> CountData:
-    """Read one modality's BBC files into a CountData.
+):
+    """Read one modality's BBC files into a Count_Data.
 
     Reads barcodes (+REP_ID), the sparse read/A/B count matrices, and the segment
     table; merges cell types and drops excluded labels when provided.
@@ -264,7 +262,7 @@ def initialize_count_data(
             barcodes_df, exclude_labels, ref_label, X, A, B
         )
 
-    return CountData(
+    return Count_Data(
         barcodes=barcodes_df,
         coordinates=coordinates_df,
         count_X=X,
@@ -286,7 +284,7 @@ def _adaptive_segment_ids(
     snp_count: np.ndarray,
     min_snp_count: int,
     max_bin_length: int,
-) -> np.ndarray:
+):
     """Per-row bin id: merge consecutive rows within the SAME gold-truth segment
     (``seg_id``) until the pseudobulk ``snp_count`` reaches ``min_snp_count`` or the
     span would exceed ``max_bin_length`` bp. A bin never crosses a segment boundary,
@@ -312,12 +310,12 @@ def _adaptive_segment_ids(
 
 
 def segment_count_data(
-    count_data: dict[str, CountData],
+    count_data: dict[str, Count_Data],
     agg_level: str = "cnp_cluster",
     min_snp_count: int = 300,
     max_bin_length: int = 5_000_000,
-) -> dict[str, CountData]:
-    """Aggregate a dict of CNP-annotated CountData to segment/cluster level.
+):
+    """Aggregate a dict of CNP-annotated Count_Data to segment/cluster level.
 
     All modalities must share the same rows (coordinates + per-row CN); only the
     counts/cells differ. The grouping is computed **once** and applied to every
@@ -335,7 +333,7 @@ def segment_count_data(
       CN identity for the EM model; coordinates carry only ``segment_id``.
 
     All modes name the grouped row id ``segment_id`` and carry per-group ``#BBC``
-    (rows merged) + ``LENGTH`` (total bp). Returns ``{assay: CountData}``.
+    (rows merged) + ``LENGTH`` (total bp). Returns ``{assay: Count_Data}``.
     """
     assays = list(count_data)
     ref = count_data[assays[0]]
@@ -414,12 +412,12 @@ def segment_count_data(
     # Aggregate via one sparse matmul, then densify: the grouped G is small
     # (#CNP groups), so the result is dense from here on — the model and plots
     # consume plain ndarrays without per-call to_dense().
-    def _sum(mat: np.ndarray | sparse.csr_matrix) -> np.ndarray:
+    def _sum(mat: np.ndarray | sparse.csr_matrix):
         m = mat if sparse.issparse(mat) else sparse.csr_matrix(mat)
         return np.asarray((indicator @ m).todense())
 
     return {
-        a: CountData(
+        a: Count_Data(
             barcodes=count_data[a].barcodes,
             coordinates=coords.copy(),
             count_X=_sum(count_data[a].count_X),
@@ -437,10 +435,8 @@ def segment_count_data(
     }
 
 
-def restrict_masks_to_cnp(
-    count_data: dict[str, CountData], keep_cn_row: str | None
-) -> None:
-    """Restrict every CountData's allele/total masks to a CNP whitelist (in place).
+def restrict_masks_to_cnp(count_data: dict[str, Count_Data], keep_cn_row: str | None):
+    """Restrict every Count_Data's allele/total masks to a CNP whitelist (in place).
 
     ``keep_cn_row`` is a comma-separated list of CNP strings (e.g.
     ``"1|1;2|1,2|2;3|1"``); rows whose CNP is not in the set are masked out of
@@ -470,13 +466,13 @@ def restrict_masks_to_cnp(
 
 
 def smooth_spatial_neighbors(
-    count_data: dict[str, CountData],
+    count_data: dict[str, Count_Data],
     spatial_graphs: dict[str, dict],
     max_k: int,
     min_umi: int,
     min_snp_umi: int,
-) -> dict[str, CountData]:
-    """Adaptive per-spot spatial smoothing of X/A/B (returns a new CountData dict).
+):
+    """Adaptive per-spot spatial smoothing of X/A/B (returns a new Count_Data dict).
 
     For each spot, progressively pool its k=1..max_k hop neighborhood (binary
     reachability from the spatial graph) until per-spot total UMI >= ``min_umi``
@@ -486,7 +482,7 @@ def smooth_spatial_neighbors(
     through unchanged.
 
     Args:
-        count_data: per-assay CountData (smoothing is independent per assay).
+        count_data: per-assay Count_Data (smoothing is independent per assay).
         spatial_graphs: ``{assay -> {rep -> {"BARCODE": array, "W": sparse}}}``.
         max_k: maximum neighborhood radius (0 disables smoothing).
         min_umi: minimum per-spot total UMI threshold.
@@ -495,14 +491,14 @@ def smooth_spatial_neighbors(
     if max_k <= 0:
         return count_data
 
-    out: dict[str, CountData] = {}
+    out: dict[str, Count_Data] = {}
     for assay, cd in count_data.items():
         W_per_rep = spatial_graphs.get(assay)
         if W_per_rep is None:
             out[assay] = cd
             continue
 
-        def _dense_copy(m: np.ndarray | sparse.csr_matrix) -> np.ndarray:
+        def _dense_copy(m: np.ndarray | sparse.csr_matrix):
             return np.asarray(m.todense()) if sparse.issparse(m) else np.array(m)
 
         X, A, B = (
@@ -558,10 +554,10 @@ def smooth_spatial_neighbors(
 ##################################################
 
 
-def count_data_cnprofile(cd: CountData) -> pd.DataFrame:
+def count_data_cnprofile(cd: Count_Data):
     """Per-row CNP-block table for plotting (segment, bin, or cluster level).
 
-    Copies the CountData ``coordinates`` (which already carry ``#BBC``/``LENGTH``,
+    Copies the Count_Data ``coordinates`` (which already carry ``#BBC``/``LENGTH``,
     and #CHR/START/END for segment/bin levels) and adds a ``CNP`` column: the
     per-row, per-clone ``A|B`` string joined by ``;`` (same convention as
     ``restrict_masks_to_cnp``). Cluster-level coordinates carry no genomic
@@ -576,8 +572,8 @@ def count_data_cnprofile(cd: CountData) -> pd.DataFrame:
     return df
 
 
-def save_count_data(count_data: dict[str, CountData], prefix: str) -> None:
-    """Save each assay's CountData (coordinates + count matrices) to disk.
+def save_count_data(count_data: dict[str, Count_Data], prefix: str):
+    """Save each assay's Count_Data (coordinates + count matrices) to disk.
 
     For every ``assay`` writes ``{prefix}.{assay}.tsv.gz`` (coordinates) and
     ``{prefix}.{assay}.{X,B,C}.npz`` where X = read depth, B = B-allele,

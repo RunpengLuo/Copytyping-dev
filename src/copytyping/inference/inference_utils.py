@@ -1,34 +1,6 @@
 import logging
-from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
-
-if TYPE_CHECKING:
-    from anndata import AnnData
-
-
-##################################################
-# cell-type annotation
-##################################################
-
-
-def annotate_adata_celltype(
-    adata: "AnnData",
-    cell_type_df: pd.DataFrame,
-    ref_label: str,
-    assay_type: str,
-) -> None:
-    """Add cell_type annotations to adata.obs from cell_type_df."""
-    ct_map = cell_type_df.set_index("BARCODE")[ref_label]
-    if ref_label in adata.obs.columns:
-        logging.warning(
-            f"overwriting existing '{ref_label}' column "
-            f"in {assay_type} h5ad obs with cell_type_df"
-        )
-    adata.obs[ref_label] = (
-        adata.obs_names.to_series().map(ct_map).fillna("Unknown").values
-    )
 
 
 ##################################################
@@ -42,7 +14,7 @@ def compute_loh_baf(
     cn_A: np.ndarray,
     cn_B: np.ndarray,
     clones: list[str],
-) -> tuple[np.ndarray, list[tuple[str, list[str]]]]:
+):
     """Per-spot aggregated BAF over clone-specific LOH clusters.
 
     Args:

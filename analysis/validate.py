@@ -422,7 +422,7 @@ def run(args=None):
     _file_handler.close()
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser():
     """Standalone argparse for the relocated validate workflow.
 
     Tuning knobs left as SUPPRESS are filled from the packaged copytyping.yaml
@@ -507,7 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None) -> None:
+def main(argv=None):
     args = normalize_args(build_parser().parse_args(argv))
     setup_logging(args)
     run(args)

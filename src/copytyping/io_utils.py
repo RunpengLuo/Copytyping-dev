@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from anndata import AnnData
+
 from copytyping.utils import read_seg_ucn_file, sort_df_chr
 
 
@@ -12,7 +14,7 @@ from copytyping.utils import read_seg_ucn_file, sort_df_chr
 ##################################################
 
 
-def read_cell_types(ct_file: str | None, req_cols: set[str]) -> pd.DataFrame | None:
+def read_cell_types(ct_file: str | None, req_cols: set[str]):
     """Load a cell-type annotation TSV; assert every column in ``req_cols`` exists."""
     if ct_file is None:
         return None
@@ -24,11 +26,29 @@ def read_cell_types(ct_file: str | None, req_cols: set[str]) -> pd.DataFrame | N
     return cell_type_df
 
 
+def annotate_adata_celltype(
+    adata: AnnData,
+    cell_type_df: pd.DataFrame,
+    ref_label: str,
+    assay_type: str,
+):
+    """Add cell_type annotations to adata.obs from cell_type_df."""
+    ct_map = cell_type_df.set_index("BARCODE")[ref_label]
+    if ref_label in adata.obs.columns:
+        logging.warning(
+            f"overwriting existing '{ref_label}' column "
+            f"in {assay_type} h5ad obs with cell_type_df"
+        )
+    adata.obs[ref_label] = (
+        adata.obs_names.to_series().map(ct_map).fillna("Unknown").values
+    )
+
+
 def read_barcodes(
     barcode_file: str,
     cell_type_df: pd.DataFrame | None = None,
     ref_label: str | None = None,
-) -> pd.DataFrame:
+):
     """Read the per-cell barcode list into a DataFrame (BARCODE + REP_ID).
 
     REP_ID is everything after the first underscore ("ACGT-1_U1" -> "U1"). When
@@ -63,7 +83,7 @@ def exclude_barcodes(
     exclude_labels: set[str],
     ref_label: str,
     *mats: sparse.csr_matrix,
-) -> tuple:
+):
     """Drop barcodes whose ref_label is in exclude_labels and column-subset
     each aligned matrix in ``mats``.
 
@@ -90,7 +110,7 @@ def exclude_barcodes(
 ##################################################
 
 
-def read_bbc_phases(bbc_phases_file: str) -> pd.DataFrame:
+def read_bbc_phases(bbc_phases_file: str):
     """Load BBC-level bulk WGS phasing, chr-pos sorted.
 
     The PHASE column is 1=keep B, 0=swap A/B.
@@ -105,15 +125,7 @@ def load_bulk_cnprofile(
     seg_ucn_file: str,
     solfile: str | None = None,
     baf_clip: float = 0.01,
-) -> tuple[
-    pd.DataFrame,
-    list[str],
-    list[float],
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-]:
+):
     """Load bulk HATCHet seg.ucn CN profile. Returns ``(seg_df, clones,
     clone_props, cn_A, cn_B, cn_C, cn_BAF)``; keeps the first SAMPLE and applies
     ``solfile`` if given. ``cn_A/cn_B/cn_C/cn_BAF`` are per-segment per-clone copy
@@ -133,7 +145,7 @@ def load_bulk_cnprofile(
 def parse_cnv_profile(
     haplo_blocks: pd.DataFrame,
     baf_clip: float = 0.01,
-) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+):
     """Parse the per-segment CNP column into per-clone arrays.
 
     Returns ``(clones, cn_A, cn_B, cn_C, cn_BAF)`` where ``cn_*``/``cn_BAF`` are
@@ -164,7 +176,7 @@ def parse_cnv_profile(
 def _apply_solfile(
     seg_df: pd.DataFrame,
     solfile: str,
-) -> tuple[pd.DataFrame, list[str], list[float]]:
+):
     """Override cn_* and u_* columns in seg_df using a HATCHet solution file.
 
     Matches rows by CLUSTER ID and rebuilds CNP/PROPS columns.
@@ -222,7 +234,7 @@ def _apply_solfile(
 ##################################################
 
 
-def load_spatial_neighbors(h5ad_path: str, n_neighs: int = 6) -> dict[str, dict]:
+def load_spatial_neighbors(h5ad_path: str, n_neighs: int = 6):
     """Load spatial coordinates from h5ad and compute per-rep neighbor graphs.
 
     Args:
@@ -265,7 +277,7 @@ def build_spatial_graphs(
     assay_types: list[str],
     h5ad_paths: dict[str, str | None],
     n_neighs: int,
-) -> dict[str, dict]:
+):
     """Build per-modality spatial neighbor graphs from h5ad spatial coords.
 
     Skips assays without an h5ad or without ``obsm['spatial']``. Each value is
