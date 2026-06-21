@@ -2,8 +2,8 @@ import numpy as np
 from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
-from copytyping.inference.model_utils import (
-    clone_pi_gk,
+from copytyping.inference.model_utils import clone_pi_gk
+from copytyping.likelihoods import (
     cond_betabin_logpmf,
     cond_negbin_logpmf,
     mle_invphi,

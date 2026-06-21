@@ -1,11 +1,12 @@
 import logging
 import os
+from functools import partial
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from copytyping.inference.model_utils import make_baseline_fn
+from copytyping.inference.model_utils import compute_rdr_baseline
 from copytyping.io_utils import load_spatial_neighbors
 from copytyping.plot.plot_common import (
     plot_count_histograms,
@@ -312,7 +313,9 @@ def run(args=None):
 
     # ── RDR baseline: validate has no model instance, so reference = "normal"
     # labeled cells, no CNP correction ──
-    baseline_fn = make_baseline_fn((anns[best_label] == "normal").to_numpy())
+    baseline_fn = partial(
+        compute_rdr_baseline, ref_cells=(anns[best_label] == "normal").to_numpy()
+    )
 
     # ── Count histograms (copytyping only, all modalities) ──
     # Skip per-modality plots when seg matrices weren't saved at inference
