@@ -9,8 +9,8 @@ verbosity: 0
 
 ##################################################
 # inference — model fit
-# fit_mode: hybrid | allele_only | total_only
-fit_mode: hybrid
+# fit_mode: allele_total | allele | total
+fit_mode: allele_total
 # If true, use major clone CNP to derive baseline.
 no_normal: false
 niters: 100

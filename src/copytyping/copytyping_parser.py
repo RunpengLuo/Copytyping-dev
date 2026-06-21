@@ -11,7 +11,7 @@ def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
         required=True,
         type=str,
         choices=ALL_PLATFORMS,
-        help="Platform: single_cell (Cell_Model) or spatial (Spot_Model)",
+        help="Platform: single_cell/multiome (Cell_Model) or spatial (Spot_Model)",
     )
     parser.add_argument("--sample", required=True, type=str, help="sample name")
     parser.add_argument(
@@ -130,7 +130,8 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
         default=argparse.SUPPRESS,
         help="Comma-separated whitelist of CNP rows (each row is the existing "
         "';'-joined per-clone format, e.g. '1|1;2|0;2|1,1|1;1|1;2|0'). "
-        "Segments whose CNP is not in the list are dropped. Default: keep all.",
+        "Restricts inference to these CNP clusters; plots/disk keep all. "
+        "Default: keep all.",
     )
     parser.add_argument(
         "--save_processed_data",
@@ -156,9 +157,9 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
         required=False,
         type=str,
         default=argparse.SUPPRESS,
-        choices=["hybrid", "allele_only", "total_only"],
-        help="Likelihood mode: hybrid (BAF+RDR), "
-        "allele_only (BAF only), total_only (RDR only)",
+        choices=["allele_total", "allele", "total"],
+        help="Likelihood mode: allele_total (BAF+RDR), "
+        "allele (BAF only), total (RDR only)",
     )
     parser.add_argument(
         "--niters",
@@ -293,10 +294,10 @@ def check_arguments_inference(args: dict):
     args["gex_h5ad"] = None
     args["atac_h5ad"] = None
 
-    data_types = []
+    assay_types = []
     if gex_dir is not None:
         assert os.path.isdir(gex_dir), f"--gex_dir={gex_dir} is not a directory"
-        data_types.append("gex")
+        assay_types.append("gex")
         cnv_segments = os.path.join(gex_dir, "cnv_segments.tsv")
         barcodes = os.path.join(gex_dir, "barcodes.tsv.gz")
         x_count = os.path.join(gex_dir, "bb.Xcount.npz")
@@ -316,7 +317,7 @@ def check_arguments_inference(args: dict):
 
     if atac_dir is not None:
         assert os.path.isdir(atac_dir), f"--atac_dir={atac_dir} is not a directory"
-        data_types.append("atac")
+        assay_types.append("atac")
         cnv_segments = os.path.join(atac_dir, "cnv_segments.tsv")
         barcodes = os.path.join(atac_dir, "barcodes.tsv.gz")
         x_count = os.path.join(atac_dir, "bb.Xcount.npz")
@@ -330,14 +331,18 @@ def check_arguments_inference(args: dict):
         args["atac_A_allele"] = a_allele
         args["atac_B_allele"] = b_allele
 
-    assert len(data_types) > 0, (
+    assert len(assay_types) > 0, (
         "at least one of --gex_dir or --atac_dir must be provided"
     )
-    args["data_types"] = data_types
+    args["assay_types"] = assay_types
     platform = args["platform"]
     if platform == "spatial":
         assert gex_dir is not None, (
             "--gex_dir is required for spatial platform (h5ad with spatial coords)"
+        )
+    if platform == "multiome":
+        assert gex_dir is not None and atac_dir is not None, (
+            "--gex_dir and --atac_dir are both required for multiome platform"
         )
 
     assert os.path.exists(args["seg_ucn"]), f"invalid --seg_ucn file"
@@ -363,6 +368,9 @@ def check_arguments_inference(args: dict):
     args["min_invphi"] = min_invphi
     args["max_invphi"] = max_invphi
 
+    args["exclude_cell_types"] = (
+        set(args["exclude"].split(",")) if args["exclude"] else None
+    )
     return args
 
 
@@ -502,7 +510,7 @@ def add_arguments_pipeline(parser):
         "--platform_filter",
         default=None,
         type=str,
-        choices=["spatial", "single_cell"],
+        choices=ALL_PLATFORMS,
         help="Only run samples matching this platform",
     )
     parser.add_argument(
