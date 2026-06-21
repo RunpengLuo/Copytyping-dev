@@ -203,7 +203,7 @@ def joincount_zscore(labels, W):
     return results
 
 
-def compute_joincount_zscores(anns, label, spatial_graphs, data_types):
+def compute_joincount_zscores(anns, label, spatial_graphs, assay_types):
     """Compute joincount z-scores across all reps and data types.
 
     Returns dict with keys like JC_{rep_id}_{clone_label}.
@@ -211,10 +211,10 @@ def compute_joincount_zscores(anns, label, spatial_graphs, data_types):
     jc_metric = {}
     anns_indexed = anns.set_index("BARCODE")
     for rep_id in anns["REP_ID"].unique():
-        for data_type in data_types:
-            if data_type not in spatial_graphs:
+        for assay_type in assay_types:
+            if assay_type not in spatial_graphs:
                 continue
-            sg_reps = spatial_graphs[data_type]
+            sg_reps = spatial_graphs[assay_type]
             if rep_id not in sg_reps:
                 continue
             sg = sg_reps[rep_id]
@@ -226,7 +226,7 @@ def compute_joincount_zscores(anns, label, spatial_graphs, data_types):
             sg_W = W[np.ix_(sg_keep, sg_keep)]
             clone_labels = anns_indexed.loc[sg_barcodes, label].to_numpy()
             jc = joincount_zscore(clone_labels, sg_W)
-            logging.info(f"joincount z-score (rep={rep_id}, {data_type}):")
+            logging.info(f"joincount z-score (rep={rep_id}, {assay_type}):")
             for lab, z in sorted(jc.items()):
                 if lab == "normal":
                     continue

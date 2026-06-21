@@ -252,15 +252,15 @@ def run(args):
 
             status, metrics = _run_one(args, row_args, run_dir)
 
-            dtypes = []
+            assay_types = []
             if row_args["gex_dir"]:
-                dtypes.append("gex")
+                assay_types.append("gex")
             if row_args["atac_dir"]:
-                dtypes.append("atac")
+                assay_types.append("atac")
             info = dict(row)
             info["OUT_PREFIX"] = os.path.relpath(run_dir, out_dir)
             info["SOLFILE"] = solfile or ""
-            info["DATA_TYPES"] = "+".join(dtypes) if dtypes else ""
+            info["ASSAY_TYPES"] = "+".join(assay_types) if assay_types else ""
             info["STATUS"] = status
             info.update(metrics)
             summary_rows.append(info)

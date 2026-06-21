@@ -56,19 +56,19 @@ def _load_shared_proc_data(proc_dir, prefix):
     return cnp_df, params, trace
 
 
-def _load_modality_proc_data(proc_dir, prefix, data_type):
+def _load_modality_proc_data(proc_dir, prefix, assay_type):
     """Load per-modality matrices: returns (X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc)."""
-    dt_p = os.path.join(proc_dir, f"{prefix}.{data_type}")
+    assay_p = os.path.join(proc_dir, f"{prefix}.{assay_type}")
 
     X = Y = D = None
-    if os.path.exists(f"{dt_p}.seg.X.npz"):
-        X = sparse.load_npz(f"{dt_p}.seg.X.npz").toarray()
-        Y = sparse.load_npz(f"{dt_p}.seg.Y.npz").toarray()
-        D = sparse.load_npz(f"{dt_p}.seg.D.npz").toarray()
-        logging.info(f"loaded {data_type} seg matrices: X/Y/D shape={X.shape}")
+    if os.path.exists(f"{assay_p}.seg.X.npz"):
+        X = sparse.load_npz(f"{assay_p}.seg.X.npz").toarray()
+        Y = sparse.load_npz(f"{assay_p}.seg.Y.npz").toarray()
+        D = sparse.load_npz(f"{assay_p}.seg.D.npz").toarray()
+        logging.info(f"loaded {assay_type} seg matrices: X/Y/D shape={X.shape}")
 
     bbc_df = X_bbc = Y_bbc = D_bbc = None
-    bbc_p = f"{dt_p}.bbc"
+    bbc_p = f"{assay_p}.bbc"
     if os.path.exists(f"{bbc_p}.X.npz"):
         X_bbc = sparse.load_npz(f"{bbc_p}.X.npz")
         Y_bbc = sparse.load_npz(f"{bbc_p}.Y.npz")
@@ -76,7 +76,7 @@ def _load_modality_proc_data(proc_dir, prefix, data_type):
         bbc_tsv = f"{bbc_p}.tsv.gz"
         if os.path.exists(bbc_tsv):
             bbc_df = pd.read_csv(bbc_tsv, sep="\t")
-        logging.info(f"loaded {data_type} BBC matrices: shape={X_bbc.shape}")
+        logging.info(f"loaded {assay_type} BBC matrices: shape={X_bbc.shape}")
 
     return X, Y, D, bbc_df, X_bbc, Y_bbc, D_bbc
 
@@ -103,8 +103,8 @@ def run(args=None):
     prefix = _find_prefix(proc_dir)
     assert prefix, f"No metadata.tsv found in {proc_dir}"
     metadata = _load_metadata(proc_dir, prefix)
-    data_types = [d.strip() for d in metadata.get("data_types", "gex").split(",")]
-    logging.info(f"data_types: {data_types}")
+    assay_types = [d.strip() for d in metadata.get("assay_types", "gex").split(",")]
+    logging.info(f"assay_types: {assay_types}")
     cnp_df, params, trace = _load_shared_proc_data(proc_dir, prefix)
 
     # ── Load predictions (also serves as the barcodes table) ──
@@ -127,20 +127,20 @@ def run(args=None):
         assert ref_label in ref_df.columns
 
     # ── Build per-modality SX_Data ──
-    seg_sx_by_dt = {}
-    raw_clust_by_dt = {}
-    bbc_by_dt = {}
-    for dt in data_types:
-        X, Y, D, bbc_df_dt, X_bbc, Y_bbc, D_bbc = _load_modality_proc_data(
-            proc_dir, prefix, dt
+    seg_sx_by_assay = {}
+    raw_clust_by_assay = {}
+    bbc_by_assay = {}
+    for assay in assay_types:
+        X, Y, D, bbc_df_assay, X_bbc, Y_bbc, D_bbc = _load_modality_proc_data(
+            proc_dir, prefix, assay
         )
         if X is None:
-            logging.warning(f"no seg matrices for {dt}, skipping")
+            logging.warning(f"no seg matrices for {assay}, skipping")
             continue
         seg_sx = SX_Data(barcodes_df, cnp_df, X, Y, D, baf_clip=0.1)
-        seg_sx_by_dt[dt] = seg_sx
-        raw_clust_by_dt[dt] = seg_sx.to_cluster_level()
-        bbc_by_dt[dt] = (bbc_df_dt, X_bbc, Y_bbc, D_bbc)
+        seg_sx_by_assay[assay] = seg_sx
+        raw_clust_by_assay[assay] = seg_sx.to_cluster_level()
+        bbc_by_assay[assay] = (bbc_df_assay, X_bbc, Y_bbc, D_bbc)
 
     # ── Init normal evaluation (copytyping only) ──
     if is_copytyping and trace is not None and ref_df is not None:
@@ -150,9 +150,9 @@ def run(args=None):
             pred_df.merge(ref_df[["BARCODE", ref_label]], on="BARCODE", how="left"),
             ref_label,
         )
-        if raw_clust_by_dt:
+        if raw_clust_by_assay:
             plot_init_baf_histograms(
-                raw_clust_by_dt,
+                raw_clust_by_assay,
                 init_is_normal,
                 sample,
                 val_dir,
@@ -281,7 +281,7 @@ def run(args=None):
     # ── Joincount ──
     if args["h5ad"] and "REP_ID" in anns.columns:
         spatial_graphs = load_spatial_neighbors(args["h5ad"], n_neighs=args["n_neighs"])
-        jc = compute_joincount_zscores(anns, pred_label, spatial_graphs, data_types)
+        jc = compute_joincount_zscores(anns, pred_label, spatial_graphs, assay_types)
         for row in eval_rows:
             row.update(jc)
 
@@ -318,11 +318,11 @@ def run(args=None):
     # Skip per-modality plots when seg matrices weren't saved at inference
     # time (default; enable with --save_processed_data). Inference plots
     # these inline anyway.
-    if not seg_sx_by_dt:
+    if not seg_sx_by_assay:
         logging.info("skipping per-modality plots (no seg matrices in processed_data)")
-    if is_copytyping and seg_sx_by_dt:
+    if is_copytyping and seg_sx_by_assay:
         plot_count_histograms(
-            seg_sx_by_dt,
+            seg_sx_by_assay,
             sample,
             os.path.join(val_dir, f"{sample}.count_histograms.pdf"),
             dpi=dpi,
@@ -332,21 +332,21 @@ def run(args=None):
     plot_labels = [best_label] + (
         [ref_label] if ref_df is not None and ref_label in anns.columns else []
     )
-    for data_type, seg_sx in seg_sx_by_dt.items():
+    for assay_type, seg_sx in seg_sx_by_assay.items():
         plot_modality_panel(
             sample=sample,
-            data_type=data_type,
+            assay_type=assay_type,
             prefix=sample,
             plot_dir=plot_dir,
             seg_sx=seg_sx,
-            raw_clust=raw_clust_by_dt[data_type],
-            bbc_data=bbc_by_dt[data_type],
+            raw_clust=raw_clust_by_assay[assay_type],
+            bbc_data=bbc_by_assay[assay_type],
             cnv_blocks=cnp_df,
             anns=anns,
             baseline_fn=baseline_fn,
             primary_label=best_label,
             plot_labels=plot_labels,
-            theta=params.get(f"{data_type}_theta"),
+            theta=params.get(f"{assay_type}_theta"),
             region_bed=args["region_bed"],
             genome_size=args["genome_size"],
             dpi=dpi,
@@ -379,7 +379,7 @@ def run(args=None):
         )
 
     # ── Visium plots (spatial only, single gex modality) ──
-    if args["h5ad"] and "REP_ID" in anns.columns and raw_clust_by_dt:
+    if args["h5ad"] and "REP_ID" in anns.columns and raw_clust_by_assay:
         labeling_trace = None
         if is_copytyping and trace is not None:
             n_iters = int(trace["n_iters"][0])
@@ -395,7 +395,7 @@ def run(args=None):
                 }
                 for i in range(n_iters)
             ]
-        gex_clust = next(iter(raw_clust_by_dt.values()))
+        gex_clust = next(iter(raw_clust_by_assay.values()))
         plot_visium_all(
             sample=sample,
             anns=anns,
