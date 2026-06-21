@@ -182,6 +182,8 @@ def run(args: dict | None = None):
             cluster_count_data.cn_A,
             cluster_count_data.cn_B,
             cluster_count_data.cn_C,
+            cluster_count_data.allele_mask["IMBALANCED"],
+            cluster_count_data.total_mask["ANEUPLOID"],
             cluster_count_data.clones,
             cluster_profile,
             anns,

@@ -11,21 +11,21 @@ from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Patch, Rectangle
 
 from copytyping.utils import read_whitelist_segments
+from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
 from copytyping.plot.plot_copynumber import (
-    BLACK,
     plot_ascn_legend,
     plot_ascn_profile,
     plot_cnv_legend,
     plot_cnv_profile,
 )
 from copytyping.plot.plot_common import (
-    build_categorical_colors,
-    build_label_colors,
+    BAF_COLORS,
+    BLACK,
+    PURITY_CMAP,
+    build_label_color_maps,
     build_wl_coords,
+    make_baf_cmap,
 )
-
-# qualitative palettes for non-clone label strips (clone strip uses tab10)
-_STRIP_PALETTES = ["Set2", "Dark2", "Set3", "tab20b"]
 
 # pretty display names for label columns (strip titles + legend titles)
 _LABEL_DISPLAY = {"copytyping_label": "Copy-typing"}
@@ -34,8 +34,6 @@ _LABEL_DISPLAY = {"copytyping_label": "Copy-typing"}
 def _display_name(name: str):
     return _LABEL_DISPLAY.get(name, name)
 
-
-from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
 
 # Silence fontTools subsetter chatter
 logging.getLogger("fontTools.subset").setLevel(logging.ERROR)
@@ -221,26 +219,6 @@ def prepare_baf(
     return empirical_baf_gn(Y, D).T
 
 
-def build_label_color_maps(
-    row_label_map: dict[str, np.ndarray], primary_label: str | None
-):
-    """Per-label {value: color} maps. The primary (clone) label uses the tab10
-    clone scheme; each other label set gets its own distinct qualitative palette.
-    Normal-like values are gray in every scheme (consistent with plot_visium)."""
-    color_maps = {}
-    other_i = 0
-    for name, values in row_label_map.items():
-        cats = sorted({str(v) for v in values})
-        if name == primary_label:
-            cols = build_label_colors(cats, clone_indexed=True)
-        else:
-            palette = _STRIP_PALETTES[other_i % len(_STRIP_PALETTES)]
-            cols = build_categorical_colors(cats, palette=palette)
-            other_i += 1
-        color_maps[name] = dict(zip(cats, cols))
-    return color_maps
-
-
 def plot_label_strips(
     fig: plt.Figure,
     base_ax: plt.Axes,
@@ -391,24 +369,8 @@ def plot_cnv_heatmap(
     data_info = cnprofile
     if val == "BAF":
         data_matrix = prepare_baf(ballele_counts, total_allele_counts, row_groups)
-        boundaries = np.linspace(0, 1, 11)  # [0.0, 0.1, ..., 1.0]
-        colors = [
-            "#1f77b4",
-            "#3b8bc6",
-            "#67a9cf",
-            "#90c4d6",
-            "#b8d6da",
-            "#d9d9d9",
-            "#fddbc7",
-            "#f4a582",
-            "#d6604d",
-            "#b2182b",
-        ]
+        cmap, norm = make_baf_cmap()
         cticks = [0.0, 0.25, 0.5, 0.75, 1.0]
-
-        cmap = mcolors.ListedColormap(colors, name="baf_disc")
-        cmap.set_bad("white")
-        norm = mcolors.BoundaryNorm(boundaries, cmap.N, clip=True)
     elif val in ["RDR", "log2RDR"]:
         data_matrix = prepare_rdr(read_counts, row_groups, base_props, val == "log2RDR")
         cmap = "coolwarm"
@@ -420,22 +382,8 @@ def plot_cnv_heatmap(
             cticks = [0.0, 0.5, 1.0, 1.50, 2.0]
     elif val == "pi_gk":
         data_matrix = prepare_pi_gk(read_counts, row_groups)
-
-        colors = [
-            "#1f77b4",
-            "#3b8bc6",
-            "#67a9cf",
-            "#90c4d6",
-            "#b8d6da",
-            "#d9d9d9",
-            "#fddbc7",
-            "#f4a582",
-            "#d6604d",
-            "#b2182b",
-        ]
         cticks = [0.0, 0.25, 0.5, 0.75, 1.0]
-
-        cmap = mcolors.LinearSegmentedColormap.from_list("pi_cont", colors, N=256)
+        cmap = mcolors.LinearSegmentedColormap.from_list("pi_cont", BAF_COLORS, N=256)
         norm = mcolors.Normalize(
             vmin=np.nanmin(data_matrix), vmax=np.nanmax(data_matrix)
         )
@@ -521,7 +469,7 @@ def plot_cnv_heatmap(
         )
         x = np.array([0, 1])
         C = row_props[:, None]
-        purity_cmap = "magma_r"
+        purity_cmap = PURITY_CMAP
         norm_vec = mcolors.Normalize(vmin=0.0, vmax=1.0)
         ax_vec.pcolormesh(
             x,

@@ -12,7 +12,31 @@ from copytyping.utils import INVALID_LABELS, NA_CELLTYPE
 # normal-like -> gray, invalid/NA -> dark gray, tumor clones -> qualitative palette
 NORMAL_COLOR = "lightgray"
 NA_COLOR = "darkgray"
+BLACK = (0, 0, 0, 1)
 _TUMOR_COLORS = [mcolors.to_hex(c) for c in plt.get_cmap("tab10").colors]
+
+# Sequential purity / posterior overlay; shared by heatmap + visium.
+PURITY_CMAP = "magma_r"
+
+# Diverging BAF palette (blue = A-skewed, gray = balanced, red = B-skewed),
+# 10 discrete bins. Shared by heatmap (BAF/pi_gk) and visium LOH BAF.
+BAF_COLORS = [
+    "#1f77b4",
+    "#3b8bc6",
+    "#67a9cf",
+    "#90c4d6",
+    "#b8d6da",
+    "#d9d9d9",
+    "#fddbc7",
+    "#f4a582",
+    "#d6604d",
+    "#b2182b",
+]
+
+# Qualitative palettes for non-clone label sets (cell_type, path annotation, ...).
+# The clone/primary label always uses the tab10 clone scheme (build_label_colors);
+# each additional label set gets its own palette here, indexed by slot.
+_CATEGORICAL_PALETTES = ["Set2", "Dark2", "Set3", "tab20b"]
 
 
 def _is_normal_like(label: str):
@@ -64,6 +88,42 @@ def build_categorical_colors(categories: list, palette: str = "Set2"):
             colors.append(base[i % len(base)])
             i += 1
     return colors
+
+
+def make_baf_cmap():
+    """Discrete diverging BAF colormap + [0,1] BoundaryNorm (10 bins, NaN -> white)."""
+    cmap = mcolors.ListedColormap(BAF_COLORS, name="baf_disc")
+    cmap.set_bad("white")
+    norm = mcolors.BoundaryNorm(np.linspace(0, 1, 11), cmap.N, clip=True)
+    return cmap, norm
+
+
+def label_colors_for(categories: list, is_primary: bool, palette_index: int = 0):
+    """Colors for one label column. The primary (clone) label uses the tab10 clone
+    scheme; any other label set uses its own qualitative palette (by palette_index).
+    Shared by heatmap strips and visium so coloring stays consistent across plots."""
+    if is_primary:
+        return build_label_colors(categories, clone_indexed=True)
+    palette = _CATEGORICAL_PALETTES[palette_index % len(_CATEGORICAL_PALETTES)]
+    return build_categorical_colors(categories, palette=palette)
+
+
+def build_label_color_maps(
+    row_label_map: dict[str, np.ndarray], primary_label: str | None
+):
+    """Per-label {value: color} maps. The primary (clone) label uses the tab10 clone
+    scheme; each other label set gets its own distinct qualitative palette. Normal-like
+    values are gray in every scheme (consistent with visium)."""
+    color_maps = {}
+    other_i = 0
+    for name, values in row_label_map.items():
+        cats = sorted({str(v) for v in values})
+        is_primary = name == primary_label
+        cols = label_colors_for(cats, is_primary=is_primary, palette_index=other_i)
+        if not is_primary:
+            other_i += 1
+        color_maps[name] = dict(zip(cats, cols))
+    return color_maps
 
 
 def build_wl_coords(cnprofile: pd.DataFrame, wl_segments: pd.DataFrame):

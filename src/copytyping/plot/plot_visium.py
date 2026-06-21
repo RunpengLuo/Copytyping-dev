@@ -10,7 +10,13 @@ import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 
 from copytyping.inference.inference_utils import compute_loh_baf
-from copytyping.plot.plot_common import NORMAL_COLOR, build_label_colors
+from copytyping.plot.plot_common import (
+    NORMAL_COLOR,
+    PURITY_CMAP,
+    build_label_colors,
+    label_colors_for,
+    make_baf_cmap,
+)
 from copytyping.utils import is_tumor_label, NA_CELLTYPE
 
 logging.getLogger("anndata").setLevel(logging.WARNING)
@@ -133,11 +139,17 @@ def build_visium_slices(
     return slices
 
 
-def set_label_colors(adata: sc.AnnData, col: str, clone_indexed: bool = True):
-    """Set adata.uns colors using unified scheme."""
+def set_label_colors(
+    adata: sc.AnnData, col: str, is_primary: bool = True, palette_index: int = 0
+):
+    """Set adata.uns colors using the unified scheme (shared with heatmap strips):
+    primary/clone label -> tab10 clone colors; other label sets -> a qualitative
+    palette chosen by palette_index."""
     adata.obs[col] = adata.obs[col].astype("category")
-    adata.uns[f"{col}_colors"] = build_label_colors(
-        list(adata.obs[col].cat.categories), clone_indexed=clone_indexed
+    adata.uns[f"{col}_colors"] = label_colors_for(
+        list(adata.obs[col].cat.categories),
+        is_primary=is_primary,
+        palette_index=palette_index,
     )
 
 
@@ -256,7 +268,7 @@ def plot_visium_panel(
         set_label_colors(vis_adata, spot_label)
         if has_path:
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
-            set_label_colors(vis_adata, path_label, clone_indexed=False)
+            set_label_colors(vis_adata, path_label, is_primary=False, palette_index=0)
         if has_ref_purity:
             vis_adata.obs[ref_purity_col] = anns_vis[ref_purity_col].values
         vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
@@ -288,7 +300,7 @@ def plot_visium_panel(
                 size=size,
                 library_id=rep_id,
                 ax=axes[ri, ci],
-                cmap="magma_r",
+                cmap=PURITY_CMAP,
                 vmin=0,
                 vmax=1,
                 edgecolors="none",
@@ -302,7 +314,7 @@ def plot_visium_panel(
             size=size,
             library_id=rep_id,
             ax=axes[ri, ci],
-            cmap="magma_r",
+            cmap=PURITY_CMAP,
             vmin=0,
             vmax=1,
             edgecolors="none",
@@ -464,21 +476,7 @@ def plot_visium_loh_baf(
         return vals
 
     # BAF colormap matching plot_heatmap: NaN=white, 0.5=gray
-    baf_colors = [
-        "#1f77b4",
-        "#3b8bc6",
-        "#67a9cf",
-        "#90c4d6",
-        "#b8d6da",
-        "#d9d9d9",
-        "#fddbc7",
-        "#f4a582",
-        "#d6604d",
-        "#b2182b",
-    ]
-    baf_cmap = mcolors.ListedColormap(baf_colors, name="baf_disc")
-    baf_cmap.set_bad("white")
-    baf_norm = mcolors.BoundaryNorm(np.linspace(0, 1, 11), baf_cmap.N, clip=True)
+    baf_cmap, baf_norm = make_baf_cmap()
 
     def _plot_page(pdf, col_data, title):
         fig, axes = plt.subplots(1, ncols, figsize=(6 * ncols, 6), squeeze=False)
@@ -677,7 +675,7 @@ def plot_visium_iters(
                     library_id=rep_id,
                     ax=ax1,
                     edgecolors="none",
-                    cmap="magma_r",
+                    cmap=PURITY_CMAP,
                     vmin=0,
                     vmax=1,
                     img=False,

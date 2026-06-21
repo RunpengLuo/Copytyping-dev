@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.inference.count_data import get_cnp_mask
+from copytyping.plot.plot_common import build_label_colors
 
 
 def plot_scatter_2d_per_cell(
@@ -17,6 +17,8 @@ def plot_scatter_2d_per_cell(
     cn_A: np.ndarray,
     cn_B: np.ndarray,
     cn_C: np.ndarray,
+    imbalanced: np.ndarray,
+    aneuploid: np.ndarray,
     clones: list[str],
     cnprofile: pd.DataFrame,
     anns: pd.DataFrame,
@@ -36,12 +38,12 @@ def plot_scatter_2d_per_cell(
         total_allele_counts: (G, N) total-allele counts (A + B).
         cn_A/cn_B/cn_C: (G, K) per-clone copy numbers.
         clones: clone names, length K.
+        imbalanced/aneuploid: (G,) boolean masks selecting informative rows
+            (from Count_Data.allele_mask["IMBALANCED"] / total_mask["ANEUPLOID"]).
         cnprofile: per-row CNP table (CNP/LENGTH columns for titles).
         anns: per-cell annotations (one row per column N), holds ``label_col``.
         base_props: (G,) RDR baseline; defaults to the global read-count fraction.
     """
-    mask = get_cnp_mask(cn_A, cn_B, cn_C)
-    imbalanced, aneuploid = mask["IMBALANCED"], mask["ANEUPLOID"]
     cluster_indices = np.where(imbalanced | aneuploid)[0]
     labels = anns[label_col].values
 
@@ -53,7 +55,6 @@ def plot_scatter_2d_per_cell(
     with PdfPages(outfile) as pdf:
         for g in cluster_indices:
             row = cnprofile.iloc[g]
-            cnp_str = row.get("CNP", "")
             length_mb = row["LENGTH"] / 1e6 if "LENGTH" in row.index else np.nan
             n_bbc = int(row["#BBC"]) if "#BBC" in row.index else 0
 
@@ -83,8 +84,7 @@ def plot_scatter_2d_per_cell(
             hue = labels[valid]
 
             uniq = sorted(set(hue), key=lambda x: (x != "normal", x))
-            palette = {lab: f"C{i}" for i, lab in enumerate(uniq)}
-            palette["normal"] = "lightgray"
+            palette = dict(zip(uniq, build_label_colors(uniq, clone_indexed=True)))
 
             df = pd.DataFrame({"BAF": baf, "log2RDR": log2rdr, label_col: hue})
 

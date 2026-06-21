@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 # from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle, Polygon
 
+from copytyping.plot.plot_common import BLACK
+
 
 def plot_cnv_profile(
     ax: plt.Axes,
@@ -375,12 +377,6 @@ def plot_cnv_legend(ax: plt.Axes):
     ax.set_aspect("auto")  # was 'equal' -> made legend look too thin
 
     return ax
-
-
-WHITE = (1, 1, 1, 1)
-BLACK = (0, 0, 0, 1)
-RED = (1, 0, 0, 1)
-BLUE = (0, 0, 1, 1)
 
 
 def get_cn_colors():
