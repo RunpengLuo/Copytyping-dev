@@ -8,6 +8,129 @@ from matplotlib.patches import Rectangle, Polygon
 from copytyping.plot.plot_common import BLACK
 
 
+##################################################
+# shared CNP profile scaffolding (cnv + ascn)
+##################################################
+
+
+def _cnp_segment_geometry(
+    cnprofile: pd.DataFrame, wl_segments: pd.DataFrame, contain: bool
+):
+    """Walk whitelist segments per chromosome, mapping bins to genome x-coords.
+
+    contain=True  -> bins fully inside the segment (exact bounds, CNV profile).
+    contain=False -> bins overlapping the segment, clipped to it (ASCN profile).
+
+    Returns (chs, ch_coords, records). ch_coords has len(chs)+1 entries (chrom
+    start offsets, last = genome end); solid chromosome boundaries are at
+    ch_coords[1:-1]. Each record is (bins_seg, bin_starts, bin_ends, seg_offset,
+    is_centromere) for one non-empty segment; is_centromere marks a within-chrom
+    boundary (dashed line drawn at seg_offset by the caller).
+    """
+    wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
+    bins_chs = cnprofile.groupby(by="#CHR", sort=False, observed=True)
+
+    ch_offset = 0
+    ch_coords = []
+    records = []
+    chs = cnprofile["#CHR"].unique()
+    for ch in chs:
+        ch_coords.append(ch_offset)
+        wl_segments_ch = wl_segments_chs.get_group(ch)
+        bins_ch = bins_chs.get_group(ch)
+        n_si = len(wl_segments_ch)
+        for si in range(n_si):
+            wl_segment = wl_segments_ch.iloc[si]
+            wl_start = wl_segment["START"]
+            wl_end = wl_segment["END"]
+            seg_end = ch_offset + (wl_end - wl_start)
+
+            if contain:
+                bins_seg = bins_ch.loc[
+                    (bins_ch["START"] >= wl_start) & (bins_ch["END"] <= wl_end), :
+                ]
+            else:
+                bins_seg = bins_ch.loc[
+                    (bins_ch["END"] > wl_start) & (bins_ch["START"] < wl_end), :
+                ]
+            if bins_seg.empty:
+                ch_offset = seg_end
+                continue
+
+            if contain:
+                bin_starts = (bins_seg["START"] - wl_start + ch_offset).to_numpy()
+                bin_ends = (bins_seg["END"] - wl_start + ch_offset).to_numpy()
+            else:
+                bin_starts = (
+                    bins_seg["START"].clip(lower=wl_start) - wl_start + ch_offset
+                ).to_numpy()
+                bin_ends = (
+                    bins_seg["END"].clip(upper=wl_end) - wl_start + ch_offset
+                ).to_numpy()
+            ch_offset = seg_end
+            records.append((bins_seg, bin_starts, bin_ends, ch_offset, si < n_si - 1))
+    ch_coords.append(ch_offset)  # genome end
+    return chs, ch_coords, records
+
+
+def _draw_chr_boundaries(ax: plt.Axes, ch_coords: list):
+    """Solid chromosome-boundary vlines (extend above axes; skip genome ends)."""
+    for x in ch_coords[1:-1]:
+        line = ax.vlines(
+            x,
+            ymin=0,
+            ymax=1.15,
+            transform=ax.get_xaxis_transform(),
+            linewidth=1,
+            colors=BLACK,
+        )
+        line.set_clip_on(False)
+
+
+def _decorate_cnp_xaxis(
+    ax: plt.Axes, ch_coords: list, chs: list, plot_chrname: bool
+):
+    """Shared x-axis styling for CNP profiles: limits, hidden spines, chrom ticks."""
+    ax.grid(False)
+    ax.set_xlim(0, ch_coords[-1])
+    ax.set_xlabel("")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    if plot_chrname:
+        ax.set_xticks(
+            [
+                ch_coords[i] + (ch_coords[i + 1] - ch_coords[i]) // 2
+                for i in range(len(ch_coords) - 1)
+            ]
+        )
+        ax.set_xticklabels(chs, rotation=60, fontsize=8)
+        ax.tick_params(
+            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
+        )
+    else:
+        ax.set_xticks([])
+        ax.set_xticklabels([])
+
+
+def _clone_ylabels(
+    num_clones: int, plot_clone_name: bool, clone_ploidies: list | None
+):
+    """Per-clone y-tick labels (top-to-bottom): 'Clone N' (+ optional ploidy line)."""
+    ylabels = []
+    for ci in range(num_clones, 0, -1):
+        lines = []
+        if plot_clone_name:
+            lines.append(f"Clone {ci}")
+        else:
+            lines.append(str(ci))
+        if clone_ploidies is not None:
+            clone_key = f"clone{ci}"
+            if clone_key in clone_ploidies:
+                lines.append(f"ploidy {round(clone_ploidies[clone_key], 2)}")
+        ylabels.append("\n".join(lines))
+    return ylabels
+
+
 def plot_cnv_profile(
     ax: plt.Axes,
     cnprofile: pd.DataFrame,
@@ -35,111 +158,75 @@ def plot_cnv_profile(
     )  # first column is normal
     h = height / num_clones
 
-    wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
-    bins_chs = cnprofile.groupby(by="#CHR", sort=False, observed=True)
-
-    ch_offset = 0
-    ch_coords = []
-    seg_coords = []
-    chs = cnprofile["#CHR"].unique()
-    for ch in chs:
-        ch_coords.append(ch_offset)
-        wl_segments_ch = wl_segments_chs.get_group(ch)
-        bins_ch = bins_chs.get_group(ch)
-        for si in range(len(wl_segments_ch)):
-            wl_segment = wl_segments_ch.iloc[si]
-            wl_start = wl_segment["START"]
-            wl_end = wl_segment["END"]
-            seg_end = ch_offset + (wl_end - wl_start)
-
-            bins_seg = bins_ch.loc[
-                (bins_ch["START"] >= wl_start) & (bins_ch["END"] <= wl_end), :
-            ]
-            if bins_seg.empty:
-                ch_offset = seg_end
-                continue
-
-            bin_starts = (bins_seg["START"] - wl_start + ch_offset).to_numpy()
-            bin_ends = (bins_seg["END"] - wl_start + ch_offset).to_numpy()
-            ch_offset = seg_end
-            if si < len(wl_segments_ch) - 1:
-                seg_coords.append(ch_offset)  # centromere offset
-
-            has_pi_viol = "PI_VIOL" in bins_seg.columns
-            for bi in range(len(bins_seg)):
-                x0, bin_end = bin_starts[bi], bin_ends[bi]
-                w = bin_end - x0
-                bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]  # skip normal
-                for k in range(num_clones):
-                    cna, cnb = (
-                        int(bin_cnvs[num_clones - k - 1].split("|")[0]),
-                        int(bin_cnvs[num_clones - k - 1].split("|")[1]),
-                    )
-                    color = state_style.get((cna, cnb), state_style["default"])
-                    y0 = k * h
-                    ax.add_patch(
-                        Rectangle(
-                            (x0, y0),
-                            w,
-                            h,
-                            facecolor=color,
-                            edgecolor="none",
-                            transform=ax.get_xaxis_transform(),
-                            linewidth=0,
-                            antialiased=False,
-                        )
-                    )
-                    # Mirrored event: B-allele has more copies. Right-pointing
-                    # triangle marks the (a, b) orientation (top-left → mid-right
-                    # → bottom-left).
-                    if cnb > cna:
-                        ax.add_patch(
-                            Polygon(
-                                [[x0, y0 + h], [x0 + w, y0 + h / 2], [x0, y0]],
-                                linewidth=0,
-                                closed=True,
-                                facecolor=BLACK,
-                                transform=ax.get_xaxis_transform(),
-                            )
-                        )
-
-                # PI violation indicator: colored line at top of segment
-                if has_pi_viol:
-                    viol = bool(bins_seg["PI_VIOL"].iloc[bi])
-                    edge_color = "#d62728" if viol else "#2ca02c"
-                    y_top = num_clones * h
-                    ax.plot(
-                        [x0, x0 + w],
-                        [y_top, y_top],
-                        color=edge_color,
-                        linewidth=3,
-                        solid_capstyle="butt",
-                        transform=ax.get_xaxis_transform(),
-                    )
-
-            # centromere as dashed boundary
-            if si < len(wl_segments_ch) - 1:
-                ax.vlines(
-                    ch_offset,
-                    ymin=0,
-                    ymax=1,
-                    transform=ax.get_xaxis_transform(),
-                    linewidth=0.5,
-                    colors=BLACK,
-                    linestyles="dashed",
+    chs, ch_coords, records = _cnp_segment_geometry(
+        cnprofile, wl_segments, contain=True
+    )
+    for bins_seg, bin_starts, bin_ends, seg_offset, is_centromere in records:
+        has_pi_viol = "PI_VIOL" in bins_seg.columns
+        for bi in range(len(bins_seg)):
+            x0, bin_end = bin_starts[bi], bin_ends[bi]
+            w = bin_end - x0
+            bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]  # skip normal
+            for k in range(num_clones):
+                cna, cnb = (
+                    int(bin_cnvs[num_clones - k - 1].split("|")[0]),
+                    int(bin_cnvs[num_clones - k - 1].split("|")[1]),
                 )
-        # chromosome boundary — solid; skip after last chrom
-        if ch != chs[-1]:
-            line = ax.vlines(
-                ch_offset,
+                color = state_style.get((cna, cnb), state_style["default"])
+                y0 = k * h
+                ax.add_patch(
+                    Rectangle(
+                        (x0, y0),
+                        w,
+                        h,
+                        facecolor=color,
+                        edgecolor="none",
+                        transform=ax.get_xaxis_transform(),
+                        linewidth=0,
+                        antialiased=False,
+                    )
+                )
+                # Mirrored event: B-allele has more copies. Right-pointing
+                # triangle marks the (a, b) orientation (top-left → mid-right
+                # → bottom-left).
+                if cnb > cna:
+                    ax.add_patch(
+                        Polygon(
+                            [[x0, y0 + h], [x0 + w, y0 + h / 2], [x0, y0]],
+                            linewidth=0,
+                            closed=True,
+                            facecolor=BLACK,
+                            transform=ax.get_xaxis_transform(),
+                        )
+                    )
+
+            # PI violation indicator: colored line at top of segment
+            if has_pi_viol:
+                viol = bool(bins_seg["PI_VIOL"].iloc[bi])
+                edge_color = "#d62728" if viol else "#2ca02c"
+                y_top = num_clones * h
+                ax.plot(
+                    [x0, x0 + w],
+                    [y_top, y_top],
+                    color=edge_color,
+                    linewidth=3,
+                    solid_capstyle="butt",
+                    transform=ax.get_xaxis_transform(),
+                )
+
+        # centromere as dashed boundary
+        if is_centromere:
+            ax.vlines(
+                seg_offset,
                 ymin=0,
-                ymax=1.15,
+                ymax=1,
                 transform=ax.get_xaxis_transform(),
-                linewidth=1,
+                linewidth=0.5,
                 colors=BLACK,
+                linestyles="dashed",
             )
-            line.set_clip_on(False)
-    ch_coords.append(ch_offset)  # genome end
+    _draw_chr_boundaries(ax, ch_coords)
+    ch_offset = ch_coords[-1]
 
     # black horizontal separators between adjacent clones
     for k in range(1, num_clones):
@@ -152,41 +239,16 @@ def plot_cnv_profile(
             colors=BLACK,
         )
 
-    ax.grid(False)
-    ax.set_xlim(0, ch_offset)
-    ax.set_xlabel("")
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    if plot_chrname:
-        ax.set_xticks(
-            [
-                ch_coords[i] + (ch_coords[i + 1] - ch_coords[i]) // 2
-                for i in range(len(ch_coords) - 1)
-            ]
-        )
-        ax.set_xticklabels(chs, rotation=60, fontsize=8)
-        ax.tick_params(
-            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
-        )
-    else:
-        ax.set_xticks([])
-        ax.set_xticklabels([])
+    _decorate_cnp_xaxis(ax, ch_coords, chs, plot_chrname)
 
     # Y-axis: clone label + optional ploidy (multi-line, bold)
     ax.set_yticks([h * (i + 0.5) for i in range(num_clones)])
-    ylabels = []
-    for ci in range(num_clones, 0, -1):
-        lines = []
-        if plot_clone_name:
-            lines.append(f"Clone {ci}")
-        else:
-            lines.append(str(ci))
-        if clone_ploidies is not None:
-            clone_key = f"clone{ci}"
-            if clone_key in clone_ploidies:
-                lines.append(f"ploidy {round(clone_ploidies[clone_key], 2)}")
-        ylabels.append("\n".join(lines))
-    ax.set_yticklabels(ylabels, fontsize=8, fontweight="bold", va="center")
+    ax.set_yticklabels(
+        _clone_ylabels(num_clones, plot_clone_name, clone_ploidies),
+        fontsize=8,
+        fontweight="bold",
+        va="center",
+    )
     ax.set_ylim(0, num_clones * h)
     ax.tick_params(axis="y", which="both", left=True, right=False, length=4)
 
@@ -499,138 +561,99 @@ def plot_ascn_profile(
     h_sub = h_pair / 2
     y_gap = clone_gap / 2
 
-    wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
-    bins_chs = cnprofile.groupby(by="#CHR", sort=False, observed=True)
-
-    ch_offset = 0
-    ch_coords = []
-    seg_coords = []
-    chs = cnprofile["#CHR"].unique()
-    for ch in chs:
-        ch_coords.append(ch_offset)
-        wl_segments_ch = wl_segments_chs.get_group(ch)
-        bins_ch = bins_chs.get_group(ch)
-        for si in range(len(wl_segments_ch)):
-            wl_segment = wl_segments_ch.iloc[si]
-            wl_start = wl_segment["START"]
-            wl_end = wl_segment["END"]
-            seg_end = ch_offset + (wl_end - wl_start)
-
-            bins_seg = bins_ch.loc[
-                (bins_ch["END"] > wl_start) & (bins_ch["START"] < wl_end), :
+    chs, ch_coords, records = _cnp_segment_geometry(
+        cnprofile, wl_segments, contain=False
+    )
+    for bins_seg, bin_starts, bin_ends, seg_offset, is_centromere in records:
+        for bi in range(len(bins_seg)):
+            x0, bin_end = bin_starts[bi], bin_ends[bi]
+            w = bin_end - x0
+            bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]
+            clone_states = [
+                (int(cn.split("|")[0]), int(cn.split("|")[1])) for cn in bin_cnvs
             ]
-            if bins_seg.empty:
-                ch_offset = seg_end
-                continue
-
-            bin_starts = (
-                bins_seg["START"].clip(lower=wl_start) - wl_start + ch_offset
-            ).to_numpy()
-            bin_ends = (
-                bins_seg["END"].clip(upper=wl_end) - wl_start + ch_offset
-            ).to_numpy()
-            ch_offset = seg_end
-            if si < len(wl_segments_ch) - 1:
-                seg_coords.append(ch_offset)
-
-            for bi in range(len(bins_seg)):
-                x0, bin_end = bin_starts[bi], bin_ends[bi]
-                w = bin_end - x0
-                bin_cnvs = bins_seg["CNP"].iloc[bi].split(";")[1:]
-                clone_states = [
-                    (int(cn.split("|")[0]), int(cn.split("|")[1])) for cn in bin_cnvs
-                ]
-                # Mirrored LOH: every clone state is LOH (a==0 or b==0),
-                # AND the bin contains BOTH an A-LOH clone (a>0,b=0) and a
-                # B-LOH clone (a=0,b>0).
-                any_non_loh = any(a > 0 and b > 0 for a, b in clone_states)
-                dirs = [
-                    (1 if (a > 0 and b == 0) else (-1 if (a == 0 and b > 0) else 0))
-                    for a, b in clone_states
-                ]
-                has_mirror = (not any_non_loh) and (1 in dirs) and (-1 in dirs)
-                for k in range(num_clones):
-                    cna, cnb = clone_states[num_clones - k - 1]
-                    direction = dirs[num_clones - k - 1]
-                    y_b = k * h + y_gap
-                    y_a = y_b + h_sub
-                    ax.add_patch(
-                        Rectangle(
-                            (x0, y_b),
-                            w,
-                            h_sub,
-                            facecolor=state_style.get(cnb, state_style["default"]),
-                            edgecolor="none",
-                            transform=ax.get_xaxis_transform(),
-                            linewidth=0,
-                            alpha=1.0 if cnb == 0 else 0.5,
-                            rasterized=True,
-                        )
-                    )
-                    ax.add_patch(
-                        Rectangle(
-                            (x0, y_a),
-                            w,
-                            h_sub,
-                            facecolor=state_style.get(cna, state_style["default"]),
-                            edgecolor="none",
-                            transform=ax.get_xaxis_transform(),
-                            linewidth=0,
-                            alpha=1.0 if cna == 0 else 0.5,
-                            rasterized=True,
-                        )
-                    )
-
-                    # Mirrored-LOH symbol: chevrons ≪ / ≫ spanning clone height.
-                    # A-LOH → ≫ (apex right), B-LOH → ≪ (apex left).
-                    if has_mirror and direction != 0:
-                        n_chev = 2
-                        chev_unit = w * 0.12
-                        gap = w * 0.04
-                        total_chev_w = n_chev * chev_unit + (n_chev - 1) * gap
-                        x_start = x0 + (w - total_chev_w) / 2.0
-                        y_high = y_b + 2 * h_sub
-                        y_low = y_b
-                        y_mid = (y_high + y_low) / 2.0
-                        for ci in range(n_chev):
-                            cx_left = x_start + ci * (chev_unit + gap)
-                            cx_right = cx_left + chev_unit
-                            if direction > 0:
-                                xs = [cx_left, cx_right, cx_left]
-                            else:
-                                xs = [cx_right, cx_left, cx_right]
-                            ax.plot(
-                                xs,
-                                [y_high, y_mid, y_low],
-                                color="black",
-                                linewidth=1.2,
-                                alpha=0.5,
-                                solid_capstyle="round",
-                                transform=ax.get_xaxis_transform(),
-                            )
-
-            if si < len(wl_segments_ch) - 1:
-                for k in range(num_clones):
-                    ax.vlines(
-                        ch_offset,
-                        ymin=k * h + y_gap,
-                        ymax=k * h + y_gap + h_pair,
+            # Mirrored LOH: every clone state is LOH (a==0 or b==0),
+            # AND the bin contains BOTH an A-LOH clone (a>0,b=0) and a
+            # B-LOH clone (a=0,b>0).
+            any_non_loh = any(a > 0 and b > 0 for a, b in clone_states)
+            dirs = [
+                (1 if (a > 0 and b == 0) else (-1 if (a == 0 and b > 0) else 0))
+                for a, b in clone_states
+            ]
+            has_mirror = (not any_non_loh) and (1 in dirs) and (-1 in dirs)
+            for k in range(num_clones):
+                cna, cnb = clone_states[num_clones - k - 1]
+                direction = dirs[num_clones - k - 1]
+                y_b = k * h + y_gap
+                y_a = y_b + h_sub
+                ax.add_patch(
+                    Rectangle(
+                        (x0, y_b),
+                        w,
+                        h_sub,
+                        facecolor=state_style.get(cnb, state_style["default"]),
+                        edgecolor="none",
                         transform=ax.get_xaxis_transform(),
-                        linewidth=0.5,
-                        colors=BLACK,
-                        linestyles="dashed",
+                        linewidth=0,
+                        alpha=1.0 if cnb == 0 else 0.5,
+                        rasterized=True,
                     )
-        if ch != chs[-1]:
-            line = ax.vlines(
-                ch_offset,
-                ymin=0,
-                ymax=1.15,
-                transform=ax.get_xaxis_transform(),
-                linewidth=1,
-                colors=BLACK,
-            )
-            line.set_clip_on(False)
-    ch_coords.append(ch_offset)
+                )
+                ax.add_patch(
+                    Rectangle(
+                        (x0, y_a),
+                        w,
+                        h_sub,
+                        facecolor=state_style.get(cna, state_style["default"]),
+                        edgecolor="none",
+                        transform=ax.get_xaxis_transform(),
+                        linewidth=0,
+                        alpha=1.0 if cna == 0 else 0.5,
+                        rasterized=True,
+                    )
+                )
+
+                # Mirrored-LOH symbol: chevrons ≪ / ≫ spanning clone height.
+                # A-LOH → ≫ (apex right), B-LOH → ≪ (apex left).
+                if has_mirror and direction != 0:
+                    n_chev = 2
+                    chev_unit = w * 0.12
+                    gap = w * 0.04
+                    total_chev_w = n_chev * chev_unit + (n_chev - 1) * gap
+                    x_start = x0 + (w - total_chev_w) / 2.0
+                    y_high = y_b + 2 * h_sub
+                    y_low = y_b
+                    y_mid = (y_high + y_low) / 2.0
+                    for ci in range(n_chev):
+                        cx_left = x_start + ci * (chev_unit + gap)
+                        cx_right = cx_left + chev_unit
+                        if direction > 0:
+                            xs = [cx_left, cx_right, cx_left]
+                        else:
+                            xs = [cx_right, cx_left, cx_right]
+                        ax.plot(
+                            xs,
+                            [y_high, y_mid, y_low],
+                            color="black",
+                            linewidth=1.2,
+                            alpha=0.5,
+                            solid_capstyle="round",
+                            transform=ax.get_xaxis_transform(),
+                        )
+
+        if is_centromere:
+            for k in range(num_clones):
+                ax.vlines(
+                    seg_offset,
+                    ymin=k * h + y_gap,
+                    ymax=k * h + y_gap + h_pair,
+                    transform=ax.get_xaxis_transform(),
+                    linewidth=0.5,
+                    colors=BLACK,
+                    linestyles="dashed",
+                )
+    _draw_chr_boundaries(ax, ch_coords)
+    ch_offset = ch_coords[-1]
 
     # Outline each clone's A and B rows with a single thin black border
     for k in range(num_clones):
@@ -649,41 +672,16 @@ def plot_ascn_profile(
                 )
             )
 
-    ax.grid(False)
-    ax.set_xlim(0, ch_offset)
-    ax.set_xlabel("")
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    if plot_chrname:
-        ax.set_xticks(
-            [
-                ch_coords[i] + (ch_coords[i + 1] - ch_coords[i]) // 2
-                for i in range(len(ch_coords) - 1)
-            ]
-        )
-        ax.set_xticklabels(chs, rotation=60, fontsize=8)
-        ax.tick_params(
-            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
-        )
-    else:
-        ax.set_xticks([])
-        ax.set_xticklabels([])
+    _decorate_cnp_xaxis(ax, ch_coords, chs, plot_chrname)
 
     # Major y ticks at clone-center → "Clone N (prop%)" + optional ploidy
     ax.set_yticks([h * (i + 0.5) for i in range(num_clones)])
-    ylabels = []
-    for ci in range(num_clones, 0, -1):
-        lines = []
-        if plot_clone_name:
-            lines.append(f"Clone {ci}")
-        else:
-            lines.append(str(ci))
-        if clone_ploidies is not None:
-            clone_key = f"clone{ci}"
-            if clone_key in clone_ploidies:
-                lines.append(f"ploidy {round(clone_ploidies[clone_key], 2)}")
-        ylabels.append("\n".join(lines))
-    ax.set_yticklabels(ylabels, fontsize=8, fontweight="bold", va="center")
+    ax.set_yticklabels(
+        _clone_ylabels(num_clones, plot_clone_name, clone_ploidies),
+        fontsize=8,
+        fontweight="bold",
+        va="center",
+    )
 
     # Minor y ticks: A/B sub-labels centered on each sub-bar
     minor_positions = []
