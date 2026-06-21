@@ -1,26 +1,32 @@
-import copy
 import logging
 import os
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
-from scipy import sparse
 
 from copytyping.copytyping_parser import check_arguments_inference
+from copytyping.inference.base_model import Base_Model
 from copytyping.inference.cell_model import Cell_Model
-from copytyping.inference.clustering import kmeans_copytyping
-from copytyping.inference.model_utils import make_baseline_fn
 from copytyping.inference.spot_model import Spot_Model
+from copytyping.inference.count_data import (
+    CountData,
+    initialize_count_data,
+    restrict_masks_to_cnp,
+    save_count_data,
+    segment_count_data,
+    smooth_spatial_neighbors,
+)
+from copytyping.inference.model_utils import (
+    make_baseline_fn,
+    model_kwargs_from_args,
+    save_model_params,
+)
 from copytyping.io_utils import (
     read_cell_types,
     load_bulk_cnprofile,
     read_bbc_phases,
-    load_bbc_modality,
-    apply_bbc_phasing,
     aggregate_bbc_to_seg,
-    load_spatial_neighbors,
-    union_align_barcodes,
+    build_spatial_graphs,
 )
 from copytyping.plot.plot_common import plot_count_histograms
 from copytyping.plot.plot_modality import plot_modality_panel
@@ -29,208 +35,115 @@ from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
+    log_arguments,
     normalize_args,
-    save_phased_bbc,
 )
 
 
 def run(args=None):
+    """Validate args, load full inputs, then dispatch to the platform pipeline."""
     logging.info("run copytyping inference")
     args = normalize_args(args)
     args = check_arguments_inference(args)
-    sample = args["sample"]
     platform = args["platform"]
-    data_types = args["data_types"]
-    ref_label = args["ref_label"]
+    assay_types = args["assay_types"]
     out_dir = args["out_dir"]
-    out_prefix = args["out_prefix"] or str(sample)
-    os.makedirs(out_dir, exist_ok=True)
-    _file_handler = add_file_logging(out_dir)
+    out_prefix = args["out_prefix"] or str(args["sample"])
     proc_dir = os.path.join(out_dir, "processed_data")
+    os.makedirs(out_dir, exist_ok=True)
     os.makedirs(proc_dir, exist_ok=True)
+    _file_handler = add_file_logging(out_dir)
 
-    logging.info(f"sample={sample}, platform={platform}, data_types={data_types}")
+    log_arguments(args)
 
-    # bulk data
-    bbc_phases, phase_bbc, switchprobs_bbc = read_bbc_phases(args["bbc_phases"])
-    seg_df, clones, clone_props = load_bulk_cnprofile(args["seg_ucn"], solfile=args["solfile"])
-
-    cell_type_df = read_cell_types(args["cell_type"], req_cols={"BARCODE", ref_label})
-
-    data_sources = {}
-    raw_data_sources = {}
-    seg_data_sources = {}
-    bbc_data_by_dt = {}
-    spatial_graphs = {}
-    exclude_set = set(args["exclude"].split(",")) if args["exclude"] else None
-    for data_type in data_types:
-        barcodes_df, bbc_df, X_bbc, a_bbc, b_bbc = load_bbc_modality(
-            args, data_type, cell_type_df, ref_label, exclude_set
-        )
-        bbc_df, B_bbc, N_bbc = apply_bbc_phasing(
-            bbc_df, bbc_phases, a_bbc, b_bbc, data_type
-        )
-        seg_df_dt, X_seg, B_seg, N_seg = aggregate_bbc_to_seg(
-            bbc_df, seg_df, X_bbc, B_bbc, N_bbc, data_type
-        )
-
-        # Build the FULL seg_sx (saved to disk so validate can plot all CN states)
-        seg_sx_full = SX_Data(
-            barcodes_df, seg_df_dt, X_seg, B_seg, N_seg, baf_clip=args["baf_clip"]
-        )
-        seg_data_sources[data_type] = seg_sx_full
-
-        bbc_data_by_dt[data_type] = (bbc_df, X_bbc, B_bbc, N_bbc)
-        if args["save_processed_data"]:
-            save_phased_bbc(
-                bbc_df,
-                X_bbc,
-                B_bbc,
-                N_bbc,
-                os.path.join(proc_dir, f"{out_prefix}.{data_type}.bbc"),
-            )
-
-        keep_cn_row = args["keep_cn_row"]
-        if keep_cn_row:
-            keep_set = {r.strip() for r in keep_cn_row.split(",") if r.strip()}
-            keep_mask = seg_df_dt["CNP"].isin(keep_set).to_numpy()
-            n_kept = int(keep_mask.sum())
-            logging.info(
-                f"[{data_type}] keep_cn_row: model uses {n_kept}/{len(seg_df_dt)} "
-                f"segments; full data saved to disk (whitelist: {sorted(keep_set)})"
-            )
-            assert n_kept > 0, "keep_cn_row matched 0 segments; check format vs CNP"
-            seg_sx = SX_Data(
-                barcodes_df,
-                seg_df_dt[keep_mask].reset_index(drop=True),
-                X_seg[keep_mask],
-                B_seg[keep_mask],
-                N_seg[keep_mask],
-                baf_clip=args["baf_clip"],
-            )
-        else:
-            seg_sx = seg_sx_full
-
-        h5ad_path = args[f"{data_type}_h5ad"]
-        if h5ad_path is not None and platform in SPATIAL_PLATFORMS:
-            adata = sc.read_h5ad(h5ad_path)
-            if "spatial" in adata.obsm:
-                spatial_graphs[data_type] = load_spatial_neighbors(
-                    h5ad_path, n_neighs=args["n_neighs"]
-                )
-
-        raw_data_sources[data_type] = seg_sx.to_cluster_level()
-        max_k = args["max_smooth_k"]
-        if data_type in spatial_graphs and max_k > 0:
-            seg_sx_smoothed = copy.deepcopy(seg_sx)
-            seg_sx_smoothed.apply_adaptive_smoothing(
-                spatial_graphs[data_type],
-                max_k=max_k,
-                min_umi=args["min_umi_per_spot"],
-                min_snp_umi=args["min_snp_umi_per_spot"],
-            )
-            data_sources[data_type] = seg_sx_smoothed.to_cluster_level()
-        else:
-            data_sources[data_type] = raw_data_sources[data_type]
-
-    cnv_blocks = seg_data_sources[data_types[0]].cnv_blocks
-    cnv_blocks.to_csv(
-        os.path.join(proc_dir, f"{out_prefix}.cnp_profile.tsv"),
-        sep="\t",
-        index=False,
+    # ---- load inputs -------------------------------
+    bbc_phases = read_bbc_phases(args["bbc_phases"])
+    seg_df, clones, clone_props, cn_A, cn_B, cn_C, BAF = load_bulk_cnprofile(
+        args["seg_ucn"], solfile=args["solfile"], baf_clip=args["baf_clip"]
+    )
+    cell_type_df = read_cell_types(
+        args["cell_type"], req_cols={"BARCODE", args["ref_label"]}
     )
 
-    barcodes, modality_masks = union_align_barcodes(data_sources, data_types)
+    bbc_count_datas = {}
+    for assay_type in assay_types:
+        cd = initialize_count_data(
+            args[f"{assay_type}_barcodes"],
+            args[f"{assay_type}_X_count"],
+            args[f"{assay_type}_A_allele"],
+            args[f"{assay_type}_B_allele"],
+            args[f"{assay_type}_cnv_segments"],
+            assay_type,
+            cell_type_df,
+            args["ref_label"],
+            args["exclude_cell_types"],
+        )
+        cd.annotate_cnps(bbc_phases, seg_df, clones, cn_A, cn_B, cn_C, BAF)
+        bbc_count_datas[assay_type] = cd
 
-    instance = {"single_cell": Cell_Model, "spatial": Spot_Model}[platform](
-        barcodes,
-        platform,
-        data_types,
-        data_sources,
-        proc_dir,
-        out_prefix,
-        args["verbosity"],
-        modality_masks=modality_masks,
-        args=args,
-    )
-    model_params, final_ll = instance.fit(fit_mode=args["fit_mode"])
+    spatial_graphs = None
+    if platform in SPATIAL_PLATFORMS:
+        spatial_graphs = build_spatial_graphs(
+            assay_types=assay_types,
+            h5ad_paths={assay: args[f"{assay}_h5ad"] for assay in assay_types},
+            n_neighs=args["n_neighs"],
+        )
 
+    # ---- Copy-typing inference -------------------------------
     label = f"{args['method']}_label"
-    if args["method"] == "kmeans":
-        anns, clone_props = kmeans_copytyping(
-            data_sources, barcodes, ref_label, data_sources[data_types[0]].K, label
-        )
-    else:
-        anns, clone_props = instance.predict(
-            args["fit_mode"],
-            model_params,
-            label=label,
-        )
-    logging.info(
-        "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
+    model, anns, model_params = run_copytyping(
+        assay_types, bbc_count_datas, platform, label, spatial_graphs, args
     )
 
+    # ---- write annotations + model params -------------------------------
     anns.to_csv(
-        os.path.join(out_dir, f"{out_prefix}.annotations.tsv"),
-        sep="\t",
-        index=False,
+        os.path.join(out_dir, f"{out_prefix}.annotations.tsv"), sep="\t", index=False
     )
 
-    param_dict = {"log_likelihood": np.array([final_ll])}
-    for data_type in data_types:
-        for key in ["lambda", "theta", "tau", "inv_phi"]:
-            pk = f"{data_type}-{key}"
-            if pk in model_params:
-                param_dict[pk.replace("-", "_")] = np.atleast_1d(model_params[pk])
-    np.savez(os.path.join(proc_dir, f"{out_prefix}.model_params.npz"), **param_dict)
-
-    pd.Series(
-        {
-            "sample": sample,
-            "platform": platform,
-            "data_types": ",".join(data_types),
-            "label": label,
-            "ref_label": ref_label,
-        }
-    ).to_csv(
-        os.path.join(proc_dir, f"{out_prefix}.metadata.tsv"),
-        sep="\t",
-        header=False,
+    bin_count_datas = segment_count_data(
+        bbc_count_datas, "cnp_bin", args["min_snp_count"], args["max_bin_length"]
     )
-
+    seg_count_datas = segment_count_data(bbc_count_datas, "cnp_segment")
     if args["save_processed_data"]:
-        for data_type in data_types:
-            sx = seg_data_sources[data_type]
-            prefix = os.path.join(proc_dir, f"{out_prefix}.{data_type}")
-            sparse.save_npz(f"{prefix}.seg.X.npz", sparse.csr_matrix(sx.X))
-            sparse.save_npz(f"{prefix}.seg.Y.npz", sparse.csr_matrix(sx.Y))
-            sparse.save_npz(f"{prefix}.seg.D.npz", sparse.csr_matrix(sx.D))
-            logging.info(
-                f"saved {data_type} count matrices: X/Y/D shape=({sx.G}, {sx.N})"
-            )
+        save_count_data(bbc_count_datas, os.path.join(proc_dir, f"{out_prefix}.bbc"))
+        save_count_data(seg_count_datas, os.path.join(proc_dir, f"{out_prefix}.seg"))
+    #
 
-        if instance.labeling_trace:
-            trace_dict = {}
-            for i, lt in enumerate(instance.labeling_trace):
-                trace_dict[f"labels_{i}"] = lt["labels"]
-                trace_dict[f"max_posterior_{i}"] = lt["max_posterior"]
-                if "tumor_purity" in lt:
-                    trace_dict[f"tumor_purity_{i}"] = lt["tumor_purity"]
-            trace_dict["n_iters"] = np.array([len(instance.labeling_trace)])
-            np.savez(
-                os.path.join(proc_dir, f"{out_prefix}.labeling_trace.npz"),
-                **trace_dict,
-            )
+    # ---- seg-level SX_Data bridged from the CountData (plotting only) ----
+    # No second disk read: bbc_data already holds the phase-corrected counts
+    # (cd.B == apply_bbc_phasing's B_bbc), so the seg aggregation is identical.
+    seg_data_sources = {}
+    bbc_data_by_assay = {}
+    for assay_type in assay_types:
+        cd = bbc_count_datas[assay_type]
+        bbc_df = cd.coordinates.merge(
+            bbc_phases[["#CHR", "START", "END", "PHASE"]],
+            on=["#CHR", "START", "END"],
+            how="left",
+        )
+        X_bbc, B_bbc, N_bbc = cd.X, cd.B, cd.A + cd.B
+        seg_df_assay, X_seg, B_seg, N_seg = aggregate_bbc_to_seg(
+            bbc_df, seg_df, X_bbc, B_bbc, N_bbc, assay_type
+        )
+        seg_data_sources[assay_type] = SX_Data(
+            cd.barcodes, seg_df_assay, X_seg, B_seg, N_seg, baf_clip=args["baf_clip"]
+        )
+        bbc_data_by_assay[assay_type] = (bbc_df, X_bbc, B_bbc, N_bbc)
 
-    region_bed = args["region_bed"]
-    genome_size = args["genome_size"]
+    cnv_blocks = seg_data_sources[assay_types[0]].cnv_blocks
+    cnv_blocks.to_csv(
+        os.path.join(proc_dir, f"{out_prefix}.cnp_profile.tsv"), sep="\t", index=False
+    )
+    unsmoothed_data_sources = {
+        assay: sx.to_cluster_level() for assay, sx in seg_data_sources.items()
+    }
+
+    # ---- plots ----------------------------------------------------------
     plot_dir = os.path.join(out_dir, "plots")
     os.makedirs(plot_dir, exist_ok=True)
-    dpi = args["dpi"]
-    heatmap_agg = args["heatmap_agg"]
-    # RDR baseline from model reference cells; fall back to normal labels (kmeans)
-    is_reference = instance.is_reference
-    ref_clone = instance.ref_clone
+    # RDR baseline from model reference cells; fall back to normal labels
+    is_reference = model.is_reference
+    ref_clone = model.ref_clone
     no_normal = args["no_normal"]
     if is_reference is None:
         is_reference = (anns[label] == "normal").to_numpy()
@@ -238,60 +151,150 @@ def run(args=None):
         no_normal = False
     baseline_fn = make_baseline_fn(is_reference, ref_clone, no_normal)
     plot_labels = [label]
-    if ref_label in anns.columns:
-        plot_labels.append(ref_label)
+    if args["ref_label"] in anns.columns:
+        plot_labels.append(args["ref_label"])
 
     if args["method"] == "copytyping":
         plot_count_histograms(
             seg_data_sources,
-            sample,
+            args["sample"],
             os.path.join(plot_dir, f"{out_prefix}.count_histograms.pdf"),
-            dpi=dpi,
+            dpi=args["dpi"],
         )
 
-    is_spatial = platform in SPATIAL_PLATFORMS
-    platform_str = "spatial" if is_spatial else "single_cell"
-    for data_type in data_types:
+    for assay_type in assay_types:
         plot_modality_panel(
-            sample=sample,
-            data_type=data_type,
+            sample=args["sample"],
+            assay_type=assay_type,
             prefix=out_prefix,
             plot_dir=plot_dir,
-            seg_sx=seg_data_sources[data_type],
-            raw_clust=raw_data_sources[data_type],
-            bbc_data=bbc_data_by_dt[data_type],
+            seg_sx=seg_data_sources[assay_type],
+            raw_clust=unsmoothed_data_sources[assay_type],
+            bbc_data=bbc_data_by_assay[assay_type],
             cnv_blocks=cnv_blocks,
             anns=anns,
             baseline_fn=baseline_fn,
-            cluster_base_props=model_params.get(f"{data_type}-lambda"),
+            cluster_base_props=model_params.get(f"{assay_type}-lambda"),
             primary_label=label,
             plot_labels=plot_labels,
-            theta=model_params.get(f"{data_type}-theta"),
-            region_bed=region_bed,
-            genome_size=genome_size,
-            dpi=dpi,
-            heatmap_agg=heatmap_agg,
+            theta=model_params.get(f"{assay_type}-theta"),
+            region_bed=args["region_bed"],
+            genome_size=args["genome_size"],
+            dpi=args["dpi"],
+            heatmap_agg=args["heatmap_agg"],
             min_snp_count=args["min_snp_count"],
             max_bin_length=args["max_bin_length"],
-            platform_str=platform_str,
+            platform_str=platform,
             ascn_profile=args["ascn_profile"],
         )
 
-    if is_spatial and args["gex_h5ad"]:
+    if platform in SPATIAL_PLATFORMS and args["gex_h5ad"]:
         plot_visium_all(
-            sample=sample,
+            sample=args["sample"],
             anns=anns,
             h5ad_source=args["gex_h5ad"],
-            raw_clust=raw_data_sources["gex"],
-            plot_dir=plot_dir,
+            raw_clust=unsmoothed_data_sources["gex"],
+            plot_dir=os.path.join(out_dir, "plots"),
             spot_label=label,
-            ref_label=ref_label,
-            labeling_trace=getattr(instance, "labeling_trace", None) or None,
+            ref_label=args["ref_label"],
+            labeling_trace=getattr(model, "labeling_trace", None) or None,
             barcodes=anns,
             clones=list(seg_data_sources["gex"].clones),
-            dpi=dpi,
+            dpi=args["dpi"],
         )
 
     logging.info(f"inference complete. outputs in {out_dir}")
     logging.root.removeHandler(_file_handler)
     _file_handler.close()
+
+
+def run_copytyping(
+    assay_types: list[str],
+    bbc_data: dict[str, CountData],
+    platform: str,
+    label: str,
+    spatial_graphs: dict | None,
+    args: dict,
+) -> tuple[Base_Model, pd.DataFrame, dict, float]:
+    """Cluster the annotated BBC CountData and fit the platform model.
+
+    Operates purely on the CountData ``bbc_data`` (+ spatial neighbor graphs); the
+    legacy SX_Data is never touched. Returns ``(model, anns, model_params,
+    model_ll)``. Single-cell / multiome run Cell_Model on the jointly-clustered
+    CountData. Spatial first smooths the clustered CountData over the spot
+    neighbor graphs (``smooth_spatial_neighbors``), then runs Spot_Model.
+    """
+    out_prefix = args["out_prefix"] or str(args["sample"])
+    proc_dir = os.path.join(args["out_dir"], "processed_data")
+
+    # joint cluster-level aggregation across modalities (CountData EM input)
+    cluster_count_data = segment_count_data(bbc_data, agg_level="cnp_cluster")
+    restrict_masks_to_cnp(cluster_count_data, args["keep_cn_row"])
+
+    if platform in SPATIAL_PLATFORMS:
+        smoothed_count_data = smooth_spatial_neighbors(
+            cluster_count_data,
+            spatial_graphs or {},
+            max_k=args["max_smooth_k"],
+            min_umi=args["min_umi_per_spot"],
+            min_snp_umi=args["min_snp_umi_per_spot"],
+        )
+        model = Spot_Model(
+            count_data=smoothed_count_data,
+            platform=platform,
+            assay_types=assay_types,
+            work_dir=proc_dir,
+            prefix=out_prefix,
+            **model_kwargs_from_args(args),
+        )
+    else:
+        model = Cell_Model(
+            count_data=cluster_count_data,
+            platform=platform,
+            assay_types=assay_types,
+            work_dir=proc_dir,
+            prefix=out_prefix,
+            **model_kwargs_from_args(args),
+        )
+    model_params, model_ll = model.fit(fit_mode=args["fit_mode"])
+    anns, clone_props = model.predict(args["fit_mode"], label=label)
+    logging.info(
+        "clone fractions: " + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
+    )
+
+    if args["save_processed_data"]:
+        if model.labeling_trace:
+            trace_dict = {}
+            for i, lt in enumerate(model.labeling_trace):
+                trace_dict[f"labels_{i}"] = lt["labels"]
+                trace_dict[f"max_posterior_{i}"] = lt["max_posterior"]
+                if "tumor_purity" in lt:
+                    trace_dict[f"tumor_purity_{i}"] = lt["tumor_purity"]
+            trace_dict["n_iters"] = np.array([len(model.labeling_trace)])
+            np.savez(
+                os.path.join(proc_dir, f"{out_prefix}.labeling_trace.npz"), **trace_dict
+            )
+        save_model_params(
+            model_params,
+            model_ll,
+            assay_types,
+            os.path.join(proc_dir, f"{out_prefix}.model_params.npz"),
+        )
+
+    return model, anns, model_params
+
+
+def run_kmeans():
+    # ---- kmeans baseline (disabled for now) -----------------------------
+    # if args["method"] == "kmeans":
+    #     barcodes, _ = union_align_barcodes(unsmoothed_data_sources, assay_types)
+    #     anns, clone_props = kmeans_copytyping(
+    #         unsmoothed_data_sources, barcodes, args["ref_label"],
+    #         model.num_clones, label,
+    #     )
+    #     logging.info(
+    #         "clone fractions: "
+    #         + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
+    #     )
+
+    return

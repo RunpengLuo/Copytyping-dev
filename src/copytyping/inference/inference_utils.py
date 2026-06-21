@@ -8,7 +8,7 @@ from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import NA_CELLTYPE
 
 
-def merge_celltype_into_barcodes(barcodes_df, cell_type_df, ref_label, data_type):
+def merge_celltype_into_barcodes(barcodes_df, cell_type_df, ref_label, assay_type):
     """Merge cell_type annotations into barcodes DataFrame.
 
     Drops the ref_label column if all labels are uninformative (NA_CELLTYPE).
@@ -28,7 +28,7 @@ def merge_celltype_into_barcodes(barcodes_df, cell_type_df, ref_label, data_type
     barcodes_df[ref_label] = barcodes_df[ref_label].fillna("Unknown").astype(str)
     if barcodes_df[ref_label].isin(NA_CELLTYPE).all():
         logging.warning(
-            f"all {data_type} barcodes have "
+            f"all {assay_type} barcodes have "
             f"uninformative {ref_label} labels "
             f"(all in NA_CELLTYPE={NA_CELLTYPE})"
         )
@@ -36,13 +36,13 @@ def merge_celltype_into_barcodes(barcodes_df, cell_type_df, ref_label, data_type
     return barcodes_df
 
 
-def annotate_adata_celltype(adata, cell_type_df, ref_label, data_type):
+def annotate_adata_celltype(adata, cell_type_df, ref_label, assay_type):
     """Add cell_type annotations to adata.obs from cell_type_df."""
     ct_map = cell_type_df.set_index("BARCODE")[ref_label]
     if ref_label in adata.obs.columns:
         logging.warning(
             f"overwriting existing '{ref_label}' column "
-            f"in {data_type} h5ad obs with cell_type_df"
+            f"in {assay_type} h5ad obs with cell_type_df"
         )
     adata.obs[ref_label] = (
         adata.obs_names.to_series().map(ct_map).fillna("Unknown").values
@@ -195,7 +195,7 @@ def compute_loh_baf(clust):
     for ki in range(K_tumor):
         k = ki + 1  # skip normal
         clone = clust.clones[k]
-        loh_mask = (clust.B[:, k] == 0) & (clust.A[:, k] > 0)
+        loh_mask = (clust.cn_B[:, k] == 0) & (clust.cn_A[:, k] > 0)
         if loh_mask.sum() == 0:
             continue
 
@@ -203,7 +203,7 @@ def compute_loh_baf(clust):
         for gi in np.where(loh_mask)[0]:
             row = clust.cnv_blocks.iloc[gi]
             cn_parts = [
-                f"{clust.clones[j]}={clust.A[gi, j]}|{clust.B[gi, j]}"
+                f"{clust.clones[j]}={clust.cn_A[gi, j]}|{clust.cn_B[gi, j]}"
                 for j in range(clust.K)
             ]
             segs = row.get("SEGMENTS", f"cluster{gi}")

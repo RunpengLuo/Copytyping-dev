@@ -22,6 +22,7 @@ def read_cell_types(ct_file: str, req_cols: set):
         )
     return cell_type_df
 
+
 def read_bbc_phases(
     bbc_phases_file: str,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
@@ -32,26 +33,27 @@ def read_bbc_phases(
     """
     bbc_df = pd.read_table(bbc_phases_file, sep="\t")
     bbc_df = sort_df_chr(bbc_df, pos="START")
-
-    phase_bbc = bbc_df["PHASE"].to_numpy().astype(np.int32)
-
-    switchprobs_bbc = np.zeros(len(bbc_df), dtype=np.float64)
-    if "switchprobs" in bbc_df.columns:
-        switchprobs_bbc = bbc_df["switchprobs"].to_numpy().astype(np.float64)
-
-    logging.info(
-        f"loaded bulk phases: {len(bbc_df)} BBC bins, "
-        f"{int(phase_bbc.sum())}/{len(bbc_df)} phase=1"
-    )
-    return bbc_df, phase_bbc, switchprobs_bbc
+    logging.info(f"loaded bulk phases: {len(bbc_df)} BBC bins.")
+    return bbc_df
 
 
 def load_bulk_cnprofile(
     seg_ucn_file: str,
     solfile: str | None = None,
-) -> tuple[pd.DataFrame, list[str], list[float]]:
+    baf_clip: float = 0.01,
+) -> tuple[
+    pd.DataFrame,
+    list[str],
+    list[float],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
     """Load bulk HATCHet seg.ucn CN profile. Returns ``(seg_df, clones,
-    clone_props)``; keeps the first SAMPLE and applies ``solfile`` if given.
+    clone_props, cn_A, cn_B, cn_C, BAF)``; keeps the first SAMPLE and applies
+    ``solfile`` if given. ``cn_A/cn_B/cn_C/BAF`` are per-segment per-clone copy
+    numbers parsed from the CNP column.
     """
     seg_df, clones, clone_props = read_seg_ucn_file(seg_ucn_file)
     if "SAMPLE" in seg_df.columns:
@@ -59,12 +61,18 @@ def load_bulk_cnprofile(
         seg_df = seg_df[seg_df["SAMPLE"] == first_sample].reset_index(drop=True)
     if solfile is not None:
         seg_df, clones, clone_props = _apply_solfile(seg_df, solfile)
+    _, cn_A, cn_B, cn_C, BAF = parse_cnv_profile(seg_df, baf_clip=baf_clip)
     logging.info(f"loaded bulk CN profile: {len(seg_df)} segments, clones={clones}")
-    return seg_df, clones, clone_props
+    return seg_df, clones, clone_props, cn_A, cn_B, cn_C, BAF
+
 
 def load_bbc_modality(
-    args: dict,
-    data_type: str,
+    barcodes_path: str,
+    x_count_path: str,
+    a_allele_path: str,
+    b_allele_path: str,
+    cnv_segments_path: str,
+    assay_type: str,
     cell_type_df: pd.DataFrame | None = None,
     ref_label: str | None = None,
     exclude_labels: set | None = None,
@@ -82,16 +90,16 @@ def load_bbc_modality(
     BARCODE, REP_ID (+ ref_label); a_bbc/b_bbc are raw pre-phasing alleles.
     """
     barcodes_df = pd.read_table(
-        args[f"{data_type}_barcodes"], sep="\t", header=None, names=["BARCODE"], dtype=str
+        barcodes_path, sep="\t", header=None, names=["BARCODE"], dtype=str
     )
     # REP_ID is everything after the first underscore ("ACGT-1_U1" -> "U1").
     barcodes_df["REP_ID"] = barcodes_df["BARCODE"].str.split("_", n=1).str[1]
 
-    X_bbc = sparse.load_npz(args[f"{data_type}_X_count"])
-    a_bbc = sparse.load_npz(args[f"{data_type}_A_allele"])
-    b_bbc = sparse.load_npz(args[f"{data_type}_B_allele"])
+    X_bbc = sparse.load_npz(x_count_path)
+    a_bbc = sparse.load_npz(a_allele_path)
+    b_bbc = sparse.load_npz(b_allele_path)
 
-    bbc_df = pd.read_table(args[f"{data_type}_cnv_segments"], sep="\t")
+    bbc_df = pd.read_table(cnv_segments_path, sep="\t")
     assert X_bbc.shape[0] == len(bbc_df), (
         f"X rows ({X_bbc.shape[0]}) != bbc bins ({len(bbc_df)})"
     )
@@ -100,7 +108,7 @@ def load_bbc_modality(
         from copytyping.inference.inference_utils import merge_celltype_into_barcodes
 
         barcodes_df = merge_celltype_into_barcodes(
-            barcodes_df, cell_type_df, ref_label, data_type
+            barcodes_df, cell_type_df, ref_label, assay_type
         )
         if exclude_labels:
             barcodes_df, X_bbc, a_bbc, b_bbc = exclude_barcodes(
@@ -114,7 +122,7 @@ def apply_bbc_phasing(
     bbc_phases: pd.DataFrame,
     a_bbc: sparse.csr_matrix,
     b_bbc: sparse.csr_matrix,
-    data_type: str = "",
+    assay_type: str = "",
 ) -> tuple[pd.DataFrame, sparse.csr_matrix, sparse.csr_matrix]:
     """Merge bulk PHASE into bbc_df and phase-correct allele counts.
 
@@ -136,7 +144,7 @@ def apply_bbc_phasing(
     B_bbc.data = np.rint(B_bbc.data).astype(np.int32)
     N_bbc = a_bbc + b_bbc
 
-    tag = f"[{data_type}] " if data_type else ""
+    tag = f"[{assay_type}] " if assay_type else ""
     logging.info(
         f"{tag}phase correction applied: "
         f"{int(bbc_df['PHASE'].sum())}/{len(bbc_df)} BBC blocks flipped"
@@ -166,7 +174,7 @@ def exclude_barcodes(barcodes_df, exclude_labels, ref_label, *mats):
     return (barcodes_df, *mats)
 
 
-def union_align_barcodes(data_dict, data_types):
+def union_align_barcodes(data_dict, assay_types):
     """Compute union barcodes across modalities and realign matrices.
 
     Each entry in data_dict has attributes: barcodes (DataFrame with
@@ -174,8 +182,8 @@ def union_align_barcodes(data_dict, data_types):
     After alignment, all objects share the same N_union columns.
 
     Args:
-        data_dict: dict mapping data_type -> SX_Data or SimpleNamespace.
-        data_types: ordered list of data_type keys.
+        data_dict: dict mapping assay_type -> SX_Data or SimpleNamespace.
+        assay_types: ordered list of assay_type keys.
 
     Returns:
         union_barcodes_df: DataFrame with BARCODE, REP_ID for union.
@@ -184,8 +192,8 @@ def union_align_barcodes(data_dict, data_types):
     # 1. Compute ordered union of barcodes, carrying all columns
     seen = {}
     union_rows = []
-    for dt in data_types:
-        obj = data_dict[dt]
+    for assay in assay_types:
+        obj = data_dict[assay]
         for _, row in obj.barcodes.iterrows():
             bc = row["BARCODE"]
             if bc not in seen:
@@ -196,8 +204,8 @@ def union_align_barcodes(data_dict, data_types):
 
     # 2. Realign each modality and build masks
     modality_masks = {}
-    for dt in data_types:
-        obj = data_dict[dt]
+    for assay in assay_types:
+        obj = data_dict[assay]
         bc_arr = obj.barcodes["BARCODE"].to_numpy()
         N_orig = len(bc_arr)
         mask = np.zeros(N_union, dtype=bool)
@@ -206,7 +214,7 @@ def union_align_barcodes(data_dict, data_types):
             j = seen[bc]
             mask[j] = True
             idx_map[i] = j
-        modality_masks[dt] = mask
+        modality_masks[assay] = mask
 
         if N_orig == N_union and np.all(idx_map == np.arange(N_union)):
             # Already aligned, skip reallocation
@@ -230,7 +238,9 @@ def union_align_barcodes(data_dict, data_types):
 
     logging.debug(
         f"union_align_barcodes: N_union={N_union}, "
-        + ", ".join(f"{dt}={int(modality_masks[dt].sum())}" for dt in data_types)
+        + ", ".join(
+            f"{assay}={int(modality_masks[assay].sum())}" for assay in assay_types
+        )
     )
     return union_barcodes_df, modality_masks
 
@@ -293,7 +303,7 @@ def _apply_solfile(seg_df, solfile):
     return seg_df, clones, clone_props
 
 
-def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, B_bbc, N_bbc, data_type=""):
+def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, B_bbc, N_bbc, assay_type=""):
     """Map bbc-level bins to segments and aggregate count matrices.
 
     Args:
@@ -302,14 +312,14 @@ def aggregate_bbc_to_seg(bbc_df, seg_df, X_bbc, B_bbc, N_bbc, data_type=""):
         X_bbc: (G_bbc, N) sparse or dense count matrix (read depth).
         B_bbc: (G_bbc, N) sparse or dense count matrix (B-allele).
         N_bbc: (G_bbc, N) sparse or dense count matrix (total allele).
-        data_type: Modality tag used to prefix log messages (e.g. "gex").
+        assay_type: Modality tag used to prefix log messages (e.g. "gex").
 
     Returns:
         seg_df: Segment-level DataFrame with CNP, PROPS, seg_id, LENGTH columns
             (a copy; the input bulk seg_df is left unmutated).
         X_seg, B_seg, N_seg: (G_seg, N) dense int32 aggregated count matrices.
     """
-    tag = f"[{data_type}] " if data_type else ""
+    tag = f"[{assay_type}] " if assay_type else ""
     seg_df = seg_df.copy()  # don't mutate the shared bulk seg_df across modalities
     seg_df["seg_id"] = np.arange(len(seg_df))
     n_seg = len(seg_df)
@@ -430,6 +440,30 @@ def load_spatial_neighbors(h5ad_path, n_neighs=6):
     return result
 
 
+def build_spatial_graphs(
+    assay_types: list[str],
+    h5ad_paths: dict[str, str | None],
+    n_neighs: int,
+) -> dict[str, dict]:
+    """Build per-modality spatial neighbor graphs from h5ad spatial coords.
+
+    Skips assays without an h5ad or without ``obsm['spatial']``. Each value is
+    a per-rep graph dict from ``load_spatial_neighbors``.
+    """
+    import scanpy as sc
+
+    spatial_graphs = {}
+    for assay_type in assay_types:
+        h5ad_path = h5ad_paths[assay_type]
+        if h5ad_path is not None:
+            adata = sc.read_h5ad(h5ad_path)
+            if "spatial" in adata.obsm:
+                spatial_graphs[assay_type] = load_spatial_neighbors(
+                    h5ad_path, n_neighs=n_neighs
+                )
+    return spatial_graphs
+
+
 ##################################################
 # copytyping IOs
 ##################################################
@@ -438,23 +472,23 @@ def load_spatial_neighbors(h5ad_path, n_neighs=6):
 def parse_cnv_profile(haplo_blocks: pd.DataFrame, baf_clip=0.01):
     num_clones = len(str(haplo_blocks["CNP"].iloc[0]).split(";"))
     clones = ["normal"] + [f"clone{i}" for i in range(1, num_clones)]
-    A = np.zeros((len(haplo_blocks), num_clones), dtype=np.int32)
-    B = np.zeros((len(haplo_blocks), num_clones), dtype=np.int32)
+    cn_A = np.zeros((len(haplo_blocks), num_clones), dtype=np.int32)
+    cn_B = np.zeros((len(haplo_blocks), num_clones), dtype=np.int32)
     for i in range(num_clones):
-        A[:, i] = haplo_blocks.apply(
+        cn_A[:, i] = haplo_blocks.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[0]), axis=1
         ).to_numpy()
-        B[:, i] = haplo_blocks.apply(
+        cn_B[:, i] = haplo_blocks.apply(
             func=lambda r: int(r["CNP"].split(";")[i].split("|")[1]), axis=1
         ).to_numpy()
-    C = A + B
+    cn_C = cn_A + cn_B
     BAF = np.divide(
-        B,
-        C,
-        out=np.zeros_like(C, dtype=np.float32),
-        where=(C > 0),
+        cn_B,
+        cn_C,
+        out=np.zeros_like(cn_C, dtype=np.float32),
+        where=(cn_C > 0),
     )
     BAF = np.clip(BAF, baf_clip, 1 - baf_clip)
 
     # assign the CNP group id
-    return clones, A, B, C, BAF
+    return clones, cn_A, cn_B, cn_C, BAF

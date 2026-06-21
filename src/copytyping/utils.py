@@ -26,7 +26,7 @@ def normalize_args(args) -> dict:
     return {**load_defaults(), **args}
 
 
-ALL_PLATFORMS = ["single_cell", "spatial"]
+ALL_PLATFORMS = ["single_cell", "spatial", "multiome"]
 SPATIAL_PLATFORMS = {"spatial"}
 
 TUMOR_LABELS = {"Tumor_cell", "tumor", "Tumor"}
@@ -136,16 +136,3 @@ def add_file_logging(out_dir: str, command: str = "copytyping"):
     if logging.root.level > level:
         logging.root.setLevel(level)
     return fh
-
-
-def save_phased_bbc(bbc_df, X_bbc, Y_bbc, D_bbc, prefix):
-    """Save phase-corrected BBC data (DataFrame + sparse matrices).
-
-    Files: {prefix}.tsv.gz, {prefix}.X.npz, {prefix}.Y.npz, {prefix}.D.npz
-    """
-    from scipy import sparse
-
-    bbc_df.to_csv(f"{prefix}.tsv.gz", sep="\t", index=False, compression="gzip")
-    sparse.save_npz(f"{prefix}.X.npz", X_bbc)
-    sparse.save_npz(f"{prefix}.Y.npz", Y_bbc)
-    sparse.save_npz(f"{prefix}.D.npz", D_bbc)

@@ -5,7 +5,36 @@ from scipy.optimize import minimize_scalar
 from scipy.special import betaln, gammaln
 from scipy.stats import zscore
 
-from copytyping.sx_data.sx_data import SX_Data
+
+def model_kwargs_from_args(args: dict) -> dict:
+    """Extract the model config kwargs (the args the EM models consume) from the
+    flat ``args`` dict, so callers can ``Model(..., **model_kwargs_from_args(args))``."""
+    return {
+        "no_normal": args["no_normal"],
+        "pi_alpha": args["pi_alpha"],
+        "tau_bounds": (args["min_tau"], args["max_tau"]),
+        "invphi_bounds": (args["min_invphi"], args["max_invphi"]),
+        "niters": args["niters"],
+        "update_pi": args["update_pi"],
+        "update_tau": args["update_tau"],
+        "update_invphi": args["update_invphi"],
+    }
+
+
+def save_model_params(
+    model_params: dict,
+    final_ll: float,
+    assay_types: list[str],
+    path: str,
+) -> None:
+    """Save the EM log-likelihood + per-assay lambda/theta/tau/inv_phi to ``path``."""
+    param_dict = {"log_likelihood": np.array([final_ll])}
+    for assay_type in assay_types:
+        for key in ["lambda", "theta", "tau", "inv_phi"]:
+            pk = f"{assay_type}-{key}"
+            if pk in model_params:
+                param_dict[pk.replace("-", "_")] = np.atleast_1d(model_params[pk])
+    np.savez(path, **param_dict)
 
 
 def compute_baseline_proportions(
@@ -39,7 +68,7 @@ def make_baseline_fn(ref_cells, ref_clone=0, no_normal=False):
     def baseline_fn(sx):
         if ref_cells is None or int(ref_cells.sum()) == 0:
             return None
-        ref_cn = sx.C[:, ref_clone] if no_normal else None
+        ref_cn = sx.cn_C[:, ref_clone] if no_normal else None
         return compute_baseline_proportions(sx.X, sx.T, ref_cells, ref_cn=ref_cn)
 
     return baseline_fn
@@ -104,11 +133,12 @@ def empirical_rdr_gn(
 
 
 def estimate_tumor_proportion(
-    sx_data: SX_Data,
+    cd,
+    T: np.ndarray,
     base_props: np.ndarray,
     tau: float,
     inv_phi: float,
-    fit_mode: str = "hybrid",
+    fit_mode: str = "allele_total",
 ):
     """Per-spot purity init using BB+NB on clonal-only segments (no gamma weighting).
 
@@ -117,41 +147,43 @@ def estimate_tumor_proportion(
     over theta is therefore independent of clone assignment.
 
     Args:
-        sx_data: SX_Data with X, Y, D, T, A, B, C, BAF, MASK.
+        cd: CountData with X, A, B, cn_C, cn_BAF, allele_mask, total_mask.
+        T: (N,) per-spot library size.
         base_props: (G,) baseline lambda from normal cells.
         tau: BB concentration scalar.
         inv_phi: NB inv-phi scalar.
-        fit_mode: "allele_only", "total_only", or "hybrid".
+        fit_mode: "allele", "total", or "allele_total".
 
     Returns:
         theta_arr: (N,) per-spot purity estimates in [1e-4, 1-1e-4].
     """
-    rdrs_tumor = clone_rdr_gk(base_props, sx_data.C)[:, 1:]  # (G, K_tumor)
-    non_sub = ~sx_data.MASK["SUBCLONAL"]
-    am = sx_data.MASK["IMBALANCED"] & non_sub & (base_props > 0)
-    tm = sx_data.MASK["ANEUPLOID"] & non_sub & (base_props > 0)
+    N = cd.num_cell
+    rdrs_tumor = clone_rdr_gk(base_props, cd.cn_C)[:, 1:]  # (G, K_tumor)
+    non_sub = ~cd.total_mask["SUBCLONAL"]
+    am = cd.allele_mask["IMBALANCED"] & non_sub & (base_props > 0)
+    tm = cd.total_mask["ANEUPLOID"] & non_sub & (base_props > 0)
     n_am = int(am.sum())
     n_tm = int(tm.sum())
     logging.info(f"init theta: {n_am} clonal imbalanced, {n_tm} clonal aneuploid bins")
 
-    theta_arr = np.full(sx_data.N, 0.5, dtype=np.float32)
-    use_a = fit_mode in {"allele_only", "hybrid"} and n_am > 0
-    use_t = fit_mode in {"total_only", "hybrid"} and n_tm > 0
+    theta_arr = np.full(N, 0.5, dtype=np.float32)
+    use_a = fit_mode in {"allele", "allele_total"} and n_am > 0
+    use_t = fit_mode in {"total", "allele_total"} and n_tm > 0
     if not (use_a or use_t):
         logging.warning("no clonal informative bins; theta=0.5")
         return theta_arr
 
     if use_a:
-        Y_am = sx_data.Y[am]
-        D_am = sx_data.D[am]
-        BAF_am = sx_data.BAF[am, 1:]
+        Y_am = cd.B[am]
+        D_am = (cd.A + cd.B)[am]
+        BAF_am = cd.cn_BAF[am, 1:]
         rdrs_am = rdrs_tumor[am]
     if use_t:
-        X_tm = sx_data.X[tm]
+        X_tm = cd.X[tm]
         lambda_tm = base_props[tm]
         rdrs_tm = rdrs_tumor[tm]
 
-    for n in range(sx_data.N):
+    for n in range(N):
 
         def neg_Q(tv, _n=n):
             tv_arr = np.array([tv], dtype=float)
@@ -170,7 +202,7 @@ def estimate_tumor_proportion(
             if use_t:
                 ll = cond_negbin_logpmf_theta(
                     X_tm[:, _n : _n + 1],
-                    np.array([sx_data.T[_n]], dtype=float),
+                    np.array([T[_n]], dtype=float),
                     lambda_tm,
                     inv_phi,
                     rdrs_tm,

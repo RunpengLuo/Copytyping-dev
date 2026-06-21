@@ -19,7 +19,6 @@ class SX_Data:
         Y: np.ndarray,
         D: np.ndarray,
         baf_clip=0.01,
-        verbose=1,
     ) -> None:
         """Construct from pre-loaded segment-level data.
 
@@ -37,12 +36,12 @@ class SX_Data:
         self.Y = Y
         self.D = D
 
-        self.clones, self.A, self.B, self.C, self.BAF = parse_cnv_profile(
+        self.clones, self.cn_A, self.cn_B, self.cn_C, self.BAF = parse_cnv_profile(
             self.cnv_blocks, baf_clip=baf_clip
         )
         self.G = len(self.cnv_blocks)
         self.K = len(self.clones)
-        self.MASK = get_cnp_mask(self.A, self.B, self.C)
+        self.MASK = get_cnp_mask(self.cn_A, self.cn_B, self.cn_C)
         self.nrows_imbalanced = int(np.sum(self.MASK["IMBALANCED"]))
         self.nrows_aneuploid = int(np.sum(self.MASK["ANEUPLOID"]))
 
@@ -61,7 +60,7 @@ class SX_Data:
     def subset_by_rep(self, rep_id):
         """Return (new SX_Data, mask) restricted to barcodes where REP_ID == rep_id.
 
-        Reuses G-axis attributes (cnv_blocks, A/B/C/BAF/MASK, etc.) and only
+        Reuses G-axis attributes (cnv_blocks, cn_A/cn_B/cn_C/BAF/MASK, etc.) and only
         recomputes N-axis attributes (X/Y/D/T/barcodes/N).
         """
         mask = (self.barcodes["REP_ID"] == rep_id).to_numpy()
@@ -73,9 +72,9 @@ class SX_Data:
         new.Y = self.Y[:, mask]
         new.D = self.D[:, mask]
         new.clones = self.clones
-        new.A = self.A
-        new.B = self.B
-        new.C = self.C
+        new.cn_A = self.cn_A
+        new.cn_B = self.cn_B
+        new.cn_C = self.cn_C
         new.BAF = self.BAF
         new.G = self.G
         new.K = self.K
@@ -91,9 +90,9 @@ class SX_Data:
 
         mask = self.MASK[mask_id] & additional_mask
         M = {
-            "A": self.A[mask, :],
-            "B": self.B[mask, :],
-            "C": self.C[mask, :],
+            "cn_A": self.cn_A[mask, :],
+            "cn_B": self.cn_B[mask, :],
+            "cn_C": self.cn_C[mask, :],
             "BAF": self.BAF[mask, :],
             "X": self.X[mask, :],
             "Y": self.Y[mask, :],
@@ -228,8 +227,8 @@ class SX_Data:
 
         cnp_keys = []
         for g in range(self.G):
-            a_row = self.A[g].tolist()
-            b_row = self.B[g].tolist()
+            a_row = self.cn_A[g].tolist()
+            b_row = self.cn_B[g].tolist()
             cnp_keys.append(tuple(a_row + b_row))
 
         unique_keys = list(dict.fromkeys(cnp_keys))
@@ -247,20 +246,20 @@ class SX_Data:
             D_c[cid] = self.D[members].sum(axis=0)
 
         first_members = [np.where(cluster_ids == cid)[0][0] for cid in range(G_c)]
-        A_c = self.A[first_members]
-        B_c = self.B[first_members]
-        C_c = self.C[first_members]
+        cn_A_c = self.cn_A[first_members]
+        cn_B_c = self.cn_B[first_members]
+        cn_C_c = self.cn_C[first_members]
         BAF_c = self.BAF[first_members]
-        MASK_c = get_cnp_mask(A_c, B_c, C_c)
+        MASK_c = get_cnp_mask(cn_A_c, cn_B_c, cn_C_c)
 
         clust = SimpleNamespace(
             X=X_c,
             Y=Y_c,
             D=D_c,
             T=self.T,
-            A=A_c,
-            B=B_c,
-            C=C_c,
+            cn_A=cn_A_c,
+            cn_B=cn_B_c,
+            cn_C=cn_C_c,
             BAF=BAF_c,
             MASK=MASK_c,
             G=G_c,
@@ -278,9 +277,9 @@ class SX_Data:
                 additional_mask = np.ones(G_c, dtype=bool)
             mask = MASK_c[mask_id] & additional_mask
             M = {
-                "A": A_c[mask],
-                "B": B_c[mask],
-                "C": C_c[mask],
+                "cn_A": cn_A_c[mask],
+                "cn_B": cn_B_c[mask],
+                "cn_C": cn_C_c[mask],
                 "BAF": BAF_c[mask],
                 "X": X_c[mask],
                 "Y": Y_c[mask],
@@ -322,29 +321,35 @@ class SX_Data:
         return clust
 
 
-def get_cnp_mask(A, B, C, and_mask=None):
+def get_cnp_mask(cn_A, cn_B, cn_C, and_mask=None):
     """return 1d mask, False if the bin should be discarded during modelling"""
-    tumor_mask = np.any(A != 1, axis=1) | np.any(
-        B != 1, axis=1
+    tumor_mask = np.any(cn_A != 1, axis=1) | np.any(
+        cn_B != 1, axis=1
     )  # not purely normal cell
-    ai_mask = np.any(A != B, axis=1)  # at least one clone is allelic imbalanced
-    c_mask = np.any(C != 2, axis=1)  # at least one clone has total copy != 2
+    ai_mask = np.any(cn_A != cn_B, axis=1)  # at least one clone is allelic imbalanced
+    c_mask = np.any(cn_C != 2, axis=1)  # at least one clone has total copy != 2
     tumor_mask = ai_mask | c_mask  # either allelic imbalanced or non-diploid
     neutral_mask = ~tumor_mask
 
-    clonal_loh_mask = np.all(B[:, 1:] == 0, axis=1) & np.all(A[:, 1:] > 0, axis=1)
-    clonal_loh_mask |= np.all(A[:, 1:] == 0, axis=1) & np.all(B[:, 1:] > 0, axis=1)
+    clonal_loh_mask = np.all(cn_B[:, 1:] == 0, axis=1) & np.all(cn_A[:, 1:] > 0, axis=1)
+    clonal_loh_mask |= np.all(cn_A[:, 1:] == 0, axis=1) & np.all(
+        cn_B[:, 1:] > 0, axis=1
+    )
 
-    subclonal_loh_mask = np.any(B[:, 1:] == 0, axis=1) & np.all(A[:, 1:] > 0, axis=1)
-    subclonal_loh_mask |= np.any(A[:, 1:] == 0, axis=1) & np.all(B[:, 1:] > 0, axis=1)
+    subclonal_loh_mask = np.any(cn_B[:, 1:] == 0, axis=1) & np.all(
+        cn_A[:, 1:] > 0, axis=1
+    )
+    subclonal_loh_mask |= np.any(cn_A[:, 1:] == 0, axis=1) & np.all(
+        cn_B[:, 1:] > 0, axis=1
+    )
 
-    if A.shape[1] > 2:
-        subclonal_mask = np.any(A[:, 2:] != A[:, 1][:, None], axis=1) | np.any(
-            B[:, 2:] != B[:, 1][:, None], axis=1
+    if cn_A.shape[1] > 2:
+        subclonal_mask = np.any(cn_A[:, 2:] != cn_A[:, 1][:, None], axis=1) | np.any(
+            cn_B[:, 2:] != cn_B[:, 1][:, None], axis=1
         )
     else:
         # single tumor clone: nothing is subclonal
-        subclonal_mask = np.zeros(A.shape[0], dtype=bool)
+        subclonal_mask = np.zeros(cn_A.shape[0], dtype=bool)
     if and_mask is not None:
         tumor_mask &= and_mask
         clonal_loh_mask &= and_mask
