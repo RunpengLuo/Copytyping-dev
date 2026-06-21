@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.sx_data.sx_data import get_cnp_mask
+from copytyping.inference.count_data import get_cnp_mask
 
 
 def plot_scatter_2d_per_cell(

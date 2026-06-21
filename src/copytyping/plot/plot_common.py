@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.sx_data.sx_data import get_cnp_mask
+from copytyping.inference.count_data import get_cnp_mask
 from copytyping.utils import INVALID_LABELS, NA_CELLTYPE, is_tumor_label
 
 

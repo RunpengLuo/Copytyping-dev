@@ -7,7 +7,61 @@ from scipy import sparse
 
 from copytyping.io_utils import exclude_barcodes
 from copytyping.inference.inference_utils import merge_celltype_into_barcodes
-from copytyping.sx_data.sx_data import get_cnp_mask
+
+
+def get_cnp_mask(
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    cn_C: np.ndarray,
+    and_mask: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """Per-row informative-bin masks from the per-clone CN profile.
+
+    Each value is a 1D boolean mask over genomic rows. ``and_mask`` (if given)
+    is intersected into every clone-informed mask. Keys:
+    CNP/IMBALANCED/CLONAL_IMBALANCED/ANEUPLOID/SUBCLONAL/CLONAL_LOH/
+    SUBCLONAL_LOH/NEUTRAL.
+    """
+    ai_mask = np.any(cn_A != cn_B, axis=1)  # at least one clone is allelic imbalanced
+    c_mask = np.any(cn_C != 2, axis=1)  # at least one clone has total copy != 2
+    tumor_mask = ai_mask | c_mask  # either allelic imbalanced or non-diploid
+    neutral_mask = ~tumor_mask
+
+    clonal_loh_mask = np.all(cn_B[:, 1:] == 0, axis=1) & np.all(cn_A[:, 1:] > 0, axis=1)
+    clonal_loh_mask |= np.all(cn_A[:, 1:] == 0, axis=1) & np.all(
+        cn_B[:, 1:] > 0, axis=1
+    )
+
+    subclonal_loh_mask = np.any(cn_B[:, 1:] == 0, axis=1) & np.all(
+        cn_A[:, 1:] > 0, axis=1
+    )
+    subclonal_loh_mask |= np.any(cn_A[:, 1:] == 0, axis=1) & np.all(
+        cn_B[:, 1:] > 0, axis=1
+    )
+
+    if cn_A.shape[1] > 2:
+        subclonal_mask = np.any(cn_A[:, 2:] != cn_A[:, 1][:, None], axis=1) | np.any(
+            cn_B[:, 2:] != cn_B[:, 1][:, None], axis=1
+        )
+    else:
+        # single tumor clone: nothing is subclonal
+        subclonal_mask = np.zeros(cn_A.shape[0], dtype=bool)
+    if and_mask is not None:
+        tumor_mask &= and_mask
+        clonal_loh_mask &= and_mask
+        subclonal_loh_mask &= and_mask
+        ai_mask &= and_mask
+        subclonal_mask &= and_mask
+    return {
+        "CNP": tumor_mask,
+        "IMBALANCED": ai_mask,
+        "CLONAL_IMBALANCED": ai_mask & ~subclonal_mask,
+        "ANEUPLOID": c_mask,
+        "SUBCLONAL": subclonal_mask,
+        "CLONAL_LOH": clonal_loh_mask,
+        "SUBCLONAL_LOH": subclonal_loh_mask,
+        "NEUTRAL": neutral_mask,
+    }
 
 
 @dataclass
