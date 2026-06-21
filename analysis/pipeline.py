@@ -21,19 +21,22 @@ matching the user-specified --sol_pattern (default: "*{SOLID}*.tsv"),
 creating one run per matched solfile.
 """
 
+import argparse
 import glob
 import logging
 import os
 
 import pandas as pd
 
-from copytyping.plot.plot_common import plot_joincount_boxplot, plot_metrics_barplot
-
-from copytyping.copytyping_parser import check_arguments_inference
+from copytyping.copytyping_parser import (
+    add_arguments_pipeline,
+    check_arguments_inference,
+)
 from copytyping.inference.inference import run as run_inference
-from copytyping.inference.validation import _eval_subset
-from copytyping.utils import normalize_args
-from copytyping.validation.validate import run as run_validate
+from copytyping.utils import normalize_args, setup_logging
+
+from analysis_plots import _eval_subset, plot_joincount_boxplot, plot_metrics_barplot
+from validate import run as run_validate
 
 
 def _build_base_args(row):
@@ -297,3 +300,15 @@ def run(args):
             summary,
             os.path.join(out_dir, "pipeline_joincount.pdf"),
         )
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(prog="pipeline")
+    add_arguments_pipeline(parser)
+    args = normalize_args(parser.parse_args(argv))
+    setup_logging(args)
+    run(args)
+
+
+if __name__ == "__main__":
+    main()

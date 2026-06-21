@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 
 import matplotlib.pyplot as plt
 
@@ -11,13 +10,13 @@ def plot_cnv_profile(
     ax: plt.Axes,
     cnprofile: pd.DataFrame,
     wl_segments: pd.DataFrame,
-    width=20,
-    height=1,
-    title=None,
-    ylabel=None,
-    plot_chrname=True,
-    plot_clone_name=True,
-    clone_ploidies=None,
+    width: int = 20,
+    height: int = 1,
+    title: str | None = None,
+    ylabel: str | None = None,
+    plot_chrname: bool = True,
+    plot_clone_name: bool = True,
+    clone_ploidies: list | None = None,
 ):
     """Chrom-level integer CNV profile.
 
@@ -484,13 +483,13 @@ def plot_ascn_profile(
     ax: plt.Axes,
     cnprofile: pd.DataFrame,
     wl_segments: pd.DataFrame,
-    width=20,
-    height=1,
-    title=None,
-    ylabel=None,
-    plot_chrname=True,
-    plot_clone_name=True,
-    clone_ploidies=None,
+    width: int = 20,
+    height: int = 1,
+    title: str | None = None,
+    ylabel: str | None = None,
+    plot_chrname: bool = True,
+    plot_clone_name: bool = True,
+    clone_ploidies: list | None = None,
 ):
     """Allele-specific CN profile: each clone slot has a B sub-bar (bottom)
     and A sub-bar (top), colored by integer copy number on the red palette.

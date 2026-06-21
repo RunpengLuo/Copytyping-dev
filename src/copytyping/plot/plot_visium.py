@@ -16,25 +16,30 @@ from copytyping.utils import is_tumor_label, NA_CELLTYPE
 logging.getLogger("anndata").setLevel(logging.WARNING)
 
 
+##################################################
+# orchestrator
+##################################################
+
+
 def plot_visium_all(
     *,
-    sample,
-    anns,
-    h5ad_source,
-    ballele_counts,
-    total_allele_counts,
-    cn_A,
-    cn_B,
-    cluster_barcodes,
-    clones,
-    plot_dir,
-    spot_label,
-    ref_label,
-    best_cutoff_label=None,
-    best_cutoff_metrics=None,
-    labeling_trace=None,
-    barcodes=None,
-    dpi=200,
+    sample: str,
+    anns: pd.DataFrame,
+    h5ad_source: str | sc.AnnData,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    cluster_barcodes: pd.DataFrame,
+    clones: list[str],
+    plot_dir: str,
+    spot_label: str,
+    ref_label: str,
+    best_cutoff_label: str | None = None,
+    best_cutoff_metrics: dict | None = None,
+    labeling_trace: list | None = None,
+    barcodes: pd.DataFrame | None = None,
+    dpi: int = 200,
 ):
     """Sample-level visium orchestrator (panel + LOH BAF + iters).
 
@@ -96,7 +101,14 @@ def plot_visium_all(
         )
 
 
-def build_visium_slices(anns, h5ad_source, ref_label):
+##################################################
+# slice + color helpers
+##################################################
+
+
+def build_visium_slices(
+    anns: pd.DataFrame, h5ad_source: str | sc.AnnData, ref_label: str
+):
     """Build per-rep (rep_id, anns_vis, vis_adata) slices for visium plotting.
 
     h5ad_source can be a path to a .h5ad file or an already-loaded AnnData.
@@ -121,7 +133,7 @@ def build_visium_slices(anns, h5ad_source, ref_label):
     return slices
 
 
-def set_label_colors(adata, col, clone_indexed=True):
+def set_label_colors(adata: sc.AnnData, col: str, clone_indexed: bool = True):
     """Set adata.uns colors using unified scheme."""
     adata.obs[col] = adata.obs[col].astype("category")
     adata.uns[f"{col}_colors"] = build_label_colors(
@@ -135,7 +147,7 @@ def build_legend(categories: list) -> list:
     return [mpatches.Patch(color=colors[i], label=c) for i, c in enumerate(categories)]
 
 
-def blend_purity_rgba(adata, label_col, purity_col):
+def blend_purity_rgba(adata: sc.AnnData, label_col: str, purity_col: str):
     """Blend label color with gray by purity. Returns (N, 4) RGBA."""
     gray = np.array(mcolors.to_rgb(NORMAL_COLOR))
     labels = adata.obs[label_col].astype("category")
@@ -161,18 +173,23 @@ def blend_purity_rgba(adata, label_col, purity_col):
 # ── Plot functions ──
 
 
+##################################################
+# page plotters
+##################################################
+
+
 def plot_visium_panel(
     sample: str,
     slices: list,
     out_dir: str,
-    spot_label="spot_label",
-    path_label="Microregion_annotation",
-    best_cutoff_label=None,
-    best_cutoff_metrics=None,
-    dpi=300,
-    size=1.5,
-    alpha=0.8,
-    title_info="",
+    spot_label: str = "spot_label",
+    path_label: str = "Microregion_annotation",
+    best_cutoff_label: str | None = None,
+    best_cutoff_metrics: dict | None = None,
+    dpi: int = 300,
+    size: float = 1.5,
+    alpha: float = 0.8,
+    title_info: str = "",
 ):
     """Single-page PDF visium panel per slice.
 
@@ -391,12 +408,12 @@ def plot_visium_loh_baf(
     cn_A: np.ndarray,
     cn_B: np.ndarray,
     clones: list[str],
-    loh_baf,
-    loh_info,
+    loh_baf: np.ndarray,
+    loh_info: list,
     out_file: str,
-    dpi=200,
-    size=1.5,
-    alpha=0.8,
+    dpi: int = 200,
+    size: float = 1.5,
+    alpha: float = 0.8,
 ):
     """PDF with visium LOH BAF spatial plots.
 
@@ -516,10 +533,10 @@ def plot_visium_iters(
     labeling_trace: list,
     barcodes: pd.DataFrame,
     out_dir: str,
-    clones: list = None,
-    ref_label=None,
-    dpi=100,
-    size=1.5,
+    clones: list | None = None,
+    ref_label: str | None = None,
+    dpi: int = 100,
+    size: float = 1.5,
 ):
     """Two PDFs: spatial (H&E + labels) and histograms (posterior + purity)."""
     import squidpy as sq

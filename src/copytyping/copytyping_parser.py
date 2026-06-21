@@ -4,7 +4,9 @@ import os
 from copytyping.utils import ALL_PLATFORMS
 
 
-def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
+def add_arguments_inference_inputs(
+    parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     """I/O paths and run-control flags for a single inference run."""
     parser.add_argument(
         "--platform",
@@ -113,7 +115,9 @@ def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
     return parser
 
 
-def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
+def add_arguments_inference_parameters(
+    parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     """Model, smoothing, and plot parameters (all defaulted, tunable from CLI)."""
     parser.add_argument(
         "--exclude",
@@ -280,13 +284,15 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
     return parser
 
 
-def add_arguments_inference(parser: argparse.ArgumentParser):
+def add_arguments_inference(
+    parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     add_arguments_inference_inputs(parser)
     add_arguments_inference_parameters(parser)
     return parser
 
 
-def check_arguments_inference(args: dict):
+def check_arguments_inference(args: dict) -> None:
     gex_dir = args["gex_dir"]
     atac_dir = args["atac_dir"]
 
@@ -344,8 +350,8 @@ def check_arguments_inference(args: dict):
             "--gex_dir and --atac_dir are both required for multiome platform"
         )
 
-    assert os.path.exists(args["seg_ucn"]), f"invalid --seg_ucn file"
-    assert os.path.exists(args["bbc_phases"]), f"invalid --bbc_phases file"
+    assert os.path.exists(args["seg_ucn"]), "invalid --seg_ucn file"
+    assert os.path.exists(args["bbc_phases"]), "invalid --bbc_phases file"
     if args["solfile"] is not None:
         assert os.path.exists(args["solfile"]), f"invalid --solfile: {args['solfile']}"
     assert os.path.exists(args["region_bed"]), (
@@ -373,7 +379,9 @@ def check_arguments_inference(args: dict):
     return args
 
 
-def add_arguments_cnphmm_parameters(parser: argparse.ArgumentParser):
+def add_arguments_cnphmm_parameters(
+    parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     """Factorial CNP-HMM knobs (all defaulted in copytyping.yaml)."""
     parser.add_argument(
         "--cnphmm_method",
@@ -462,14 +470,16 @@ def add_arguments_cnphmm_parameters(parser: argparse.ArgumentParser):
     return parser
 
 
-def add_arguments_cnphmm(parser: argparse.ArgumentParser):
+def add_arguments_cnphmm(
+    parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     add_arguments_inference_inputs(parser)
     add_arguments_inference_parameters(parser)
     add_arguments_cnphmm_parameters(parser)
     return parser
 
 
-def check_arguments_cnphmm(args: dict):
+def check_arguments_cnphmm(args: dict) -> None:
     """Validate shared inference inputs, then the CNP-HMM-specific knobs."""
     args = check_arguments_inference(args)
     assert args["c_max"] >= 1, f"--c_max must be >= 1, got {args['c_max']}"
@@ -480,7 +490,9 @@ def check_arguments_cnphmm(args: dict):
     return args
 
 
-def add_arguments_pipeline(parser):
+def add_arguments_pipeline(
+    parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     parser.add_argument(
         "panel_tsv",
         type=str,
@@ -539,105 +551,4 @@ def add_arguments_pipeline(parser):
         help="Verbose level for each inference run",
     )
     add_arguments_inference_parameters(parser)
-    add_arguments_validate_parameters(parser)
-    return parser
-
-
-def add_arguments_validate_parameters(parser: argparse.ArgumentParser):
-    """Validate-only parameters (cutoff sweeps). Plot/smoothing params are
-    inherited from add_arguments_inference_parameters."""
-    parser.add_argument(
-        "--purity_cutoff",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="comma-separated purity cutoffs for hard label evaluation. "
-        "Spots with purity <= cutoff labeled normal.",
-    )
-    parser.add_argument(
-        "--post_cutoff",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="comma-separated max_posterior cutoffs. "
-        "Tumor spots with max_posterior <= cutoff labeled NA (excluded from metrics).",
-    )
-    return parser
-
-
-def add_arguments_validate(parser: argparse.ArgumentParser):
-    parser.add_argument(
-        "--processed_data",
-        required=True,
-        type=str,
-        help="Directory with cnp_profile.tsv, X/Y/D.npz, model_params.npz",
-    )
-    parser.add_argument(
-        "--pred_labels",
-        required=True,
-        type=str,
-        help="TSV with BARCODE + predicted label columns",
-    )
-    parser.add_argument(
-        "--pred_label",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Column name for predicted labels",
-    )
-    parser.add_argument(
-        "--ref_labels",
-        required=False,
-        type=str,
-        default=None,
-        help="TSV with BARCODE + reference label columns",
-    )
-    parser.add_argument(
-        "--ref_label",
-        required=False,
-        type=str,
-        default="path_label",
-        help="Column name for reference labels (default: path_label)",
-    )
-    parser.add_argument(
-        "--method",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Method that produced the labels: copytyping or others. "
-        "Non-copytyping skips init normal, purity sweep, trace, count histograms.",
-    )
-    parser.add_argument("--sample", required=True, type=str, help="sample name")
-    parser.add_argument(
-        "--genome_size",
-        required=True,
-        type=str,
-        help="Chromosome sizes file (for 1d scatter)",
-    )
-    parser.add_argument(
-        "--region_bed",
-        required=True,
-        type=str,
-        help="Chromosome regions BED file (for heatmap/scatter)",
-    )
-    parser.add_argument(
-        "--h5ad",
-        required=False,
-        type=str,
-        default=None,
-        help="h5ad file for spatial neighbors (joincount + visium plots)",
-    )
-    parser.add_argument(
-        "-o", "--out_dir", required=True, type=str, help="output directory"
-    )
-    parser.add_argument(
-        "-v",
-        "--verbosity",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Verbose level",
-    )
-    add_arguments_inference_parameters(parser)
-    add_arguments_validate_parameters(parser)
     return parser

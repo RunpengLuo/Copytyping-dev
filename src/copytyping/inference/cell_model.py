@@ -3,7 +3,7 @@ from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
 from copytyping.inference.model_utils import clone_pi_gk
-from copytyping.likelihoods import (
+from copytyping.inference.likelihoods import (
     cond_betabin_logpmf,
     cond_negbin_logpmf,
     mle_invphi,
@@ -16,7 +16,7 @@ class Cell_Model(Base_Model):
     Posteriors over all K clones (including normal).
     """
 
-    def _init_params(self, fit_mode):
+    def _init_params(self, fit_mode: str) -> dict:
         # global clone mixture self.model_params["pi"] (shape (K,)) set in __init__
 
         # reference cells (skip in allele to avoid sub-EM recursion)
@@ -39,7 +39,9 @@ class Cell_Model(Base_Model):
 
         return init_labeling
 
-    def compute_log_likelihood(self, fit_mode: str):
+    def compute_log_likelihood(
+        self, fit_mode: str
+    ) -> tuple[float, np.ndarray, np.ndarray]:
         params = self.model_params
         global_lls = params["ll_global"]
         global_lls[:] = 0.0
@@ -78,7 +80,7 @@ class Cell_Model(Base_Model):
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
-    def _m_step(self, fit_mode, gamma, t=0):
+    def _m_step(self, fit_mode: str, gamma: np.ndarray, t: int = 0) -> None:
         params = self.model_params
         self._update_pi(gamma, self.num_barcodes, self.num_clones)
         fix_params = self.fix_model_params

@@ -5,6 +5,7 @@ import pandas as pd
 
 from scipy import sparse
 
+from copytyping.inference.count_data import get_cnp_mask
 from copytyping.io_utils import parse_cnv_profile
 
 
@@ -26,7 +27,7 @@ class SX_Data:
             barcodes_df: DataFrame with BARCODE, REP_ID columns.
             seg_df: Segment DataFrame with CNP, PROPS columns.
             X, Y, D: Dense int32 count matrices (G, N).
-            baf_clip: BAF clipping parameter.
+            baf_clip: cn_BAF clipping parameter.
         """
         self.barcodes = barcodes_df
         self.N = len(self.barcodes)
@@ -36,7 +37,7 @@ class SX_Data:
         self.Y = Y
         self.D = D
 
-        self.clones, self.cn_A, self.cn_B, self.cn_C, self.BAF = parse_cnv_profile(
+        self.clones, self.cn_A, self.cn_B, self.cn_C, self.cn_BAF = parse_cnv_profile(
             self.cnv_blocks, baf_clip=baf_clip
         )
         self.G = len(self.cnv_blocks)
@@ -60,7 +61,7 @@ class SX_Data:
     def subset_by_rep(self, rep_id):
         """Return (new SX_Data, mask) restricted to barcodes where REP_ID == rep_id.
 
-        Reuses G-axis attributes (cnv_blocks, cn_A/cn_B/cn_C/BAF/MASK, etc.) and only
+        Reuses G-axis attributes (cnv_blocks, cn_A/cn_B/cn_C/cn_BAF/MASK, etc.) and only
         recomputes N-axis attributes (X/Y/D/T/barcodes/N).
         """
         mask = (self.barcodes["REP_ID"] == rep_id).to_numpy()
@@ -75,7 +76,7 @@ class SX_Data:
         new.cn_A = self.cn_A
         new.cn_B = self.cn_B
         new.cn_C = self.cn_C
-        new.BAF = self.BAF
+        new.cn_BAF = self.cn_BAF
         new.G = self.G
         new.K = self.K
         new.MASK = self.MASK
@@ -93,7 +94,7 @@ class SX_Data:
             "cn_A": self.cn_A[mask, :],
             "cn_B": self.cn_B[mask, :],
             "cn_C": self.cn_C[mask, :],
-            "BAF": self.BAF[mask, :],
+            "cn_BAF": self.cn_BAF[mask, :],
             "X": self.X[mask, :],
             "Y": self.Y[mask, :],
             "D": self.D[mask, :],
@@ -219,7 +220,7 @@ class SX_Data:
         Callers that need genomic coordinates must retain the original SX_Data.
 
         Returns:
-            SimpleNamespace with attributes: X, Y, D, T, A, B, C, BAF, MASK,
+            SimpleNamespace with attributes: X, Y, D, T, A, B, C, cn_BAF, MASK,
             G, N, K, clones, nrows_imbalanced, nrows_aneuploid, cluster_ids,
             and a bound ``apply_mask_shallow(mask_id, additional_mask)`` method.
         """
@@ -249,7 +250,7 @@ class SX_Data:
         cn_A_c = self.cn_A[first_members]
         cn_B_c = self.cn_B[first_members]
         cn_C_c = self.cn_C[first_members]
-        BAF_c = self.BAF[first_members]
+        cn_BAF_c = self.cn_BAF[first_members]
         MASK_c = get_cnp_mask(cn_A_c, cn_B_c, cn_C_c)
 
         clust = SimpleNamespace(
@@ -260,7 +261,7 @@ class SX_Data:
             cn_A=cn_A_c,
             cn_B=cn_B_c,
             cn_C=cn_C_c,
-            BAF=BAF_c,
+            cn_BAF=cn_BAF_c,
             MASK=MASK_c,
             G=G_c,
             N=self.N,
@@ -280,7 +281,7 @@ class SX_Data:
                 "cn_A": cn_A_c[mask],
                 "cn_B": cn_B_c[mask],
                 "cn_C": cn_C_c[mask],
-                "BAF": BAF_c[mask],
+                "cn_BAF": cn_BAF_c[mask],
                 "X": X_c[mask],
                 "Y": Y_c[mask],
                 "D": D_c[mask],
@@ -321,48 +322,129 @@ class SX_Data:
         return clust
 
 
-def get_cnp_mask(cn_A, cn_B, cn_C, and_mask=None):
-    """return 1d mask, False if the bin should be discarded during modelling"""
-    tumor_mask = np.any(cn_A != 1, axis=1) | np.any(
-        cn_B != 1, axis=1
-    )  # not purely normal cell
-    ai_mask = np.any(cn_A != cn_B, axis=1)  # at least one clone is allelic imbalanced
-    c_mask = np.any(cn_C != 2, axis=1)  # at least one clone has total copy != 2
-    tumor_mask = ai_mask | c_mask  # either allelic imbalanced or non-diploid
-    neutral_mask = ~tumor_mask
+def adaptive_bin_bbc(
+    bbc_df,
+    X_bbc,
+    Y_bbc,
+    D_bbc,
+    seg_sx,
+    min_snp_count=300,
+    max_bin_length=5_000_000,
+):
+    """Merge adjacent BBC bins within the same segment to reduce sparsity.
 
-    clonal_loh_mask = np.all(cn_B[:, 1:] == 0, axis=1) & np.all(cn_A[:, 1:] > 0, axis=1)
-    clonal_loh_mask |= np.all(cn_A[:, 1:] == 0, axis=1) & np.all(
-        cn_B[:, 1:] > 0, axis=1
-    )
+    Walks BBC bins in genomic order per chromosome, grouping consecutive bins
+    that share the same seg_id until the pseudobulk SNP count reaches
+    min_snp_count or the combined length exceeds max_bin_length.
 
-    subclonal_loh_mask = np.any(cn_B[:, 1:] == 0, axis=1) & np.all(
-        cn_A[:, 1:] > 0, axis=1
-    )
-    subclonal_loh_mask |= np.any(cn_A[:, 1:] == 0, axis=1) & np.all(
-        cn_B[:, 1:] > 0, axis=1
-    )
+    Args:
+        bbc_df: BBC-level DataFrame with #CHR, START, END, seg_id, CNP columns.
+        X_bbc, Y_bbc, D_bbc: (G_bbc, N) sparse or dense count matrices.
+        seg_sx: segment-level SX_Data (for barcodes).
+        min_snp_count: minimum pseudobulk D sum per merged bin.
+        max_bin_length: maximum merged bin length in bp.
 
-    if cn_A.shape[1] > 2:
-        subclonal_mask = np.any(cn_A[:, 2:] != cn_A[:, 1][:, None], axis=1) | np.any(
-            cn_B[:, 2:] != cn_B[:, 1][:, None], axis=1
+    Returns:
+        SX_Data with aggregated bins.
+    """
+    bbc_df = bbc_df.reset_index(drop=True)
+
+    # Keep X/Y/D sparse (CSR) — avoids ~30 GB densification of 66K × 38K matrices.
+    # Per-group sum on sparse row slices is cheap; final aggregated matrix is small.
+    X = X_bbc.tocsr() if sparse.issparse(X_bbc) else sparse.csr_matrix(X_bbc)
+    Y = Y_bbc.tocsr() if sparse.issparse(Y_bbc) else sparse.csr_matrix(Y_bbc)
+    D = D_bbc.tocsr() if sparse.issparse(D_bbc) else sparse.csr_matrix(D_bbc)
+
+    D_total = np.asarray(D.sum(axis=1)).ravel()
+    # Pre-extract as numpy arrays so the walk loop avoids pandas iloc per access.
+    bbc_chr = bbc_df["#CHR"].to_numpy()
+    seg_ids = bbc_df["seg_id"].to_numpy()
+    starts = bbc_df["START"].to_numpy()
+    ends = bbc_df["END"].to_numpy()
+    cnps = bbc_df["CNP"].to_numpy()
+
+    # bbc_df is already chr-pos sorted (HATCHet writes it that way); preserve that
+    # row order via pd.unique rather than np.unique (which would lex-sort).
+    groups = []  # list of (chr, start, end, seg_id, cnp, [bbc_indices])
+    for chrom in pd.unique(bbc_chr):
+        chr_idx = np.where(bbc_chr == chrom)[0]
+        if chr_idx.size == 0:
+            continue
+        order = chr_idx[np.argsort(starts[chr_idx])]
+
+        cur_seg = seg_ids[order[0]]
+        cur_start = starts[order[0]]
+        cur_end = ends[order[0]]
+        cur_cnp = cnps[order[0]]
+        cur_indices = [order[0]]
+        cur_d = D_total[order[0]]
+
+        for i in range(1, len(order)):
+            bi = order[i]
+            bi_seg = seg_ids[bi]
+            bi_start = starts[bi]
+            bi_end = ends[bi]
+            bi_length = bi_end - cur_start
+
+            same_seg = bi_seg == cur_seg and cur_seg >= 0
+            fits_length = bi_length <= max_bin_length
+            needs_more = cur_d < min_snp_count
+
+            if same_seg and fits_length and needs_more:
+                cur_indices.append(bi)
+                cur_end = bi_end
+                cur_d += D_total[bi]
+            else:
+                groups.append(
+                    (chrom, cur_start, cur_end, cur_seg, cur_cnp, cur_indices)
+                )
+                cur_seg = bi_seg
+                cur_start = bi_start
+                cur_end = bi_end
+                cur_cnp = cnps[bi]
+                cur_indices = [bi]
+                cur_d = D_total[bi]
+
+        groups.append((chrom, cur_start, cur_end, cur_seg, cur_cnp, cur_indices))
+
+    # build aggregated arrays — sum sparse rows per group, then densify the result
+    n_agg = len(groups)
+    N = X.shape[1]
+    X_agg = np.zeros((n_agg, N), dtype=np.int32)
+    Y_agg = np.zeros((n_agg, N), dtype=np.int32)
+    D_agg = np.zeros((n_agg, N), dtype=np.int32)
+    rows = []
+
+    for gi, (chrom, start, end, sid, cnp, indices) in enumerate(groups):
+        idx = np.asarray(indices)
+        X_agg[gi] = np.asarray(X[idx].sum(axis=0)).ravel()
+        Y_agg[gi] = np.asarray(Y[idx].sum(axis=0)).ravel()
+        D_agg[gi] = np.asarray(D[idx].sum(axis=0)).ravel()
+        rows.append(
+            {"#CHR": chrom, "START": start, "END": end, "seg_id": sid, "CNP": cnp}
         )
-    else:
-        # single tumor clone: nothing is subclonal
-        subclonal_mask = np.zeros(cn_A.shape[0], dtype=bool)
-    if and_mask is not None:
-        tumor_mask &= and_mask
-        clonal_loh_mask &= and_mask
-        subclonal_loh_mask &= and_mask
-        ai_mask &= and_mask
-        subclonal_mask &= and_mask
-    return {
-        "CNP": tumor_mask,
-        "IMBALANCED": ai_mask,
-        "CLONAL_IMBALANCED": ai_mask & ~subclonal_mask,
-        "ANEUPLOID": c_mask,
-        "SUBCLONAL": subclonal_mask,
-        "CLONAL_LOH": clonal_loh_mask,
-        "SUBCLONAL_LOH": subclonal_loh_mask,
-        "NEUTRAL": neutral_mask,
-    }
+
+    agg_df = pd.DataFrame(rows)
+
+    # Drop unmapped bins (seg_id=-1, no CNP)
+    mapped = agg_df["seg_id"] >= 0
+    if not mapped.all():
+        n_drop = (~mapped).sum()
+        logging.warning(f"adaptive_bin_bbc: dropping {n_drop} unmapped bins")
+        keep = mapped.to_numpy()
+        agg_df = agg_df[keep].reset_index(drop=True)
+        X_agg = X_agg[keep]
+        Y_agg = Y_agg[keep]
+        D_agg = D_agg[keep]
+
+    lengths = (agg_df["END"] - agg_df["START"]).to_numpy()
+    d_sums = D_agg.sum(axis=1)
+    x_sums = X_agg.sum(axis=1)
+    logging.info(
+        f"adaptive_bin_bbc: {len(bbc_df)} -> {n_agg} bins, "
+        f"length median={np.median(lengths):.0f} mean={np.mean(lengths):.0f}, "
+        f"snp_count median={np.median(d_sums):.0f} mean={np.mean(d_sums):.0f}, "
+        f"total_count median={np.median(x_sums):.0f} mean={np.mean(x_sums):.0f}"
+    )
+
+    return SX_Data(seg_sx.barcodes, agg_df, X_agg, Y_agg, D_agg)

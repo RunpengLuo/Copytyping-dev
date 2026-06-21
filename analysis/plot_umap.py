@@ -6,8 +6,9 @@ from scanpy import AnnData
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.io_utils import *
+
+from sx_data import SX_Data
 
 
 def plot_umap_copynumber(

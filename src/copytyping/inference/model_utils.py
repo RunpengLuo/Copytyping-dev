@@ -1,13 +1,22 @@
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.optimize import minimize_scalar
 from scipy.stats import zscore
 
-from copytyping.likelihoods import (
+from copytyping.inference.likelihoods import (
     cond_betabin_logpmf_theta,
     cond_negbin_logpmf_theta,
 )
+
+if TYPE_CHECKING:
+    from copytyping.inference.count_data import CountData
+
+
+##################################################
+# args → model config
+##################################################
 
 
 def model_kwargs_from_args(args: dict) -> dict:
@@ -41,6 +50,11 @@ def save_model_params(
     np.savez(path, **param_dict)
 
 
+##################################################
+# RDR baseline
+##################################################
+
+
 def compute_baseline_proportions(
     X: np.ndarray,
     T: np.ndarray,
@@ -64,7 +78,12 @@ def compute_baseline_proportions(
     return base / total if total > 0 else np.ones_like(base) / len(base)
 
 
-def compute_rdr_baseline(count_data, ref_cells, ref_clone=0, no_normal=False):
+def compute_rdr_baseline(
+    count_data: "CountData",
+    ref_cells: np.ndarray | None,
+    ref_clone: int = 0,
+    no_normal: bool = False,
+) -> np.ndarray | None:
     """RDR baseline (G,) from the reference-cell pseudobulk; None if no reference cells.
 
     CNP-corrected under ``no_normal`` (divides out the reference clone's copy ratio).
@@ -77,7 +96,12 @@ def compute_rdr_baseline(count_data, ref_cells, ref_clone=0, no_normal=False):
     return compute_baseline_proportions(count_data.count_X, T, ref_cells, ref_cn=ref_cn)
 
 
-def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray):
+##################################################
+# clone-level RDR / pi
+##################################################
+
+
+def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray) -> np.ndarray:
     """compute mu_{g,k}=C[g,k] / sum_{g}{lam_g * C[g,k]}
 
     Args:
@@ -89,9 +113,9 @@ def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray):
     return mu_gk
 
 
-# linear scaling assumption
-def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray):
-    """compute pi_gk=lam_g * rdr_gk
+def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """compute pi_gk=lam_g * rdr_gk (linear scaling assumption)
+
     Args:
         lambda_g (np.ndarray): (G,)
         C (np.ndarray): (G,K)
@@ -101,7 +125,12 @@ def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray):
     return props_gk
 
 
-def empirical_baf_gn(Y: np.ndarray, D: np.ndarray, norm=False):
+##################################################
+# empirical BAF / RDR
+##################################################
+
+
+def empirical_baf_gn(Y: np.ndarray, D: np.ndarray, norm: bool = False) -> np.ndarray:
     baf_matrix = np.divide(
         Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
     )
@@ -112,8 +141,12 @@ def empirical_baf_gn(Y: np.ndarray, D: np.ndarray, norm=False):
 
 
 def empirical_rdr_gn(
-    X: np.ndarray, T: np.ndarray, base_props: np.ndarray, log2=False, norm=False
-):
+    X: np.ndarray,
+    T: np.ndarray,
+    base_props: np.ndarray,
+    log2: bool = False,
+    norm: bool = False,
+) -> np.ndarray:
     """
     X: (G, N) G bin by spot/cell N count matrix
     T: (N,) total expression counts
@@ -135,14 +168,19 @@ def empirical_rdr_gn(
     return rdr_matrix
 
 
+##################################################
+# tumor-purity init
+##################################################
+
+
 def estimate_tumor_proportion(
-    count_data,
+    count_data: "CountData",
     T: np.ndarray,
     base_props: np.ndarray,
     tau: float,
     inv_phi: float,
     fit_mode: str = "allele_total",
-):
+) -> np.ndarray:
     """Per-spot purity init using BB+NB on clonal-only segments (no gamma weighting).
 
     Mirrors the spot model E-step likelihood but evaluated on segments shared by

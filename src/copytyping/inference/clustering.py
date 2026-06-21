@@ -5,25 +5,27 @@ import pandas as pd
 from scipy import stats
 from sklearn import cluster
 
+from copytyping.inference.count_data import CountData
 from copytyping.inference.model_utils import compute_baseline_proportions
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import is_tumor_label
 
 
-def prepare_rdr_baf_features(sx_data: SX_Data, base_props: np.ndarray, norm=True):
+def prepare_rdr_baf_features(
+    count_data: CountData, base_props: np.ndarray, norm: bool = True
+) -> np.ndarray:
     """Build cell x feature matrix from BAF + log2RDR at informative bins."""
-    Y = sx_data.Y
-    D = sx_data.D
+    Y = np.asarray(count_data.count_B)
+    D = np.asarray(count_data.count_C)
     baf_matrix = np.divide(
         Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
     )
     baf_matrix = baf_matrix.T
-    baf_masks = sx_data.MASK["IMBALANCED"]
+    baf_masks = count_data.allele_mask["IMBALANCED"]
     baf_matrix = baf_matrix[:, baf_masks]
 
-    X = sx_data.X
-    T = sx_data.T
-    rdr_masks = sx_data.MASK["ANEUPLOID"]
+    X = np.asarray(count_data.count_X)
+    T = X.sum(axis=0)
+    rdr_masks = count_data.total_mask["ANEUPLOID"]
     rdr_denom = base_props[:, None] @ T[None, :]  # (G, N)
     rdr_matrix = np.divide(
         X,
@@ -50,12 +52,12 @@ def prepare_rdr_baf_features(sx_data: SX_Data, base_props: np.ndarray, norm=True
 
 
 def kmeans_copytyping(
-    data_sources: dict,
+    data_sources: dict[str, CountData],
     barcodes: pd.DataFrame,
     ref_label: str,
     K: int,
     label: str,
-):
+) -> tuple[pd.DataFrame, dict[str, float]]:
     """K-means clustering on BAF+RDR features. Returns (anns, clone_props).
 
     If ref_label is in barcodes, clusters get majority-voted normal/tumor names
@@ -68,9 +70,10 @@ def kmeans_copytyping(
     logging.info(f"kmeans: {n_normal} ref normals for baseline")
 
     features = []
-    for sx in data_sources.values():
-        base_props = compute_baseline_proportions(sx.X, sx.T, is_normal)
-        features.append(prepare_rdr_baf_features(sx, base_props, norm=False))
+    for count_data in data_sources.values():
+        X = np.asarray(count_data.count_X)
+        base_props = compute_baseline_proportions(X, X.sum(axis=0), is_normal)
+        features.append(prepare_rdr_baf_features(count_data, base_props, norm=False))
     data_matrix = np.concatenate(features, axis=1)
 
     kmeans = cluster.KMeans(n_clusters=K, init="k-means++")
@@ -93,9 +96,9 @@ def kmeans_copytyping(
 def cluster_label_major_vote(
     anns: pd.DataFrame,
     cluster_labels: np.ndarray,
-    cell_label="raw_label",
-    ref_label="cell_type",
-):
+    cell_label: str = "raw_label",
+    ref_label: str = "cell_type",
+) -> tuple[pd.DataFrame, dict[str, float]]:
     """Assign cluster labels to normal or tumor based on majority vote vs ref_label."""
     anns[f"{cell_label}-raw"] = cluster_labels.astype(str)
     anns[cell_label] = "NA"

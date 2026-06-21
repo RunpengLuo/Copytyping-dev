@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Patch, Rectangle
 
@@ -48,13 +49,13 @@ def plot_heatmap(
     cnprofile: pd.DataFrame,
     X_mat: np.ndarray,
     wl_segments: pd.DataFrame,
-    height=1,
-    plot_chrname=True,
-    title=None,
-    ylabel=None,
-    cmap=None,
-    norm=None,
-    show_block_labels=True,
+    height: int = 1,
+    plot_chrname: bool = True,
+    title: str | None = None,
+    ylabel: str | None = None,
+    cmap: mcolors.Colormap | None = None,
+    norm: mcolors.Normalize | None = None,
+    show_block_labels: bool = True,
 ):
     (N, G) = X_mat.shape
     assert len(cnprofile) == G, "unmatched data"
@@ -343,20 +344,20 @@ def plot_cnv_heatmap(
     num_clones: int,
     anns: pd.DataFrame,
     region_bed: str,
-    proportions=None,
-    val="BAF",
-    base_props=None,
-    agg_size=5,
-    label_cols=None,
-    primary_label=None,
-    figsize=(20, 13),
-    hratios=[10, 2, 2],
-    filename=None,
-    pdf_pages=None,
-    dpi=300,
-    transparent=False,
-    rep_id="",
-    ascn_profile=False,
+    proportions: np.ndarray | None = None,
+    val: str = "BAF",
+    base_props: np.ndarray | None = None,
+    agg_size: int = 5,
+    label_cols: list | None = None,
+    primary_label: str | None = None,
+    figsize: tuple = (20, 13),
+    hratios: list = [10, 2, 2],
+    filename: str | None = None,
+    pdf_pages: PdfPages | None = None,
+    dpi: int = 300,
+    transparent: bool = False,
+    rep_id: str = "",
+    ascn_profile: bool = False,
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
     wl_fragments = read_whitelist_segments(region_bed)

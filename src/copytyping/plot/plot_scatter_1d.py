@@ -1,9 +1,9 @@
-import logging
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from collections import OrderedDict
+from matplotlib.axes import Axes
+from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.collections import LineCollection
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
@@ -18,8 +18,16 @@ from copytyping.plot.plot_common import build_wl_coords
 from copytyping.utils import get_chr_sizes, read_whitelist_segments
 
 
+##################################################
+# genome-axis helpers
+##################################################
+
+
 def _build_ch_boundary(
-    region_df: pd.DataFrame, chrs: list, chr_sizes: dict, chr_shift=10_000_000
+    region_df: pd.DataFrame,
+    chrs: list,
+    chr_sizes: dict,
+    chr_shift: int = 10_000_000,
 ):
     chr_offsets = OrderedDict()
     for i, ch in enumerate(chrs):
@@ -60,7 +68,12 @@ def _build_ch_boundary(
     return (chr_offsets, chr_gaps, chr_end, xlab_chrs, xtick_chrs)
 
 
-def _merge_exp_lines(abs_starts, abs_ends, exp_vals, chrs):
+def _merge_exp_lines(
+    abs_starts: np.ndarray,
+    abs_ends: np.ndarray,
+    exp_vals: np.ndarray,
+    chrs: np.ndarray,
+):
     """Merge adjacent bins with the same expected value into one line segment.
 
     Skips bins with NaN positions (outside whitelist regions) or NaN expected
@@ -85,21 +98,26 @@ def _merge_exp_lines(abs_starts, abs_ends, exp_vals, chrs):
     return lines
 
 
+##################################################
+# 1d scatter plots
+##################################################
+
+
 def plot_scatter_1d_pseudobulk(
-    ax,
-    positions,
-    obs_values,
-    chr_vlines,
-    chr_end,
-    xtick_chrs,
-    xlab_chrs=None,
-    exp_lines=None,
-    colors=None,
-    ylabel="value",
-    ylim=None,
-    markersize=20,
-    title=None,
-    show_xticklabels=True,
+    ax: Axes,
+    positions: np.ndarray,
+    obs_values: np.ndarray,
+    chr_vlines: list,
+    chr_end: float,
+    xtick_chrs: list,
+    xlab_chrs: list | None = None,
+    exp_lines: list | None = None,
+    colors: np.ndarray | None = None,
+    ylabel: str = "value",
+    ylim: tuple | None = None,
+    markersize: int = 20,
+    title: str | None = None,
+    show_xticklabels: bool = True,
 ):
     """Scatter plot of per-bin pseudobulk values along the genome.
 
@@ -181,16 +199,16 @@ def plot_rdr_baf_1d_pseudobulk(
     assay_type: str,
     genome_file: str,
     region_bed: str,
-    haplo_blocks: pd.DataFrame = None,
-    lab_type="cell_label",
-    is_inferred=True,
-    figsize=(20, 4),
-    filename=None,
-    pdf_pages=None,
-    log2=True,
-    rdr_ylim=(-5, 5),
-    markersize=20,
-    ascn_profile=False,
+    haplo_blocks: pd.DataFrame | None = None,
+    lab_type: str = "cell_label",
+    is_inferred: bool = True,
+    figsize: tuple = (20, 4),
+    filename: str | None = None,
+    pdf_pages: PdfPages | None = None,
+    log2: bool = True,
+    rdr_ylim: tuple = (-5, 5),
+    markersize: int = 20,
+    ascn_profile: bool = False,
     **kwargs,
 ):
     """Per-clone log2RDR + BAF scatter plot along the genome, single page.

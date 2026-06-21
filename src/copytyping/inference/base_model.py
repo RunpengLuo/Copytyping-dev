@@ -1,6 +1,7 @@
 import logging
 
 import numpy as np
+import pandas as pd
 
 from scipy.special import logsumexp
 
@@ -67,7 +68,7 @@ class Base_Model:
     # ------------------------------------------------------------------
     # Initialization helpers
     # ------------------------------------------------------------------
-    def _estimate_reference_cells(self):
+    def _estimate_reference_cells(self) -> tuple[np.ndarray, int, dict]:
         """Pick the reference-cell set + reference clone via allele-only sub-EM.
 
         Default (has-normal): cluster cells on clonal imbalanced bins
@@ -134,7 +135,7 @@ class Base_Model:
         self.ref_clone = ref_clone
         return is_reference, ref_clone, init_labeling
 
-    def _init_lambda(self, is_reference, ref_clone):
+    def _init_lambda(self, is_reference: np.ndarray, ref_clone: int) -> None:
         """Baseline read-depth proportions from the reference cells per data type.
 
         Under ``--no_normal`` the reference clone may be non-diploid, so divide
@@ -154,10 +155,10 @@ class Base_Model:
     # ------------------------------------------------------------------
     # E-step
     # ------------------------------------------------------------------
-    def compute_log_likelihood(self, fit_mode: str):
+    def compute_log_likelihood(self, fit_mode: str) -> tuple:
         raise NotImplementedError("not implemented")
 
-    def _e_step(self, fit_mode: str, t=0) -> np.ndarray:
+    def _e_step(self, fit_mode: str, t: int = 0) -> np.ndarray:
         """Compute posterior probabilities. Returns gamma (N, K) or (N_tumor, K_tumor)."""
         ll, log_marg, global_lls = self.compute_log_likelihood(fit_mode)
         gamma = np.exp(global_lls - logsumexp(global_lls, axis=1, keepdims=True))
@@ -173,7 +174,7 @@ class Base_Model:
     # ------------------------------------------------------------------
     # M-step helpers
     # ------------------------------------------------------------------
-    def _update_pi(self, gamma, N_eff, K_eff):
+    def _update_pi(self, gamma: np.ndarray, N_eff: float, K_eff: int) -> None:
         """Global MAP pi update with Dirichlet(alpha) prior. pi has shape (K_eff,)."""
         if self.fix_model_params["pi"]:
             return
@@ -187,7 +188,7 @@ class Base_Model:
     # ------------------------------------------------------------------
     # Fit (common EM loop)
     # ------------------------------------------------------------------
-    def fit(self, fit_mode="allele_total", **kwargs):
+    def fit(self, fit_mode: str = "allele_total", **kwargs) -> tuple[dict, float]:
         tol = self.model_tols["tol"]
         eps = self.model_tols["eps"]
         n_allele_bins = sum(
@@ -260,7 +261,9 @@ class Base_Model:
         self.gamma_trace = gamma_trace
         return params, ll_trace[-1] if ll_trace else -np.inf
 
-    def _map_estimation(self, gamma, label, as_df=True):
+    def _map_estimation(
+        self, gamma: np.ndarray, label: str, as_df: bool = True
+    ) -> pd.DataFrame | dict:
         r"""Flat MAP estimation: z_n = argmax_k γ_nk (k=0 is normal)."""
         N = len(gamma)
         clone_names = np.array(self.clones)  # ["normal", "clone1", ...]
@@ -280,7 +283,7 @@ class Base_Model:
     # ------------------------------------------------------------------
     # Predict
     # ------------------------------------------------------------------
-    def predict(self, fit_mode, label, **kwargs):
+    def predict(self, fit_mode: str, label: str, **kwargs) -> tuple[pd.DataFrame, dict]:
         """Predict clone labels via hierarchical gated inference.
 
         1. Normal vs tumor gate
@@ -292,7 +295,7 @@ class Base_Model:
         self._log_posterior_stats(anns, label)
         return anns, clone_props
 
-    def _log_posterior_stats(self, anns, group_label):
+    def _log_posterior_stats(self, anns: pd.DataFrame, group_label: str) -> None:
         """Log per-group posterior statistics."""
         logging.info("posterior statistics:")
         for grp, sub in anns.groupby(group_label, sort=True):

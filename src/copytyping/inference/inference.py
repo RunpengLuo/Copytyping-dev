@@ -29,7 +29,6 @@ from copytyping.io_utils import (
     read_bbc_phases,
     build_spatial_graphs,
 )
-from copytyping.plot.plot_common import plot_count_histograms
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_scatter_2d import plot_scatter_2d_per_cell
@@ -42,7 +41,12 @@ from copytyping.utils import (
 )
 
 
-def run(args=None):
+##################################################
+# orchestrator
+##################################################
+
+
+def run(args: dict | None = None) -> None:
     """Validate args, load full inputs, then dispatch to the platform pipeline."""
     logging.info("run copytyping inference")
     args = normalize_args(args)
@@ -50,7 +54,8 @@ def run(args=None):
     platform = args["platform"]
     assay_types = args["assay_types"]
     out_dir = args["out_dir"]
-    out_prefix = args["out_prefix"] or str(args["sample"])
+    sample_id = args["sample"]
+    out_prefix = args["out_prefix"] or sample_id
     proc_dir = os.path.join(out_dir, "processed_data")
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(proc_dir, exist_ok=True)
@@ -60,7 +65,7 @@ def run(args=None):
 
     # ---- load inputs -------------------------------
     bbc_phases = read_bbc_phases(args["bbc_phases"])
-    seg_df, clones, clone_props, cn_A, cn_B, cn_C, BAF = load_bulk_cnprofile(
+    seg_df, clones, clone_props, cn_A, cn_B, cn_C, cn_BAF = load_bulk_cnprofile(
         args["seg_ucn"], solfile=args["solfile"], baf_clip=args["baf_clip"]
     )
     cell_type_df = read_cell_types(
@@ -69,19 +74,19 @@ def run(args=None):
 
     bbc_count_datas = {}
     for assay_type in assay_types:
-        count_data = initialize_count_data(
+        bbc_count_datas[assay_type] = initialize_count_data(
             args[f"{assay_type}_barcodes"],
             args[f"{assay_type}_X_count"],
             args[f"{assay_type}_A_allele"],
             args[f"{assay_type}_B_allele"],
             args[f"{assay_type}_cnv_segments"],
-            assay_type,
             cell_type_df,
             args["ref_label"],
             args["exclude_cell_types"],
         )
-        count_data.annotate_cnps(bbc_phases, seg_df, clones, cn_A, cn_B, cn_C, BAF)
-        bbc_count_datas[assay_type] = count_data
+        bbc_count_datas[assay_type].annotate_cnps(
+            bbc_phases, seg_df, clones, cn_A, cn_B, cn_C, cn_BAF
+        )
 
     spatial_graphs = None
     if platform in SPATIAL_PLATFORMS:
@@ -142,25 +147,6 @@ def run(args=None):
     if args["ref_label"] in anns.columns:
         plot_labels.append(args["ref_label"])
 
-    if args["method"] == "copytyping":
-        plot_count_histograms(
-            read_counts={
-                a: count_data.count_X for a, count_data in seg_count_datas.items()
-            },
-            total_allele_counts={
-                a: count_data.count_C for a, count_data in seg_count_datas.items()
-            },
-            cn_A={a: count_data.cn_A for a, count_data in seg_count_datas.items()},
-            cn_B={a: count_data.cn_B for a, count_data in seg_count_datas.items()},
-            cn_C={a: count_data.cn_C for a, count_data in seg_count_datas.items()},
-            barcodes={
-                a: count_data.barcodes for a, count_data in seg_count_datas.items()
-            },
-            sample=args["sample"],
-            outfile=os.path.join(plot_dir, f"{out_prefix}.count_histograms.pdf"),
-            dpi=args["dpi"],
-        )
-
     for assay_type in assay_types:
         cluster_count_data = cluster_count_datas[assay_type]
         seg_count_data = seg_count_datas[assay_type]
@@ -194,7 +180,7 @@ def run(args=None):
             cluster_count_data.clones,
             cluster_profile,
             anns,
-            args["sample"],
+            sample_id,
             os.path.join(plot_dir, f"{out_prefix}.{assay_type}.cluster_2d.pdf"),
             label,
             base_props=cluster_baseline,
@@ -215,7 +201,7 @@ def run(args=None):
                         if val == "log2RDR" and seg_baseline is None:
                             continue
                         plot_cnv_heatmap(
-                            args["sample"],
+                            sample_id,
                             assay_type,
                             seg_profile,
                             seg_rep_data.count_X,
@@ -259,7 +245,7 @@ def run(args=None):
                         bin_profile,
                         anns_rep,
                         bin_baseline,
-                        args["sample"],
+                        sample_id,
                         assay_type,
                         args["genome_size"],
                         args["region_bed"],
@@ -273,11 +259,9 @@ def run(args=None):
                     )
 
     if platform in SPATIAL_PLATFORMS and args["gex_h5ad"]:
-        gex_cluster_data = segment_count_data(
-            {"gex": bbc_count_datas["gex"]}, "cnp_cluster"
-        )["gex"]
+        gex_cluster_data = cluster_count_datas["gex"]
         plot_visium_all(
-            sample=args["sample"],
+            sample=sample_id,
             anns=anns,
             h5ad_source=args["gex_h5ad"],
             ballele_counts=gex_cluster_data.count_B,
@@ -299,6 +283,11 @@ def run(args=None):
     _file_handler.close()
 
 
+##################################################
+# model fit
+##################################################
+
+
 def run_copytyping(
     assay_types: list[str],
     bbc_data: dict[str, CountData],
@@ -309,8 +298,8 @@ def run_copytyping(
 ) -> tuple[Base_Model, pd.DataFrame, dict, float]:
     """Cluster the annotated BBC CountData and fit the platform model.
 
-    Operates purely on the CountData ``bbc_data`` (+ spatial neighbor graphs); the
-    legacy SX_Data is never touched. Returns ``(model, anns, model_params,
+    Operates purely on the CountData ``bbc_data`` (+ spatial neighbor graphs).
+    Returns ``(model, anns, model_params,
     model_ll)``. Single-cell / multiome run Cell_Model on the jointly-clustered
     CountData. Spatial first smooths the clustered CountData over the spot
     neighbor graphs (``smooth_spatial_neighbors``), then runs Spot_Model.
@@ -375,7 +364,12 @@ def run_copytyping(
     return model, anns, model_params
 
 
-def run_kmeans():
+##################################################
+# kmeans (disabled)
+##################################################
+
+
+def run_kmeans() -> None:
     # ---- kmeans baseline (disabled for now) -----------------------------
     # if args["method"] == "kmeans":
     #     barcodes, _ = union_align_barcodes(unsmoothed_data_sources, assay_types)

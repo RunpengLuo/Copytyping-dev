@@ -5,8 +5,12 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from copytyping.io_utils import exclude_barcodes
-from copytyping.inference.inference_utils import merge_celltype_into_barcodes
+from copytyping.io_utils import exclude_barcodes, read_barcodes
+
+
+##################################################
+# informative-bin masks
+##################################################
 
 
 def get_cnp_mask(
@@ -62,6 +66,11 @@ def get_cnp_mask(
         "SUBCLONAL_LOH": subclonal_loh_mask,
         "NEUTRAL": neutral_mask,
     }
+
+
+##################################################
+# CountData container
+##################################################
 
 
 @dataclass
@@ -196,6 +205,11 @@ class CountData:
         )
 
 
+##################################################
+# loading & segment mapping
+##################################################
+
+
 def _map_bulk_seg_index(
     coordinates: pd.DataFrame, bulk_profiles: pd.DataFrame
 ) -> np.ndarray:
@@ -229,7 +243,6 @@ def initialize_count_data(
     a_allele_path: str,
     b_allele_path: str,
     cnv_segments_path: str,
-    assay_type: str,
     cell_type_df: pd.DataFrame | None = None,
     ref_label: str | None = None,
     exclude_labels: set[str] | None = None,
@@ -239,25 +252,17 @@ def initialize_count_data(
     Reads barcodes (+REP_ID), the sparse read/A/B count matrices, and the segment
     table; merges cell types and drops excluded labels when provided.
     """
-    barcodes_df = pd.read_table(
-        barcodes_path, sep="\t", header=None, names=["BARCODE"], dtype=str
-    )
-    # REP_ID is everything after the first underscore ("ACGT-1_U1" -> "U1").
-    barcodes_df["REP_ID"] = barcodes_df["BARCODE"].str.split("_", n=1).str[1]
+    barcodes_df = read_barcodes(barcodes_path, cell_type_df, ref_label)
 
     X = sparse.load_npz(x_count_path)
     A = sparse.load_npz(a_allele_path)
     B = sparse.load_npz(b_allele_path)
     coordinates_df = pd.read_table(cnv_segments_path, sep="\t")
 
-    if cell_type_df is not None and ref_label is not None:
-        barcodes_df = merge_celltype_into_barcodes(
-            barcodes_df, cell_type_df, ref_label, assay_type
+    if exclude_labels:
+        barcodes_df, X, A, B = exclude_barcodes(
+            barcodes_df, exclude_labels, ref_label, X, A, B
         )
-        if exclude_labels:
-            barcodes_df, X, A, B = exclude_barcodes(
-                barcodes_df, exclude_labels, ref_label, X, A, B
-            )
 
     return CountData(
         barcodes=barcodes_df,
@@ -266,6 +271,11 @@ def initialize_count_data(
         count_A=A,
         count_B=B,
     )
+
+
+##################################################
+# segmentation
+##################################################
 
 
 def _adaptive_segment_ids(
@@ -454,6 +464,11 @@ def restrict_masks_to_cnp(
     logging.info(f"keep_cn_row: inference uses {n_kept}/{G} CNP clusters")
 
 
+##################################################
+# spatial smoothing
+##################################################
+
+
 def smooth_spatial_neighbors(
     count_data: dict[str, CountData],
     spatial_graphs: dict[str, dict],
@@ -536,6 +551,11 @@ def smooth_spatial_neighbors(
         )
         out[assay] = replace(cd, count_X=X, count_A=A, count_B=B)
     return out
+
+
+##################################################
+# outputs
+##################################################
 
 
 def count_data_cnprofile(cd: CountData) -> pd.DataFrame:

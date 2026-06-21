@@ -9,13 +9,18 @@ import pandas as pd
 import yaml
 
 
+##################################################
+# config / runtime defaults
+##################################################
+
+
 def load_defaults() -> dict:
     """Load packaged tuning defaults from src/copytyping/copytyping.yaml."""
     text = files("copytyping").joinpath("copytyping.yaml").read_text(encoding="utf-8")
     return yaml.safe_load(text)
 
 
-def normalize_args(args) -> dict:
+def normalize_args(args: argparse.Namespace | dict) -> dict:
     """Convert Namespace→dict if needed and merge YAML defaults under it (args win).
 
     Argparse parsers use ``default=argparse.SUPPRESS`` so unparsed flags are
@@ -25,6 +30,10 @@ def normalize_args(args) -> dict:
         args = vars(args)
     return {**load_defaults(), **args}
 
+
+##################################################
+# constants
+##################################################
 
 ALL_PLATFORMS = ["single_cell", "spatial", "multiome"]
 SPATIAL_PLATFORMS = {"spatial"}
@@ -36,6 +45,11 @@ INVALID_LABELS = {"Doublet", "doublet", "Unknown", "NA"}
 NA_CELLTYPE = {"Unknown", "NA"}
 
 
+##################################################
+# label predicates
+##################################################
+
+
 def is_tumor_label(label: str) -> bool:
     return label.lower().startswith(TUMOR_PREFIXES) or label in TUMOR_LABELS
 
@@ -44,7 +58,12 @@ def is_normal_label(label: str) -> bool:
     return not is_tumor_label(label) and label not in INVALID_LABELS
 
 
-def get_chr2ord(ch):
+##################################################
+# chromosome utilities
+##################################################
+
+
+def get_chr2ord(ch: str) -> dict[str, int]:
     chr2ord = {}
     for i in range(1, 23):
         chr2ord[f"{ch}{i}"] = i
@@ -54,14 +73,14 @@ def get_chr2ord(ch):
     return chr2ord
 
 
-def sort_chroms(chromosomes: list):
+def sort_chroms(chromosomes: list[str]) -> list[str]:
     assert len(chromosomes) != 0
     ch = "chr" if str(chromosomes[0]).startswith("chr") else ""
     chr2ord = get_chr2ord(ch)
     return sorted(chromosomes, key=lambda x: chr2ord[x])
 
 
-def get_chr_sizes(sz_file: str):
+def get_chr_sizes(sz_file: str) -> "OrderedDict[str, int]":
     chr_sizes = OrderedDict()
     with open(sz_file, "r") as rfd:
         for line in rfd.readlines():
@@ -71,14 +90,21 @@ def get_chr_sizes(sz_file: str):
     return chr_sizes
 
 
-def sort_df_chr(df: pd.DataFrame, ch="#CHR", pos="POS"):
+def sort_df_chr(df: pd.DataFrame, ch: str = "#CHR", pos: str = "POS") -> pd.DataFrame:
     chs = sort_chroms(df[ch].unique().tolist())
     df[ch] = pd.Categorical(df[ch], categories=chs, ordered=True)
     df.sort_values(by=[ch, pos], inplace=True, ignore_index=True)
     return df
 
 
-def read_seg_ucn_file(seg_ucn_file: str):
+##################################################
+# bulk file readers
+##################################################
+
+
+def read_seg_ucn_file(
+    seg_ucn_file: str,
+) -> tuple[pd.DataFrame, list[str], list[float]]:
     segs_df = pd.read_table(seg_ucn_file, sep="\t")
     segs_df = sort_df_chr(segs_df, pos="START")
 
@@ -92,7 +118,7 @@ def read_seg_ucn_file(seg_ucn_file: str):
     return segs_df, clones, clone_props
 
 
-def read_whitelist_segments(bed_file: str):
+def read_whitelist_segments(bed_file: str) -> pd.DataFrame:
     wl_fragments = pd.read_table(
         bed_file,
         sep="\t",
@@ -102,7 +128,12 @@ def read_whitelist_segments(bed_file: str):
     return wl_fragments
 
 
-def setup_logging(args) -> None:
+##################################################
+# logging
+##################################################
+
+
+def setup_logging(args: argparse.Namespace | dict) -> None:
     v = args["verbosity"] if isinstance(args, dict) else args.verbosity
     level = logging.DEBUG if v >= 2 else logging.INFO
     logging.basicConfig(
@@ -112,13 +143,13 @@ def setup_logging(args) -> None:
     )
 
 
-def log_arguments(args) -> None:
+def log_arguments(args: argparse.Namespace | dict) -> None:
     d = vars(args) if hasattr(args, "__dict__") else args
     lines = "\n".join(f"  {k}: {v}" for k, v in sorted(d.items()) if k != "func")
     logging.info(f"parsed arguments:\n{lines}")
 
 
-def add_file_logging(out_dir: str, command: str = "copytyping"):
+def add_file_logging(out_dir: str, command: str = "copytyping") -> logging.FileHandler:
     """Attach a FileHandler to the root logger. Returns the handler for later removal."""
     os.makedirs(out_dir, exist_ok=True)
     level = (

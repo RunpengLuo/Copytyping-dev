@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 from functools import partial
@@ -8,22 +9,21 @@ from scipy import sparse
 
 from copytyping.inference.model_utils import compute_rdr_baseline
 from copytyping.io_utils import load_spatial_neighbors
-from copytyping.plot.plot_common import (
-    plot_count_histograms,
-    plot_crosstab,
-    plot_init_baf_histograms,
-    plot_purity_histograms,
-)
-from copytyping.plot.plot_modality import plot_modality_panel
 from copytyping.plot.plot_visium import plot_visium_all
-from copytyping.sx_data.sx_data import SX_Data
-from copytyping.utils import add_file_logging, normalize_args
-from copytyping.validation.metrics import (
+from copytyping.utils import add_file_logging, normalize_args, setup_logging
+
+from analysis_plots import (
     compute_joincount_zscores,
     evaluate_init_normal,
     evaluate_malignant_accuracy,
+    plot_count_histograms,
+    plot_crosstab,
+    plot_init_baf_histograms,
+    plot_modality_panel,
+    plot_purity_histograms,
     refine_labels_by_reference,
 )
+from sx_data import SX_Data
 
 
 def _find_prefix(proc_dir):
@@ -420,3 +420,98 @@ def run(args=None):
     logging.info("validation done")
     logging.root.removeHandler(_file_handler)
     _file_handler.close()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Standalone argparse for the relocated validate workflow.
+
+    Tuning knobs left as SUPPRESS are filled from the packaged copytyping.yaml
+    by normalize_args; --ref_labels/--ref_label/--h5ad carry explicit defaults.
+    """
+    p = argparse.ArgumentParser(prog="validate", description=__doc__)
+    p.add_argument(
+        "--processed_data",
+        required=True,
+        help="dir with cnp_profile.tsv, X/Y/D.npz, model_params.npz",
+    )
+    p.add_argument(
+        "--pred_labels",
+        required=True,
+        help="TSV with BARCODE + predicted label columns",
+    )
+    p.add_argument("--sample", required=True, help="sample name")
+    p.add_argument("--genome_size", required=True, help="chromosome sizes file")
+    p.add_argument("--region_bed", required=True, help="chromosome regions BED file")
+    p.add_argument("-o", "--out_dir", required=True, help="output directory")
+    p.add_argument(
+        "--ref_labels", default=None, help="TSV with BARCODE + reference label columns"
+    )
+    p.add_argument(
+        "--ref_label",
+        default="path_label",
+        help="reference label column (default: path_label)",
+    )
+    p.add_argument(
+        "--h5ad", default=None, help="h5ad for spatial neighbors (joincount + visium)"
+    )
+    p.add_argument(
+        "--pred_label", default=argparse.SUPPRESS, help="predicted label column"
+    )
+    p.add_argument(
+        "--method", default=argparse.SUPPRESS, help="method that produced the labels"
+    )
+    p.add_argument(
+        "--purity_cutoff",
+        default=argparse.SUPPRESS,
+        help="comma-separated purity cutoffs",
+    )
+    p.add_argument(
+        "--post_cutoff",
+        default=argparse.SUPPRESS,
+        help="comma-separated max_posterior cutoffs",
+    )
+    p.add_argument("--dpi", type=int, default=argparse.SUPPRESS, help="plot DPI")
+    p.add_argument(
+        "--heatmap_agg",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="cells per heatmap row",
+    )
+    p.add_argument(
+        "--min_snp_count",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="min SNP count per adaptive bin",
+    )
+    p.add_argument(
+        "--max_bin_length",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="max adaptive bin length (bp)",
+    )
+    p.add_argument(
+        "--n_neighs",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="number of spatial neighbors",
+    )
+    p.add_argument(
+        "--ascn_profile",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="allele-specific CN profile track",
+    )
+    p.add_argument(
+        "-v", "--verbosity", type=int, default=argparse.SUPPRESS, help="verbose level"
+    )
+    return p
+
+
+def main(argv=None) -> None:
+    args = normalize_args(build_parser().parse_args(argv))
+    setup_logging(args)
+    run(args)
+
+
+if __name__ == "__main__":
+    main()

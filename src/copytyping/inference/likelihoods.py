@@ -6,7 +6,12 @@ from scipy.optimize import minimize_scalar
 from scipy.special import betaln, gammaln
 
 
-def _broadcast_dispersion(val, G, N):
+##################################################
+# dispersion broadcasting
+##################################################
+
+
+def _broadcast_dispersion(val: np.ndarray, G: int, N: int) -> np.ndarray:
     """Reshape tau / inv_phi for (G, N, K) likelihood broadcast.
 
     Accepts scalar, (G,) per-bin, or (N,) per-spot/cell. Returns (G,1,1) or (1,N,1).
@@ -19,6 +24,11 @@ def _broadcast_dispersion(val, G, N):
     if arr.shape == (N,):
         return arr[None, :, None]
     raise ValueError(f"dispersion shape {arr.shape} not in {{(1,), ({G},), ({N},)}}")
+
+
+##################################################
+# conditional log-PMFs
+##################################################
 
 
 def cond_betabin_logpmf(
@@ -77,7 +87,6 @@ def cond_negbin_logpmf(
         (G, N, K) log-likelihood array.
     """
     (G, N) = X.shape
-    K = pi_gk.shape[1]
     mu_gnk = pi_gk[:, None, :] * T[None, :, None]
     mu_gnk = np.clip(mu_gnk, eps, None)
     X_gnk = X[:, :, None]
@@ -155,7 +164,6 @@ def cond_negbin_logpmf_theta(
         (G, N, K) log-likelihood array.
     """
     (G, N) = X.shape
-    K = rdrs_gk.shape[1]
 
     X_gnk = X[:, :, None]
     T_gnk = T[None, :, None]
@@ -178,7 +186,18 @@ def cond_negbin_logpmf_theta(
     return ll
 
 
-def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds=(1.0, 1e6), eps=1e-12):
+##################################################
+# dispersion MLE
+##################################################
+
+
+def mle_invphi(
+    X_gnk: np.ndarray,
+    mu_gnk: np.ndarray,
+    weights: np.ndarray,
+    invphi_bounds: tuple[float, float] = (1.0, 1e6),
+    eps: float = 1e-12,
+) -> float:
     """MLE of NB inv_phi within bounds."""
     mu_gnk = np.clip(mu_gnk, eps, None)
 
@@ -203,7 +222,13 @@ def mle_invphi(X_gnk, mu_gnk, weights, invphi_bounds=(1.0, 1e6), eps=1e-12):
     return float(np.clip(res.x, invphi_bounds[0], invphi_bounds[1]))
 
 
-def mle_tau(Y_gnk, D_gnk, p_gnk, weights, tau_bounds=(1.0, 1e6)):
+def mle_tau(
+    Y_gnk: np.ndarray,
+    D_gnk: np.ndarray,
+    p_gnk: np.ndarray,
+    weights: np.ndarray,
+    tau_bounds: tuple[float, float] = (1.0, 1e6),
+) -> float:
     """MLE of BB tau within bounds (optimized in log-space)."""
     X_gnk = D_gnk - Y_gnk
     const = gammaln(D_gnk + 1.0) - gammaln(Y_gnk + 1.0) - gammaln(X_gnk + 1.0)

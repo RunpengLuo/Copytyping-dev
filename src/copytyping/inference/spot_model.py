@@ -1,14 +1,14 @@
-import logging
-
 import numpy as np
+import pandas as pd
 from scipy.special import logsumexp
 
 from copytyping.inference.base_model import Base_Model
+from copytyping.inference.count_data import CountData
 from copytyping.inference.model_utils import (
     clone_rdr_gk,
     estimate_tumor_proportion,
 )
-from copytyping.likelihoods import (
+from copytyping.inference.likelihoods import (
     cond_betabin_logpmf_theta,
     cond_negbin_logpmf_theta,
 )
@@ -26,13 +26,19 @@ class Spot_Model(Base_Model):
     and θ→0 explain the same observation.
     """
 
-    def __init__(self, count_data, platform, assay_types, **kwargs):
+    def __init__(
+        self,
+        count_data: dict[str, CountData],
+        platform: str,
+        assay_types: list[str],
+        **kwargs,
+    ) -> None:
         super().__init__(count_data, platform, assay_types, **kwargs)
         self.num_tumor_clones = self.num_clones - 1  # exclude normal
         self.num_em_clones = self.num_tumor_clones  # EM operates on tumor clones only
         self.tumor_clones = self.clones[1:]  # ["clone1", "clone2", ...]
 
-    def _init_params(self, fit_mode):
+    def _init_params(self, fit_mode: str) -> dict:
         assert not self.no_normal, "no_normal is single-cell only"
         is_reference, ref_clone, init_labeling = self._estimate_reference_cells()
         params = self.model_params
@@ -67,7 +73,9 @@ class Spot_Model(Base_Model):
 
         return init_labeling
 
-    def compute_log_likelihood(self, fit_mode):
+    def compute_log_likelihood(
+        self, fit_mode: str
+    ) -> tuple[float, np.ndarray, np.ndarray]:
         """Compute log-likelihood over tumor clones only (K_tumor components)."""
         params = self.model_params
         global_lls = params["ll_global"]
@@ -112,15 +120,17 @@ class Spot_Model(Base_Model):
         log_marg = logsumexp(global_lls, axis=1)
         return np.sum(log_marg), log_marg, global_lls
 
-    def _m_step(self, fit_mode, gamma, t=0):
+    def _m_step(self, fit_mode: str, gamma: np.ndarray, t: int = 0) -> None:
         # pi simplex update; theta fixed after init (_e_step inherited from Base_Model)
         self._update_pi(gamma, self.num_barcodes, self.num_tumor_clones)
 
-    def _map_estimation(self, gamma, label, as_df=True):
+    def _map_estimation(
+        self, gamma: np.ndarray, label: str, as_df: bool = True
+    ) -> pd.DataFrame | dict:
         """MAP over tumor clones only — labels are always a tumor clone.
 
         Normal vs tumor is NOT decided here; ``tumor_purity`` (θ) is reported and
-        the purity-cutoff sweep in ``validation/validate.py`` relabels low-purity
+        the purity-cutoff sweep in ``analysis/validate.py`` relabels low-purity
         spots as "normal" downstream.
         """
         N = len(gamma)
@@ -138,7 +148,7 @@ class Spot_Model(Base_Model):
         anns[label] = labels
         return anns
 
-    def predict(self, fit_mode, label, **kwargs):
+    def predict(self, fit_mode: str, label: str, **kwargs) -> tuple[pd.DataFrame, dict]:
         """Predict clone labels via MAP. Purity reported but does not affect labels.
 
         Clone MAP: z_n = argmax_k gamma_nk (over tumor clones).
