@@ -177,41 +177,49 @@ def adaptive_bin_bbc(
     return SX_Data(seg_sx.barcodes, agg_df, X_agg, Y_agg, D_agg)
 
 
-def compute_loh_baf(clust):
+def compute_loh_baf(
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    clones: list[str],
+):
     """Per-spot aggregated BAF over clone-specific LOH clusters.
 
     Args:
-        clust: cluster-level SX_Data-like object (from seg_sx.to_cluster_level()).
+        ballele_counts: (G, N) cluster-level B-allele counts.
+        total_allele_counts: (G, N) cluster-level total-allele counts (A + B).
+        cn_A/cn_B: (G, K) per-clone copy numbers.
+        clones: clone names, length K.
 
     Returns (baf_array, loh_info) where:
         baf_array: float (N, K_tumor) — per-spot BAF aggregated over LOH clusters of each tumor clone.
             NaN if no allele coverage or no LOH clusters for that clone.
-        loh_info: list of (clone_name, list of "segments <tab> clone states") per clone with LOH.
+        loh_info: list of (clone_name, list of "cluster <tab> clone states") per clone with LOH.
     """
-    K_tumor = clust.K - 1
-    baf = np.full((clust.N, K_tumor), np.nan)
+    num_clones = len(clones)
+    num_cells = ballele_counts.shape[1]
+    K_tumor = num_clones - 1
+    baf = np.full((num_cells, K_tumor), np.nan)
     loh_info = []
 
     for ki in range(K_tumor):
         k = ki + 1  # skip normal
-        clone = clust.clones[k]
-        loh_mask = (clust.cn_B[:, k] == 0) & (clust.cn_A[:, k] > 0)
+        clone = clones[k]
+        loh_mask = (cn_B[:, k] == 0) & (cn_A[:, k] > 0)
         if loh_mask.sum() == 0:
             continue
 
         entries = []
         for gi in np.where(loh_mask)[0]:
-            row = clust.cnv_blocks.iloc[gi]
             cn_parts = [
-                f"{clust.clones[j]}={clust.cn_A[gi, j]}|{clust.cn_B[gi, j]}"
-                for j in range(clust.K)
+                f"{clones[j]}={cn_A[gi, j]}|{cn_B[gi, j]}" for j in range(num_clones)
             ]
-            segs = row.get("SEGMENTS", f"cluster{gi}")
-            entries.append(f"{segs}\t{', '.join(cn_parts)}")
+            entries.append(f"cluster{gi}\t{', '.join(cn_parts)}")
         loh_info.append((clone, entries))
 
-        Y_loh = clust.Y[loh_mask].sum(axis=0).astype(float)
-        D_loh = clust.D[loh_mask].sum(axis=0).astype(float)
+        Y_loh = ballele_counts[loh_mask].sum(axis=0).astype(float)
+        D_loh = total_allele_counts[loh_mask].sum(axis=0).astype(float)
         valid = D_loh > 0
         baf[valid, ki] = Y_loh[valid] / D_loh[valid]
 

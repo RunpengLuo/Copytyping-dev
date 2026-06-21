@@ -21,7 +21,12 @@ def plot_visium_all(
     sample,
     anns,
     h5ad_source,
-    raw_clust,
+    ballele_counts,
+    total_allele_counts,
+    cn_A,
+    cn_B,
+    cluster_barcodes,
+    clones,
     plot_dir,
     spot_label,
     ref_label,
@@ -29,7 +34,6 @@ def plot_visium_all(
     best_cutoff_metrics=None,
     labeling_trace=None,
     barcodes=None,
-    clones=None,
     dpi=200,
 ):
     """Sample-level visium orchestrator (panel + LOH BAF + iters).
@@ -40,11 +44,13 @@ def plot_visium_all(
     Args:
         anns: per-spot DataFrame with BARCODE, REP_ID, label columns.
         h5ad_source: path to .h5ad or AnnData with spatial coords.
-        raw_clust: cluster-level SX_Data for the gex modality (for LOH BAF).
+        ballele_counts/total_allele_counts: (G, N) cluster-level gex counts (LOH BAF).
+        cn_A/cn_B: (G, K) per-clone copy numbers.
+        cluster_barcodes: cluster-level gex barcodes DataFrame (BARCODE column).
+        clones: clone names list.
         labeling_trace: optional list of EM-iter dicts (from Spot_Model);
             if provided, also runs plot_visium_iters.
         barcodes: union barcodes DataFrame (used by plot_visium_iters).
-        clones: clone names list (from raw_clust.clones).
     """
     slices = build_visium_slices(anns, h5ad_source, ref_label)
     plot_visium_panel(
@@ -58,11 +64,18 @@ def plot_visium_all(
         dpi=dpi,
     )
     try:
-        loh_baf, loh_info = compute_loh_baf(raw_clust)
+        loh_baf, loh_info = compute_loh_baf(
+            ballele_counts, total_allele_counts, cn_A, cn_B, clones
+        )
         plot_visium_loh_baf(
             sample,
             slices,
-            raw_clust,
+            cluster_barcodes,
+            ballele_counts,
+            total_allele_counts,
+            cn_A,
+            cn_B,
+            clones,
             loh_baf,
             loh_info,
             os.path.join(plot_dir, f"{sample}.visium_loh_baf.pdf"),
@@ -372,7 +385,12 @@ def plot_visium_panel(
 def plot_visium_loh_baf(
     sample: str,
     slices: list,
-    raw_clust,
+    cluster_barcodes: pd.DataFrame,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    clones: list[str],
     loh_baf,
     loh_info,
     out_file: str,
@@ -383,13 +401,16 @@ def plot_visium_loh_baf(
     """PDF with visium LOH BAF spatial plots.
 
     Args:
-        raw_clust: cluster-level SX_Data-like object (from seg_sx.to_cluster_level()).
+        cluster_barcodes: cluster-level gex barcodes DataFrame (BARCODE column).
+        ballele_counts/total_allele_counts: (G, N) cluster-level gex counts.
+        cn_A/cn_B: (G, K) per-clone copy numbers.
+        clones: clone names, length K.
         loh_baf: float (N, K_tumor) from compute_loh_baf — aggregated BAF per clone.
         loh_info: list of (clone_name, entries) from compute_loh_baf.
 
     Pages:
     - One page per CNP cluster with LOH in at least one tumor clone,
-      showing per-spot BAF. Title = CN states + segments.
+      showing per-spot BAF. Title = CN states.
     - One page per tumor clone, showing aggregated BAF across its LOH clusters.
     """
     import squidpy as sq
@@ -399,15 +420,15 @@ def plot_visium_loh_baf(
     plt.rcParams["ps.fonttype"] = 42
 
     ncols = len(slices)
-    bc_to_idx = {bc: i for i, bc in enumerate(raw_clust.barcodes["BARCODE"])}
+    num_segment = ballele_counts.shape[0]
+    num_clones = len(clones)
+    bc_to_idx = {bc: i for i, bc in enumerate(cluster_barcodes["BARCODE"])}
 
     # Find clusters with LOH in at least one tumor clone
     loh_clusters = []
-    for gi in range(raw_clust.G):
+    for gi in range(num_segment):
         loh_ks = [
-            k
-            for k in range(1, raw_clust.K)
-            if raw_clust.cn_B[gi, k] == 0 and raw_clust.cn_A[gi, k] > 0
+            k for k in range(1, num_clones) if cn_B[gi, k] == 0 and cn_A[gi, k] > 0
         ]
         if loh_ks:
             loh_clusters.append(gi)
@@ -468,20 +489,14 @@ def plot_visium_loh_baf(
     with PdfPages(out_file) as pdf:
         # Per-cluster pages
         for gi in loh_clusters:
-            row = raw_clust.cnv_blocks.iloc[gi]
             cn_parts = [
-                f"{raw_clust.clones[k]}={raw_clust.cn_A[gi, k]}|{raw_clust.cn_B[gi, k]}"
-                for k in range(raw_clust.K)
+                f"{clones[k]}={cn_A[gi, k]}|{cn_B[gi, k]}" for k in range(num_clones)
             ]
-            length_mb = row.get("LENGTH", 0) / 1e6
-            n_bbc = int(row.get("#BBC", 0))
-            title = (
-                f"cluster {gi} ({length_mb:.1f}Mb, {n_bbc} BBCs): {', '.join(cn_parts)}"
-            )
+            title = f"cluster {gi}: {', '.join(cn_parts)}"
 
-            D_g = raw_clust.D[gi].astype(float)
-            Y_g = raw_clust.Y[gi].astype(float)
-            baf_g = np.where(D_g > 0, Y_g / D_g, np.nan)
+            total_allele_g = total_allele_counts[gi].astype(float)
+            ballele_g = ballele_counts[gi].astype(float)
+            baf_g = np.where(total_allele_g > 0, ballele_g / total_allele_g, np.nan)
             _plot_page(pdf, baf_g, title)
 
         # Aggregated LOH BAF per clone

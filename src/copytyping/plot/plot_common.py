@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.backends.backend_pdf import PdfPages
 
+from copytyping.sx_data.sx_data import get_cnp_mask
 from copytyping.utils import INVALID_LABELS, NA_CELLTYPE, is_tumor_label
 
 
@@ -186,14 +187,26 @@ def plot_loss(losses: list, out_loss_file: str, val_type="log-likelihood", dpi=1
 
 
 def plot_count_histograms(
-    data_sources: dict,
+    read_counts: dict[str, np.ndarray],
+    total_allele_counts: dict[str, np.ndarray],
+    cn_A: dict[str, np.ndarray],
+    cn_B: dict[str, np.ndarray],
+    cn_C: dict[str, np.ndarray],
+    barcodes: dict[str, pd.DataFrame],
     sample: str,
     outfile: str,
-    dpi=100,
+    dpi: int = 100,
 ):
     """Per-rep 2x2 histogram: total/aneuploid read counts, total/imbalanced allele counts.
 
-    All assay_types in a single PDF, one page per (assay_type, rep_id).
+    Each argument is keyed by assay_type. All assay_types go in a single PDF, one
+    page per (assay_type, rep_id).
+
+    Args:
+        read_counts: assay -> (G, N) read depth / feature counts.
+        total_allele_counts: assay -> (G, N) total-allele counts (A + B).
+        cn_A/cn_B/cn_C: assay -> (G, K) per-clone copy numbers (for masks).
+        barcodes: assay -> per-cell metadata holding REP_ID.
     """
 
     def _hist(ax, vals, xlabel, title):
@@ -203,20 +216,24 @@ def plot_count_histograms(
         ax.set_title(f"{title} (n={len(vals)}, med={int(np.median(vals))})", fontsize=9)
 
     with PdfPages(outfile) as pdf:
-        for assay_type, sx in data_sources.items():
-            aneu = sx.MASK["ANEUPLOID"]
-            imb = sx.MASK["IMBALANCED"]
+        for assay_type in read_counts:
+            reads = read_counts[assay_type]
+            total_allele = total_allele_counts[assay_type]
+            mask = get_cnp_mask(cn_A[assay_type], cn_B[assay_type], cn_C[assay_type])
+            aneu = mask["ANEUPLOID"]
+            imb = mask["IMBALANCED"]
             n_aneu = int(aneu.sum())
             n_imb = int(imb.sum())
+            num_cells = reads.shape[1]
 
-            total_x = sx.X.sum(axis=0)
-            aneu_x = sx.X[aneu].sum(axis=0) if n_aneu > 0 else np.zeros(sx.N)
-            total_d = sx.D.sum(axis=0)
-            imb_d = sx.D[imb].sum(axis=0) if n_imb > 0 else np.zeros(sx.N)
-            rep_ids = sx.barcodes["REP_ID"].unique()
+            total_x = reads.sum(axis=0)
+            aneu_x = reads[aneu].sum(axis=0) if n_aneu > 0 else np.zeros(num_cells)
+            total_d = total_allele.sum(axis=0)
+            imb_d = total_allele[imb].sum(axis=0) if n_imb > 0 else np.zeros(num_cells)
+            rep_ids = barcodes[assay_type]["REP_ID"].unique()
 
             for rep_id in rep_ids:
-                rm = sx.barcodes["REP_ID"].values == rep_id
+                rm = barcodes[assay_type]["REP_ID"].values == rep_id
                 fig, axes = plt.subplots(2, 2, figsize=(12, 8))
                 _hist(axes[0, 0], total_x[rm], "read count", "total read count")
                 _hist(

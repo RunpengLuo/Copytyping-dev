@@ -15,7 +15,6 @@ from copytyping.plot.plot_copynumber import (
     plot_cnv_profile,
 )
 from copytyping.plot.plot_common import build_wl_coords
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import get_chr_sizes, read_whitelist_segments
 
 
@@ -167,7 +166,15 @@ def plot_scatter_1d_pseudobulk(
 
 
 def plot_rdr_baf_1d_pseudobulk(
-    sx_data: SX_Data,
+    read_counts: np.ndarray,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    cn_C: np.ndarray,
+    cn_BAF: np.ndarray,
+    clones: list[str],
+    cnv_blocks: pd.DataFrame,
     anns: pd.DataFrame,
     base_props: np.ndarray,
     sample: str,
@@ -188,23 +195,29 @@ def plot_rdr_baf_1d_pseudobulk(
 ):
     """Per-clone log2RDR + BAF scatter plot along the genome, single page.
 
-    Observed RDR = x_{g,n} / (T_n * lambda_g)
-    Observed BAF = y_{g,n} / D_{g,n}
+    Observed RDR = read_count_{g,n} / (library_size_n * lambda_g)
+    Observed BAF = ballele_{g,n} / total_allele_{g,n}
+
+    Args:
+        read_counts: (G, N) read depth / feature counts.
+        ballele_counts: (G, N) B-allele counts.
+        total_allele_counts: (G, N) total-allele counts (A + B).
+        cn_A/cn_B/cn_C: (G, K) per-clone copy numbers.
+        cn_BAF: (G, K) per-clone expected B-allele frequency.
+        clones: clone names, length K.
+        cnv_blocks: per-row genomic coordinates (#CHR/START/END).
+        haplo_blocks: CN profile drawn as the bottom strip (or None).
     """
     chrom_sizes = get_chr_sizes(genome_file)
-    cnv_blocks = sx_data.cnv_blocks.copy(deep=True)
-    exp_bafs = getattr(sx_data, "BAF", None)
+    cnv_blocks = cnv_blocks[["#CHR", "START", "END"]].copy(deep=True)
     total_cells = len(anns)
 
-    X = sx_data.X
-    Y = sx_data.Y
-    D = sx_data.D
-    T = sx_data.T
+    library_size = read_counts.sum(axis=0).astype(np.float64)
 
     cell_labels = anns[lab_type].tolist()
     uniq_cell_labels = anns[lab_type].unique()
-    assert Y.shape[0] == len(cnv_blocks)
-    assert Y.shape[1] == len(cell_labels)
+    assert ballele_counts.shape[0] == len(cnv_blocks)
+    assert ballele_counts.shape[1] == len(cell_labels)
 
     # genome coordinates
     wl_segments = read_whitelist_segments(region_bed)
@@ -308,13 +321,13 @@ def plot_rdr_baf_1d_pseudobulk(
         if (
             is_inferred
             and cell_label != "NA"
-            and hasattr(sx_data, "clones")
-            and cell_label in sx_data.clones
+            and clones is not None
+            and cell_label in clones
         ):
-            clone_idx = sx_data.clones.index(cell_label)
-            clone_C_full = sx_data.cn_C[:, clone_idx].astype(np.float64)
-            clone_A = sx_data.cn_A[:, clone_idx]
-            clone_B = sx_data.cn_B[:, clone_idx]
+            clone_idx = clones.index(cell_label)
+            clone_C_full = cn_C[:, clone_idx].astype(np.float64)
+            clone_A = cn_A[:, clone_idx]
+            clone_B = cn_B[:, clone_idx]
             bin_colors = [
                 state_style.get((int(a), int(b)), state_style["default"])
                 for a, b in zip(clone_A, clone_B)
@@ -324,8 +337,8 @@ def plot_rdr_baf_1d_pseudobulk(
         rdr_exp_lines = None
         rdr_ylim_eff = rdr_ylim
         if base_props is not None:
-            agg_x = np.sum(X[:, barcode_idxs], axis=1).astype(np.float64)
-            agg_T = np.sum(T[barcode_idxs]).astype(np.float64)
+            agg_x = np.sum(read_counts[:, barcode_idxs], axis=1).astype(np.float64)
+            agg_T = np.sum(library_size[barcode_idxs]).astype(np.float64)
             rdr_valid = base_props > 0
             obs_rdr = np.full(len(agg_x), np.nan)
             obs_rdr[rdr_valid] = agg_x[rdr_valid] / (agg_T * base_props[rdr_valid])
@@ -368,8 +381,8 @@ def plot_rdr_baf_1d_pseudobulk(
             obs_rdr = np.full(len(positions), np.nan)
 
         feat_label = {"atac": "fragment", "gex": "umi"}.get(assay_type, "count")
-        total_counts = int(np.sum(X[:, barcode_idxs]))
-        snp_counts = int(np.sum(D[:, barcode_idxs]))
+        total_counts = int(np.sum(read_counts[:, barcode_idxs]))
+        snp_counts = int(np.sum(total_allele_counts[:, barcode_idxs]))
         prop = round(100 * num_bcs / total_cells, 1) if total_cells > 0 else 0.0
         rdr_title = (
             f"{cell_label} (n={num_bcs}, prop={prop}%,"
@@ -394,18 +407,20 @@ def plot_rdr_baf_1d_pseudobulk(
         )
 
         # ── BAF panel ──
-        agg_bcounts = np.sum(Y[:, barcode_idxs], axis=1).astype(np.float64)
-        agg_tcounts = np.sum(D[:, barcode_idxs], axis=1).astype(np.float64)
+        agg_bcounts = np.sum(ballele_counts[:, barcode_idxs], axis=1).astype(np.float64)
+        agg_tcounts = np.sum(total_allele_counts[:, barcode_idxs], axis=1).astype(
+            np.float64
+        )
         obs_baf = np.where(agg_tcounts > 0, agg_bcounts / agg_tcounts, np.nan)
         baf_exp_lines = None
         if (
             is_inferred
-            and exp_bafs is not None
-            and hasattr(sx_data, "clones")
-            and cell_label in sx_data.clones
+            and cn_BAF is not None
+            and clones is not None
+            and cell_label in clones
         ):
-            clone_idx = sx_data.clones.index(cell_label)
-            clone_baf = exp_bafs[:, clone_idx].copy()
+            clone_idx = clones.index(cell_label)
+            clone_baf = cn_BAF[:, clone_idx].copy()
             baf_exp_lines = _merge_exp_lines(
                 abs_starts, abs_ends, clone_baf, cnv_blocks["#CHR"]
             )

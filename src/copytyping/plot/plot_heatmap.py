@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Patch, Rectangle
 
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import read_whitelist_segments
 from copytyping.plot.plot_copynumber import (
     BLACK,
@@ -193,27 +192,33 @@ def _mode(arr: np.ndarray):
 
 
 def prepare_rdr(
-    sx_data: SX_Data,
+    read_counts: np.ndarray,
     row_groups: list[np.ndarray],
     base_props: np.ndarray,
     log2: bool = True,
 ) -> np.ndarray:
-    X = _aggregate_columns(sx_data.X, row_groups)
-    T = np.array([sx_data.T[g].sum() for g in row_groups], dtype=np.int64)
+    library_size = read_counts.sum(axis=0)
+    X = _aggregate_columns(read_counts, row_groups)
+    T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
     return empirical_rdr_gn(X, T, base_props, log2=log2).T
 
 
-def prepare_pi_gk(sx_data: SX_Data, row_groups: list[np.ndarray]) -> np.ndarray:
-    X = _aggregate_columns(sx_data.X, row_groups)
-    T = np.array([sx_data.T[g].sum() for g in row_groups], dtype=np.int64)
+def prepare_pi_gk(read_counts: np.ndarray, row_groups: list[np.ndarray]) -> np.ndarray:
+    library_size = read_counts.sum(axis=0)
+    X = _aggregate_columns(read_counts, row_groups)
+    T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
     pi_gk_matrix = X / T[None, :]
     pi_gk_matrix[pi_gk_matrix == 0] = np.nan
     return pi_gk_matrix.T
 
 
-def prepare_baf(sx_data: SX_Data, row_groups: list[np.ndarray]) -> np.ndarray:
-    Y = _aggregate_columns(sx_data.Y, row_groups)
-    D = _aggregate_columns(sx_data.D, row_groups)
+def prepare_baf(
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    row_groups: list[np.ndarray],
+) -> np.ndarray:
+    Y = _aggregate_columns(ballele_counts, row_groups)
+    D = _aggregate_columns(total_allele_counts, row_groups)
     return empirical_baf_gn(Y, D).T
 
 
@@ -323,7 +328,11 @@ def plot_cnv_heatmap(
     sample: str,
     assay_type: str,
     haplo_blocks: pd.DataFrame,
-    sx_data: SX_Data,
+    read_counts: np.ndarray,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cnv_blocks: pd.DataFrame,
+    num_clones: int,
     anns: pd.DataFrame,
     region_bed: str,
     proportions=None,
@@ -354,26 +363,27 @@ def plot_cnv_heatmap(
     if primary_label is None:
         primary_label = label_cols[0] if label_cols else None
 
+    num_cells = read_counts.shape[1]
     if primary_label is None or anns is None:
-        primary_labels = np.full(sx_data.N, fill_value="unknown")
+        primary_labels = np.full(num_cells, fill_value="unknown")
     else:
         primary_labels = anns[primary_label].to_numpy()
-    assert len(primary_labels) == sx_data.N
+    assert len(primary_labels) == num_cells
 
     # order cells (bottom-to-top) by the primary label, then aggregate within label
     uniq_labels = list(np.unique(primary_labels))
     if primary_label and primary_label.startswith("copytyping_label"):
         # pcolormesh y=0 is bottom, so reverse desired top-to-bottom order
-        desired = ["NA", "normal"] + [f"clone{c}" for c in range(1, sx_data.K)]
+        desired = ["NA", "normal"] + [f"clone{c}" for c in range(1, num_clones)]
         present = set(primary_labels)
         uniq_labels = [lab for lab in reversed(desired) if lab in present]
 
     row_groups = _row_layout(primary_labels, uniq_labels, agg_size)
     row_primary = np.array([primary_labels[g[0]] for g in row_groups])
 
-    data_info = sx_data.cnv_blocks
+    data_info = cnv_blocks
     if val == "BAF":
-        data_matrix = prepare_baf(sx_data, row_groups)
+        data_matrix = prepare_baf(ballele_counts, total_allele_counts, row_groups)
         boundaries = np.linspace(0, 1, 11)  # [0.0, 0.1, ..., 1.0]
         colors = [
             "#1f77b4",
@@ -393,7 +403,7 @@ def plot_cnv_heatmap(
         cmap.set_bad("white")
         norm = mcolors.BoundaryNorm(boundaries, cmap.N, clip=True)
     elif val in ["RDR", "log2RDR"]:
-        data_matrix = prepare_rdr(sx_data, row_groups, base_props, val == "log2RDR")
+        data_matrix = prepare_rdr(read_counts, row_groups, base_props, val == "log2RDR")
         cmap = "coolwarm"
         if val == "log2RDR":
             norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
@@ -402,7 +412,7 @@ def plot_cnv_heatmap(
             norm = TwoSlopeNorm(vmin=0, vcenter=1, vmax=2)
             cticks = [0.0, 0.5, 1.0, 1.50, 2.0]
     elif val == "pi_gk":
-        data_matrix = prepare_pi_gk(sx_data, row_groups)
+        data_matrix = prepare_pi_gk(read_counts, row_groups)
 
         colors = [
             "#1f77b4",

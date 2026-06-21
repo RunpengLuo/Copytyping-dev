@@ -7,58 +7,78 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 
+from copytyping.sx_data.sx_data import get_cnp_mask
+
 
 def plot_scatter_2d_per_cell(
-    sx_data,
+    read_counts: np.ndarray,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    cn_C: np.ndarray,
+    clones: list[str],
+    cnv_blocks: pd.DataFrame,
     anns: pd.DataFrame,
     sample: str,
     outfile: str,
     label_col: str,
-    base_props=None,
-    markersize=4,
-    rasterized=True,
-    dpi=100,
+    base_props: np.ndarray | None = None,
+    markersize: int = 4,
+    rasterized: bool = True,
+    dpi: int = 100,
 ):
-    """Per-cluster 2D scatter (BAF vs log2RDR) with marginal KDEs, one page per cluster."""
-    informative = sx_data.MASK["IMBALANCED"] | sx_data.MASK["ANEUPLOID"]
-    cluster_indices = np.where(informative)[0]
+    """Per-cluster 2D scatter (BAF vs log2RDR) with marginal KDEs, one page per cluster.
+
+    Args:
+        read_counts: (G, N) read depth / feature counts.
+        ballele_counts: (G, N) B-allele counts.
+        total_allele_counts: (G, N) total-allele counts (A + B).
+        cn_A/cn_B/cn_C: (G, K) per-clone copy numbers.
+        clones: clone names, length K.
+        cnv_blocks: per-row CNP table (CNP/LENGTH columns for titles).
+        anns: per-cell annotations (one row per column N), holds ``label_col``.
+        base_props: (G,) RDR baseline; defaults to the global read-count fraction.
+    """
+    mask = get_cnp_mask(cn_A, cn_B, cn_C)
+    imbalanced, aneuploid = mask["IMBALANCED"], mask["ANEUPLOID"]
+    cluster_indices = np.where(imbalanced | aneuploid)[0]
     labels = anns[label_col].values
 
+    num_clones = cn_A.shape[1]
+    library_size = read_counts.sum(axis=0).astype(float)
     if base_props is None:
-        base_props = sx_data.X.sum(axis=1) / max(sx_data.T.sum(), 1)
+        base_props = read_counts.sum(axis=1) / max(library_size.sum(), 1)
 
     with PdfPages(outfile) as pdf:
         for g in cluster_indices:
-            row = sx_data.cnv_blocks.iloc[g]
+            row = cnv_blocks.iloc[g]
             cnp_str = row.get("CNP", "")
             length_mb = row["LENGTH"] / 1e6 if "LENGTH" in row.index else np.nan
             n_bbc = int(row["#BBC"]) if "#BBC" in row.index else 0
 
             cn_parts = []
-            for k in range(1, sx_data.K):
-                cn_parts.append(
-                    f"{sx_data.clones[k]}={sx_data.cn_A[g, k]}|{sx_data.cn_B[g, k]}"
-                )
+            for k in range(1, num_clones):
+                cn_parts.append(f"{clones[k]}={cn_A[g, k]}|{cn_B[g, k]}")
             cn_str = ", ".join(cn_parts)
 
             tag = []
-            if sx_data.MASK["IMBALANCED"][g]:
+            if imbalanced[g]:
                 tag.append("IMB")
-            if sx_data.MASK["ANEUPLOID"][g]:
+            if aneuploid[g]:
                 tag.append("ANE")
 
-            D_g = sx_data.D[g].astype(float)
-            Y_g = sx_data.Y[g].astype(float)
-            X_g = sx_data.X[g].astype(float)
-            T = sx_data.T.astype(float)
+            total_allele_g = total_allele_counts[g].astype(float)
+            ballele_g = ballele_counts[g].astype(float)
+            read_g = read_counts[g].astype(float)
             lam_g = base_props[g]
 
-            valid = (D_g > 0) & (T * lam_g > 0)
+            valid = (total_allele_g > 0) & (library_size * lam_g > 0)
             if valid.sum() < 10:
                 continue
 
-            baf = Y_g[valid] / D_g[valid]
-            rdr = X_g[valid] / (T[valid] * lam_g)
+            baf = ballele_g[valid] / total_allele_g[valid]
+            rdr = read_g[valid] / (library_size[valid] * lam_g)
             log2rdr = np.log2(np.clip(rdr, 1e-6, None))
             hue = labels[valid]
 
@@ -71,16 +91,16 @@ def plot_scatter_2d_per_cell(
             # Pre-compute expected (BAF, log2RDR) per clone (used for ylim + markers below).
             # BAF: B/(A+B). log2RDR: log2(C_{g,k} / sum_g(lambda_g * C_{g,k})).
             exp_points = defaultdict(list)
-            for k in range(sx_data.K):
-                C_k = sx_data.cn_C[g, k]
-                exp_baf_k = sx_data.cn_B[g, k] / C_k if C_k > 0 else 0.5
-                denom_k = float(np.sum(base_props * sx_data.cn_C[:, k]))
+            for k in range(num_clones):
+                C_k = cn_C[g, k]
+                exp_baf_k = cn_B[g, k] / C_k if C_k > 0 else 0.5
+                denom_k = float(np.sum(base_props * cn_C[:, k]))
                 if denom_k > 0 and C_k > 0:
                     exp_log2rdr_k = np.log2(C_k / denom_k)
                 else:
                     exp_log2rdr_k = 0.0
                 key = (round(exp_baf_k, 4), round(exp_log2rdr_k, 4))
-                exp_points[key].append(sx_data.clones[k])
+                exp_points[key].append(clones[k])
 
             xlim = (-0.05, 1.05)
             # Adaptive ylim: tighten to (-2, 2) if all obs + expected fit, else (-5, 5)
