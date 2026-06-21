@@ -23,12 +23,12 @@ invphi_bounds: "1e-6,1e6"
 # Symmetric Dirichlet prior on pi (clone mixing proportions).
 # 1: non-informative (default), <1: sparse, >1: smoothing
 pi_alpha: 1.0
-# Update pi (clone mixing proportions) during EM? Default: fix at init.
-update_pi: false
-# Update BB tau in M-step? (cell model only)
-update_tau: false
-# Update NB inv_phi in M-step? (cell model only)
-update_invphi: false
+# Update pi (clone mixing proportions) during EM?
+update_pi: true
+# Update BB tau in M-step?
+update_tau: true
+# Update NB inv_phi in M-step?
+update_invphi: true
 
 ##################################################
 # inference — segment filtering & data control

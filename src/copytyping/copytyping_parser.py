@@ -202,24 +202,23 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--update_pi",
         required=False,
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
-        help="Update pi (clone mixing proportions) during EM. "
-        "Default: fix pi at its initial value.",
+        help="update pi (clone mixing proportions) during EM (default: on)",
     )
     parser.add_argument(
         "--update_tau",
         required=False,
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
-        help="if set, update BB dispersion (tau) in M-step (cell model only)",
+        help="update BB dispersion (tau) in M-step (default: on)",
     )
     parser.add_argument(
         "--update_invphi",
         required=False,
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
-        help="if set, update NB dispersion (inv_phi) in M-step (cell model only)",
+        help="update NB dispersion (inv_phi) in M-step (default: on)",
     )
     parser.add_argument(
         "--n_neighs",
