@@ -72,6 +72,22 @@ class CountData:
         if sparse.issparse(self.B):
             self.B = np.asarray(self.B.todense())
 
+    def subset_by_rep(self, rep_id: str) -> tuple["CountData", np.ndarray]:
+        """Return ``(CountData, column_mask)`` restricted to ``REP_ID == rep_id``.
+
+        Only the cell axis (columns of X/A/B + ``barcodes``) is subset; the
+        segment-axis fields (coordinates, cn_*, masks, clones) are shared.
+        """
+        mask = (self.barcodes["REP_ID"] == rep_id).to_numpy()
+        sub = replace(
+            self,
+            barcodes=self.barcodes[mask].reset_index(drop=True),
+            X=self.X[:, mask],
+            A=self.A[:, mask],
+            B=self.B[:, mask],
+        )
+        return sub, mask
+
     def annotate_cnps(
         self,
         bbc_phases: pd.DataFrame,
@@ -320,8 +336,12 @@ def segment_count_data(
     allele_mask = {k: m[k] for k in ("IMBALANCED", "CLONAL_IMBALANCED")}
     total_mask = {k: m[k] for k in ("ANEUPLOID", "SUBCLONAL")}
 
-    def _sum(mat: np.ndarray | sparse.csr_matrix) -> sparse.csr_matrix:
-        return indicator @ (mat if sparse.issparse(mat) else sparse.csr_matrix(mat))
+    # Aggregate via one sparse matmul, then densify: the grouped G is small
+    # (#CNP groups), so the result is dense from here on — the model and plots
+    # consume plain ndarrays without per-call to_dense().
+    def _sum(mat: np.ndarray | sparse.csr_matrix) -> np.ndarray:
+        m = mat if sparse.issparse(mat) else sparse.csr_matrix(mat)
+        return np.asarray((indicator @ m).todense())
 
     return {
         a: CountData(
@@ -447,6 +467,31 @@ def smooth_spatial_neighbors(
         )
         out[assay] = replace(cd, X=X, A=A, B=B)
     return out
+
+
+def count_data_cnv_blocks(cd: CountData) -> pd.DataFrame:
+    """Genomic CNP-block table (#CHR/START/END/CNP/LENGTH) for plotting.
+
+    Requires a segment/bin-level CountData (``coordinates`` carries #CHR/START/END
+    and ``cn_A``/``cn_B`` are populated). ``CNP`` is the per-row, per-clone
+    ``A|B`` string joined by ``;`` (same convention as ``restrict_masks_to_cnp``).
+    """
+    coords = cd.coordinates
+    cn_A, cn_B = cd.cn_A, cd.cn_B
+    cnp = [
+        ";".join(f"{a}|{b}" for a, b in zip(cn_A[g], cn_B[g]))
+        for g in range(cd.num_segment)
+    ]
+    df = pd.DataFrame(
+        {
+            "#CHR": coords["#CHR"].to_numpy(),
+            "START": coords["START"].to_numpy(),
+            "END": coords["END"].to_numpy(),
+            "CNP": cnp,
+        }
+    )
+    df["LENGTH"] = df["END"] - df["START"]
+    return df
 
 
 def save_count_data(count_data: dict[str, CountData], prefix: str) -> None:

@@ -30,9 +30,8 @@ class Base_Model:
     ) -> None:
         self.assay_types = assay_types
         self.platform = platform
+        # count_data arrives dense from segment_count_data / smooth_spatial_neighbors
         self.count_data = {a: count_data[a] for a in assay_types}
-        for cd in self.count_data.values():
-            cd.to_dense()
         self.barcodes = self.count_data[assay_types[0]].barcodes
 
         # per-cell library size per modality

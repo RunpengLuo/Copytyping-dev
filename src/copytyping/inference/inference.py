@@ -3,6 +3,7 @@ import os
 
 import numpy as np
 import pandas as pd
+from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.copytyping_parser import check_arguments_inference
 from copytyping.inference.base_model import Base_Model
@@ -10,6 +11,7 @@ from copytyping.inference.cell_model import Cell_Model
 from copytyping.inference.spot_model import Spot_Model
 from copytyping.inference.count_data import (
     CountData,
+    count_data_cnv_blocks,
     initialize_count_data,
     restrict_masks_to_cnp,
     save_count_data,
@@ -17,7 +19,7 @@ from copytyping.inference.count_data import (
     smooth_spatial_neighbors,
 )
 from copytyping.inference.model_utils import (
-    make_baseline_fn,
+    compute_rdr_baseline,
     model_kwargs_from_args,
     save_model_params,
 )
@@ -25,13 +27,13 @@ from copytyping.io_utils import (
     read_cell_types,
     load_bulk_cnprofile,
     read_bbc_phases,
-    aggregate_bbc_to_seg,
     build_spatial_graphs,
 )
 from copytyping.plot.plot_common import plot_count_histograms
-from copytyping.plot.plot_modality import plot_modality_panel
+from copytyping.plot.plot_heatmap import plot_cnv_heatmap
+from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
+from copytyping.plot.plot_scatter_2d import plot_scatter_2d_per_cell
 from copytyping.plot.plot_visium import plot_visium_all
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
@@ -107,36 +109,13 @@ def run(args=None):
     if args["save_processed_data"]:
         save_count_data(bbc_count_datas, os.path.join(proc_dir, f"{out_prefix}.bbc"))
         save_count_data(seg_count_datas, os.path.join(proc_dir, f"{out_prefix}.seg"))
-    #
 
-    # ---- seg-level SX_Data bridged from the CountData (plotting only) ----
-    # No second disk read: bbc_data already holds the phase-corrected counts
-    # (cd.B == apply_bbc_phasing's B_bbc), so the seg aggregation is identical.
-    seg_data_sources = {}
-    bbc_data_by_assay = {}
-    for assay_type in assay_types:
-        cd = bbc_count_datas[assay_type]
-        bbc_df = cd.coordinates.merge(
-            bbc_phases[["#CHR", "START", "END", "PHASE"]],
-            on=["#CHR", "START", "END"],
-            how="left",
-        )
-        X_bbc, B_bbc, N_bbc = cd.X, cd.B, cd.A + cd.B
-        seg_df_assay, X_seg, B_seg, N_seg = aggregate_bbc_to_seg(
-            bbc_df, seg_df, X_bbc, B_bbc, N_bbc, assay_type
-        )
-        seg_data_sources[assay_type] = SX_Data(
-            cd.barcodes, seg_df_assay, X_seg, B_seg, N_seg, baf_clip=args["baf_clip"]
-        )
-        bbc_data_by_assay[assay_type] = (bbc_df, X_bbc, B_bbc, N_bbc)
-
-    cnv_blocks = seg_data_sources[assay_types[0]].cnv_blocks
-    cnv_blocks.to_csv(
+    # per-assay genomic CNP tables (segment_count_data already returns dense)
+    seg_cnv_blocks = {a: count_data_cnv_blocks(cd) for a, cd in seg_count_datas.items()}
+    bin_cnv_blocks = {a: count_data_cnv_blocks(cd) for a, cd in bin_count_datas.items()}
+    seg_cnv_blocks[assay_types[0]].to_csv(
         os.path.join(proc_dir, f"{out_prefix}.cnp_profile.tsv"), sep="\t", index=False
     )
-    unsmoothed_data_sources = {
-        assay: sx.to_cluster_level() for assay, sx in seg_data_sources.items()
-    }
 
     # ---- plots ----------------------------------------------------------
     plot_dir = os.path.join(out_dir, "plots")
@@ -149,57 +128,141 @@ def run(args=None):
         is_reference = (anns[label] == "normal").to_numpy()
         ref_clone = 0
         no_normal = False
-    baseline_fn = make_baseline_fn(is_reference, ref_clone, no_normal)
     plot_labels = [label]
     if args["ref_label"] in anns.columns:
         plot_labels.append(args["ref_label"])
 
     if args["method"] == "copytyping":
         plot_count_histograms(
-            seg_data_sources,
-            args["sample"],
-            os.path.join(plot_dir, f"{out_prefix}.count_histograms.pdf"),
+            read_counts={a: cd.X for a, cd in seg_count_datas.items()},
+            total_allele_counts={a: cd.A + cd.B for a, cd in seg_count_datas.items()},
+            cn_A={a: cd.cn_A for a, cd in seg_count_datas.items()},
+            cn_B={a: cd.cn_B for a, cd in seg_count_datas.items()},
+            cn_C={a: cd.cn_C for a, cd in seg_count_datas.items()},
+            barcodes={a: cd.barcodes for a, cd in seg_count_datas.items()},
+            sample=args["sample"],
+            outfile=os.path.join(plot_dir, f"{out_prefix}.count_histograms.pdf"),
             dpi=args["dpi"],
         )
 
     for assay_type in assay_types:
-        plot_modality_panel(
-            sample=args["sample"],
-            assay_type=assay_type,
-            prefix=out_prefix,
-            plot_dir=plot_dir,
-            seg_sx=seg_data_sources[assay_type],
-            raw_clust=unsmoothed_data_sources[assay_type],
-            bbc_data=bbc_data_by_assay[assay_type],
-            cnv_blocks=cnv_blocks,
-            anns=anns,
-            baseline_fn=baseline_fn,
-            cluster_base_props=model_params.get(f"{assay_type}-lambda"),
-            primary_label=label,
-            plot_labels=plot_labels,
-            theta=model_params.get(f"{assay_type}-theta"),
-            region_bed=args["region_bed"],
-            genome_size=args["genome_size"],
+        seg_cd = seg_count_datas[assay_type]
+        bin_cd = bin_count_datas[assay_type]
+        seg_blocks = seg_cnv_blocks[assay_type]
+        bin_blocks = bin_cnv_blocks[assay_type]
+        seg_baseline = compute_rdr_baseline(seg_cd, is_reference, ref_clone, no_normal)
+        bin_baseline = compute_rdr_baseline(bin_cd, is_reference, ref_clone, no_normal)
+        theta = model_params.get(f"{assay_type}-theta")
+        rep_ids = sorted(seg_cd.barcodes["REP_ID"].unique())
+
+        # 2D BAF-vs-log2RDR scatter per CNP segment (all cells)
+        plot_scatter_2d_per_cell(
+            seg_cd.X,
+            seg_cd.B,
+            seg_cd.A + seg_cd.B,
+            seg_cd.cn_A,
+            seg_cd.cn_B,
+            seg_cd.cn_C,
+            seg_cd.clones,
+            seg_blocks,
+            anns,
+            args["sample"],
+            os.path.join(plot_dir, f"{out_prefix}.{assay_type}.cluster_2d.pdf"),
+            label,
+            base_props=seg_baseline,
             dpi=args["dpi"],
-            heatmap_agg=args["heatmap_agg"],
-            min_snp_count=args["min_snp_count"],
-            max_bin_length=args["max_bin_length"],
-            platform_str=platform,
-            ascn_profile=args["ascn_profile"],
         )
 
+        # CNV heatmaps: one PDF per agg level; pages = rep_id x [BAF, log2RDR]
+        for agg in [1, args["heatmap_agg"]]:
+            fname = os.path.join(
+                plot_dir, f"{out_prefix}.{assay_type}.heatmap.agg{agg}.pdf"
+            )
+            with PdfPages(fname) as pdf:
+                for rep_id in rep_ids:
+                    seg_rep, rep_mask = seg_cd.subset_by_rep(rep_id)
+                    anns_rep = anns.iloc[rep_mask].reset_index(drop=True)
+                    theta_rep = theta[rep_mask] if theta is not None else None
+                    for val in ["BAF", "log2RDR"]:
+                        if val == "log2RDR" and seg_baseline is None:
+                            continue
+                        plot_cnv_heatmap(
+                            args["sample"],
+                            assay_type,
+                            seg_blocks,
+                            seg_rep.X,
+                            seg_rep.B,
+                            seg_rep.A + seg_rep.B,
+                            seg_blocks,
+                            len(seg_cd.clones),
+                            anns_rep,
+                            args["region_bed"],
+                            proportions=theta_rep,
+                            val=val,
+                            base_props=seg_baseline,
+                            agg_size=agg,
+                            label_cols=plot_labels,
+                            primary_label=label,
+                            pdf_pages=pdf,
+                            dpi=args["dpi"],
+                            figsize=(20, 6 if agg > 1 else 15),
+                            rep_id=rep_id,
+                            ascn_profile=args["ascn_profile"],
+                        )
+
+        # 1D pseudobulk RDR + BAF along the genome, per rep, per label
+        for my_label in plot_labels:
+            fname = os.path.join(
+                plot_dir, f"{out_prefix}.{assay_type}.1d_scatter.{my_label}.pdf"
+            )
+            with PdfPages(fname) as pdf:
+                for rep_id in rep_ids:
+                    bin_rep, rep_mask = bin_cd.subset_by_rep(rep_id)
+                    anns_rep = anns.iloc[rep_mask].reset_index(drop=True)
+                    plot_rdr_baf_1d_pseudobulk(
+                        bin_rep.X,
+                        bin_rep.B,
+                        bin_rep.A + bin_rep.B,
+                        bin_rep.cn_A,
+                        bin_rep.cn_B,
+                        bin_rep.cn_C,
+                        bin_rep.cn_BAF,
+                        bin_rep.clones,
+                        bin_blocks,
+                        anns_rep,
+                        bin_baseline,
+                        args["sample"],
+                        assay_type,
+                        args["genome_size"],
+                        args["region_bed"],
+                        haplo_blocks=seg_blocks,
+                        lab_type=my_label,
+                        is_inferred=(my_label == label),
+                        pdf_pages=pdf,
+                        platform=platform,
+                        subtitle=f"rep={rep_id}",
+                        ascn_profile=args["ascn_profile"],
+                    )
+
     if platform in SPATIAL_PLATFORMS and args["gex_h5ad"]:
+        cluster_gex = segment_count_data(
+            {"gex": bbc_count_datas["gex"]}, "cnp_cluster"
+        )["gex"]
         plot_visium_all(
             sample=args["sample"],
             anns=anns,
             h5ad_source=args["gex_h5ad"],
-            raw_clust=unsmoothed_data_sources["gex"],
-            plot_dir=os.path.join(out_dir, "plots"),
+            ballele_counts=cluster_gex.B,
+            total_allele_counts=cluster_gex.A + cluster_gex.B,
+            cn_A=cluster_gex.cn_A,
+            cn_B=cluster_gex.cn_B,
+            cluster_barcodes=cluster_gex.barcodes,
+            clones=cluster_gex.clones,
+            plot_dir=plot_dir,
             spot_label=label,
             ref_label=args["ref_label"],
             labeling_trace=getattr(model, "labeling_trace", None) or None,
             barcodes=anns,
-            clones=list(seg_data_sources["gex"].clones),
             dpi=args["dpi"],
         )
 
