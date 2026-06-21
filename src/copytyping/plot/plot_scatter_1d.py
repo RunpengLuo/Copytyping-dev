@@ -174,7 +174,7 @@ def plot_rdr_baf_1d_pseudobulk(
     cn_C: np.ndarray,
     cn_BAF: np.ndarray,
     clones: list[str],
-    cnv_blocks: pd.DataFrame,
+    cnprofile: pd.DataFrame,
     anns: pd.DataFrame,
     base_props: np.ndarray,
     sample: str,
@@ -205,25 +205,25 @@ def plot_rdr_baf_1d_pseudobulk(
         cn_A/cn_B/cn_C: (G, K) per-clone copy numbers.
         cn_BAF: (G, K) per-clone expected B-allele frequency.
         clones: clone names, length K.
-        cnv_blocks: per-row genomic coordinates (#CHR/START/END).
+        cnprofile: per-row genomic coordinates (#CHR/START/END).
         haplo_blocks: CN profile drawn as the bottom strip (or None).
     """
     chrom_sizes = get_chr_sizes(genome_file)
-    cnv_blocks = cnv_blocks[["#CHR", "START", "END"]].copy(deep=True)
+    cnprofile = cnprofile[["#CHR", "START", "END"]].copy(deep=True)
     total_cells = len(anns)
 
     library_size = read_counts.sum(axis=0).astype(np.float64)
 
     cell_labels = anns[lab_type].tolist()
     uniq_cell_labels = anns[lab_type].unique()
-    assert ballele_counts.shape[0] == len(cnv_blocks)
+    assert ballele_counts.shape[0] == len(cnprofile)
     assert ballele_counts.shape[1] == len(cell_labels)
 
     # genome coordinates
     wl_segments = read_whitelist_segments(region_bed)
     has_cnp = haplo_blocks is not None
     if has_cnp:
-        wl = build_wl_coords(cnv_blocks, wl_segments)
+        wl = build_wl_coords(cnprofile, wl_segments)
         positions = wl["positions"]
         abs_starts = wl["abs_starts"]
         abs_ends = wl["abs_ends"]
@@ -232,19 +232,19 @@ def plot_rdr_baf_1d_pseudobulk(
         xlab_chrs = wl["xlab_chrs"]
         xtick_chrs = wl["xtick_chrs"]
     else:
-        cnv_blocks["SAMPLE"] = sample
-        chrs = cnv_blocks["#CHR"].unique().tolist()
-        ret = _build_ch_boundary(cnv_blocks, chrs, chrom_sizes, chr_shift=int(10e6))
+        cnprofile["SAMPLE"] = sample
+        chrs = cnprofile["#CHR"].unique().tolist()
+        ret = _build_ch_boundary(cnprofile, chrs, chrom_sizes, chr_shift=int(10e6))
         chr_offsets, chr_gaps, chr_end, xlab_chrs, xtick_chrs = ret
         chr_vlines = list(chr_offsets.values())
 
-        positions = cnv_blocks.apply(
+        positions = cnprofile.apply(
             func=lambda r: chr_offsets[r["#CHR"]] + (r.START + r.END) // 2, axis=1
         ).to_numpy()
-        abs_starts = cnv_blocks.apply(
+        abs_starts = cnprofile.apply(
             func=lambda r: chr_offsets[r["#CHR"]] + r.START, axis=1
         ).to_numpy()
-        abs_ends = cnv_blocks.apply(
+        abs_ends = cnprofile.apply(
             func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1
         ).to_numpy()
 
@@ -316,7 +316,7 @@ def plot_rdr_baf_1d_pseudobulk(
         num_bcs = len(barcode_idxs)
 
         # per-bin colors from (A,B) copy-number state
-        bin_colors = [default_color] * len(cnv_blocks)
+        bin_colors = [default_color] * len(cnprofile)
         clone_C_full = None
         if (
             is_inferred
@@ -355,7 +355,7 @@ def plot_rdr_baf_1d_pseudobulk(
                         exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
             if exp_vals is not None:
                 rdr_exp_lines = _merge_exp_lines(
-                    abs_starts, abs_ends, exp_vals, cnv_blocks["#CHR"]
+                    abs_starts, abs_ends, exp_vals, cnprofile["#CHR"]
                 )
             if log2:
                 candidates = [obs_rdr[np.isfinite(obs_rdr)]]
@@ -422,7 +422,7 @@ def plot_rdr_baf_1d_pseudobulk(
             clone_idx = clones.index(cell_label)
             clone_baf = cn_BAF[:, clone_idx].copy()
             baf_exp_lines = _merge_exp_lines(
-                abs_starts, abs_ends, clone_baf, cnv_blocks["#CHR"]
+                abs_starts, abs_ends, clone_baf, cnprofile["#CHR"]
             )
         plot_scatter_1d_pseudobulk(
             ax_baf,

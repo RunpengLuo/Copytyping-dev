@@ -9,7 +9,7 @@ from matplotlib.patches import Rectangle, Polygon
 
 def plot_cnv_profile(
     ax: plt.Axes,
-    cnv_blocks: pd.DataFrame,
+    cnprofile: pd.DataFrame,
     wl_segments: pd.DataFrame,
     width=20,
     height=1,
@@ -24,23 +24,23 @@ def plot_cnv_profile(
     Bins strictly contained within whitelist segments are colored by the joint
     (A|B) palette; centromere/whitelist gaps appear as dashed boundaries.
     Mirrored events (cnb > cna) get a black right-pointing triangle overlay.
-    If a PI_VIOL column is present in cnv_blocks, a red/green line is drawn at
+    If a PI_VIOL column is present in cnprofile, a red/green line is drawn at
     the top of each bin to indicate per-bin pure-int violation.
     """
     state_style, _ = get_cn_colors()
 
     num_clones = (
-        len(str(cnv_blocks.iloc[0]["CNP"]).split(";")) - 1
+        len(str(cnprofile.iloc[0]["CNP"]).split(";")) - 1
     )  # first column is normal
     h = height / num_clones
 
     wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
-    bins_chs = cnv_blocks.groupby(by="#CHR", sort=False, observed=True)
+    bins_chs = cnprofile.groupby(by="#CHR", sort=False, observed=True)
 
     ch_offset = 0
     ch_coords = []
     seg_coords = []
-    chs = cnv_blocks["#CHR"].unique()
+    chs = cnprofile["#CHR"].unique()
     for ch in chs:
         ch_coords.append(ch_offset)
         wl_segments_ch = wl_segments_chs.get_group(ch)
@@ -482,7 +482,7 @@ def get_ascn_colors():
 
 def plot_ascn_profile(
     ax: plt.Axes,
-    cnv_blocks: pd.DataFrame,
+    cnprofile: pd.DataFrame,
     wl_segments: pd.DataFrame,
     width=20,
     height=1,
@@ -497,7 +497,7 @@ def plot_ascn_profile(
     Small vertical gap between adjacent clone slots; each sub-bar is outlined.
     """
     state_style, _ = get_ascn_colors()
-    num_clones = len(str(cnv_blocks.iloc[0]["CNP"]).split(";")) - 1
+    num_clones = len(str(cnprofile.iloc[0]["CNP"]).split(";")) - 1
     h = height / num_clones
     clone_gap = 0.10 * h  # vertical gap between adjacent clone slots
     h_pair = h - clone_gap
@@ -505,12 +505,12 @@ def plot_ascn_profile(
     y_gap = clone_gap / 2
 
     wl_segments_chs = wl_segments.groupby(by="#CHR", sort=False)
-    bins_chs = cnv_blocks.groupby(by="#CHR", sort=False, observed=True)
+    bins_chs = cnprofile.groupby(by="#CHR", sort=False, observed=True)
 
     ch_offset = 0
     ch_coords = []
     seg_coords = []
-    chs = cnv_blocks["#CHR"].unique()
+    chs = cnprofile["#CHR"].unique()
     for ch in chs:
         ch_coords.append(ch_offset)
         wl_segments_ch = wl_segments_chs.get_group(ch)

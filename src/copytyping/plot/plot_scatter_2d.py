@@ -18,7 +18,7 @@ def plot_scatter_2d_per_cell(
     cn_B: np.ndarray,
     cn_C: np.ndarray,
     clones: list[str],
-    cnv_blocks: pd.DataFrame,
+    cnprofile: pd.DataFrame,
     anns: pd.DataFrame,
     sample: str,
     outfile: str,
@@ -36,7 +36,7 @@ def plot_scatter_2d_per_cell(
         total_allele_counts: (G, N) total-allele counts (A + B).
         cn_A/cn_B/cn_C: (G, K) per-clone copy numbers.
         clones: clone names, length K.
-        cnv_blocks: per-row CNP table (CNP/LENGTH columns for titles).
+        cnprofile: per-row CNP table (CNP/LENGTH columns for titles).
         anns: per-cell annotations (one row per column N), holds ``label_col``.
         base_props: (G,) RDR baseline; defaults to the global read-count fraction.
     """
@@ -52,7 +52,7 @@ def plot_scatter_2d_per_cell(
 
     with PdfPages(outfile) as pdf:
         for g in cluster_indices:
-            row = cnv_blocks.iloc[g]
+            row = cnprofile.iloc[g]
             cnp_str = row.get("CNP", "")
             length_mb = row["LENGTH"] / 1e6 if "LENGTH" in row.index else np.nan
             n_bbc = int(row["#BBC"]) if "#BBC" in row.index else 0

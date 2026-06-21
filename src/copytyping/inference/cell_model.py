@@ -45,8 +45,8 @@ class Cell_Model(Base_Model):
         global_lls[:] = 0.0
 
         for assay_type in self.assay_types:
-            cd = self.count_data[assay_type]
-            allele_mask = cd.allele_mask[self.allele_mask_id]
+            count_data = self.count_data[assay_type]
+            allele_mask = count_data.allele_mask[self.allele_mask_id]
             ll_a = params[f"{assay_type}-ll_allele"]
             ll_t = params[f"{assay_type}-ll_total"]
             ll_a[:] = 0.0
@@ -54,19 +54,19 @@ class Cell_Model(Base_Model):
 
             if fit_mode in {"allele", "allele_total"}:
                 ll_a[allele_mask] = cond_betabin_logpmf(
-                    cd.B[allele_mask],
-                    (cd.A + cd.B)[allele_mask],
+                    count_data.count_B[allele_mask],
+                    count_data.count_C[allele_mask],
                     params[f"{assay_type}-tau"],
-                    cd.cn_BAF[allele_mask],
+                    count_data.cn_BAF[allele_mask],
                 )
                 global_lls += ll_a.sum(axis=0)
 
             if fit_mode in {"total", "allele_total"}:
                 lambda_g = params[f"{assay_type}-lambda"]
-                total_mask = cd.total_mask[self.total_mask_id] & (lambda_g > 0)
-                props_gk = clone_pi_gk(lambda_g, cd.cn_C)[total_mask, :]
+                total_mask = count_data.total_mask[self.total_mask_id] & (lambda_g > 0)
+                props_gk = clone_pi_gk(lambda_g, count_data.cn_C)[total_mask, :]
                 ll_t[total_mask] = cond_negbin_logpmf(
-                    cd.X[total_mask],
+                    count_data.count_X[total_mask],
                     self.T[assay_type],
                     props_gk,
                     params[f"{assay_type}-inv_phi"],
@@ -84,15 +84,15 @@ class Cell_Model(Base_Model):
         fix_params = self.fix_model_params
 
         for assay_type in self.assay_types:
-            cd = self.count_data[assay_type]
+            count_data = self.count_data[assay_type]
 
             if fit_mode in {"allele", "allele_total"} and not fix_params.get(
                 f"{assay_type}-tau", True
             ):
-                am = cd.allele_mask[self.allele_mask_id]
-                Y_am = cd.B[am]
-                D_am = (cd.A + cd.B)[am]
-                BAF_am = cd.cn_BAF[am]
+                am = count_data.allele_mask[self.allele_mask_id]
+                Y_am = count_data.count_B[am]
+                D_am = count_data.count_C[am]
+                BAF_am = count_data.cn_BAF[am]
                 params[f"{assay_type}-tau"] = mle_tau(
                     Y_am[:, :, None],
                     D_am[:, :, None],
@@ -105,9 +105,9 @@ class Cell_Model(Base_Model):
                 f"{assay_type}-inv_phi", True
             ):
                 lambda_g = params[f"{assay_type}-lambda"]
-                total_mask = cd.total_mask[self.total_mask_id] & (lambda_g > 0)
-                props_gk = clone_pi_gk(lambda_g, cd.cn_C)[total_mask, :]
-                X_tm = cd.X[total_mask]
+                total_mask = count_data.total_mask[self.total_mask_id] & (lambda_g > 0)
+                props_gk = clone_pi_gk(lambda_g, count_data.cn_C)[total_mask, :]
+                X_tm = count_data.count_X[total_mask]
                 T = self.T[assay_type]
                 params[f"{assay_type}-inv_phi"] = mle_invphi(
                     X_tm[:, :, None],

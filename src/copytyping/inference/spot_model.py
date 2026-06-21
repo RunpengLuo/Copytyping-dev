@@ -43,7 +43,7 @@ class Spot_Model(Base_Model):
 
         # Hard-EM init: dispersions at max bound (BB->Binomial, NB->Poisson)
         for assay in self.assay_types:
-            cd = self.count_data[assay]
+            count_data = self.count_data[assay]
             lg = params[f"{assay}-lambda"]
             tau_init = invphi_init = None
             if fit_mode in {"allele", "allele_total"}:
@@ -53,15 +53,17 @@ class Spot_Model(Base_Model):
                 params[f"{assay}-inv_phi"] = self.invphi_bounds[1]
                 invphi_init = float(self.invphi_bounds[1])
             params[f"{assay}-theta"] = estimate_tumor_proportion(
-                cd, self.T[assay], lg, tau_init, invphi_init, fit_mode=fit_mode
+                count_data, self.T[assay], lg, tau_init, invphi_init, fit_mode=fit_mode
             )
             # Precompute: rdrs only for tumor clones (exclude normal column)
-            rdrs_full = clone_rdr_gk(lg, cd.cn_C)
+            rdrs_full = clone_rdr_gk(lg, count_data.cn_C)
             params[f"{assay}-rdrs"] = rdrs_full[:, 1:]  # (G, K_tumor)
-            params[f"{assay}-allele_mask"] = cd.allele_mask[self.allele_mask_id] & (
-                lg > 0
-            )
-            params[f"{assay}-total_mask"] = cd.total_mask[self.total_mask_id] & (lg > 0)
+            params[f"{assay}-allele_mask"] = count_data.allele_mask[
+                self.allele_mask_id
+            ] & (lg > 0)
+            params[f"{assay}-total_mask"] = count_data.total_mask[
+                self.total_mask_id
+            ] & (lg > 0)
 
         return init_labeling
 
@@ -72,7 +74,7 @@ class Spot_Model(Base_Model):
         global_lls[:] = 0.0
 
         for assay in self.assay_types:
-            cd = self.count_data[assay]
+            count_data = self.count_data[assay]
             theta = params[f"{assay}-theta"]
             rdrs = params[f"{assay}-rdrs"]  # (G, K_tumor)
             allele_mask = params[f"{assay}-allele_mask"]
@@ -84,10 +86,10 @@ class Spot_Model(Base_Model):
 
             if fit_mode in {"allele", "allele_total"} and allele_mask.any():
                 ll_a[allele_mask] = cond_betabin_logpmf_theta(
-                    cd.B[allele_mask],
-                    (cd.A + cd.B)[allele_mask],
+                    count_data.count_B[allele_mask],
+                    count_data.count_C[allele_mask],
                     params[f"{assay}-tau"],
-                    cd.cn_BAF[allele_mask][:, 1:],  # tumor clone BAFs only
+                    count_data.cn_BAF[allele_mask][:, 1:],  # tumor clone BAFs only
                     rdrs[allele_mask],
                     theta,
                 )
@@ -95,7 +97,7 @@ class Spot_Model(Base_Model):
 
             if fit_mode in {"total", "allele_total"} and total_mask.any():
                 ll_t[total_mask] = cond_negbin_logpmf_theta(
-                    cd.X[total_mask],
+                    count_data.count_X[total_mask],
                     self.T[assay],
                     params[f"{assay}-lambda"][total_mask],
                     params[f"{assay}-inv_phi"],

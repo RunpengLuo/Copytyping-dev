@@ -35,7 +35,7 @@ class Base_Model:
         self.barcodes = self.count_data[assay_types[0]].barcodes
 
         # per-cell library size per modality
-        self.T = {a: self.count_data[a].X.sum(axis=0) for a in assay_types}
+        self.T = {a: self.count_data[a].count_X.sum(axis=0) for a in assay_types}
         self.clones = self.count_data[assay_types[0]].clones
         self.num_barcodes = len(self.barcodes)
         self.num_clones = len(self.clones)
@@ -84,9 +84,9 @@ class Base_Model:
         mask_id = "IMBALANCED" if no_normal else "CLONAL_IMBALANCED"
         logging.info(f"estimate reference cells via allele-only BB model ({mask_id})")
         for assay in self.assay_types:
-            cd = self.count_data[assay]
-            n_clonal = int(cd.allele_mask["CLONAL_IMBALANCED"].sum())
-            n_all = int(cd.allele_mask["IMBALANCED"].sum())
+            count_data = self.count_data[assay]
+            n_clonal = int(count_data.allele_mask["CLONAL_IMBALANCED"].sum())
+            n_all = int(count_data.allele_mask["IMBALANCED"].sum())
             logging.info(f"  [{assay}] clonal imbalanced: {n_clonal}/{n_all}")
         pure_model = Cell_Model(
             count_data=self.count_data,
@@ -142,10 +142,10 @@ class Base_Model:
         """
         no_normal = self.no_normal
         for assay_type in self.assay_types:
-            cd = self.count_data[assay_type]
-            ref_cn = cd.cn_C[:, ref_clone] if no_normal else None
+            count_data = self.count_data[assay_type]
+            ref_cn = count_data.cn_C[:, ref_clone] if no_normal else None
             self.model_params[f"{assay_type}-lambda"] = compute_baseline_proportions(
-                cd.X,
+                count_data.count_X,
                 self.T[assay_type],
                 is_reference,
                 ref_cn=ref_cn,
@@ -191,12 +191,12 @@ class Base_Model:
         tol = self.model_tols["tol"]
         eps = self.model_tols["eps"]
         n_allele_bins = sum(
-            int(cd.allele_mask[self.allele_mask_id].sum())
-            for cd in self.count_data.values()
+            int(count_data.allele_mask[self.allele_mask_id].sum())
+            for count_data in self.count_data.values()
         )
         n_total_bins = sum(
-            int(cd.total_mask[self.total_mask_id].sum())
-            for cd in self.count_data.values()
+            int(count_data.total_mask[self.total_mask_id].sum())
+            for count_data in self.count_data.values()
         )
         if fit_mode == "allele":
             assert n_allele_bins > 0, f"no {self.allele_mask_id} bins for allele"

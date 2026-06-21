@@ -70,7 +70,7 @@ def build_categorical_colors(categories: list, palette: str = "Set2") -> list[st
     return colors
 
 
-def build_wl_coords(cnv_blocks, wl_segments):
+def build_wl_coords(cnprofile, wl_segments):
     """Map bins to the wl_segments coordinate system (same as plot_cnv_profile).
 
     Returns a dict with:
@@ -79,12 +79,12 @@ def build_wl_coords(cnv_blocks, wl_segments):
         ch_coords, seg_coords — chromosome / centromere boundary offsets
         chr_vlines, chr_end, xlab_chrs, xtick_chrs — axis decoration
     """
-    cnv_blocks = cnv_blocks.reset_index(drop=True)
-    chs = cnv_blocks["#CHR"].unique()
+    cnprofile = cnprofile.reset_index(drop=True)
+    chs = cnprofile["#CHR"].unique()
     wl_chs = wl_segments.groupby("#CHR", sort=False)
-    bins_chs = cnv_blocks.groupby("#CHR", sort=False, observed=True)
+    bins_chs = cnprofile.groupby("#CHR", sort=False, observed=True)
 
-    G = len(cnv_blocks)
+    G = len(cnprofile)
     positions = np.full(G, np.nan)
     abs_starts = np.full(G, np.nan)
     abs_ends = np.full(G, np.nan)

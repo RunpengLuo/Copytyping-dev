@@ -64,7 +64,7 @@ def compute_baseline_proportions(
     return base / total if total > 0 else np.ones_like(base) / len(base)
 
 
-def compute_rdr_baseline(cd, ref_cells, ref_clone=0, no_normal=False):
+def compute_rdr_baseline(count_data, ref_cells, ref_clone=0, no_normal=False):
     """RDR baseline (G,) from the reference-cell pseudobulk; None if no reference cells.
 
     CNP-corrected under ``no_normal`` (divides out the reference clone's copy ratio).
@@ -72,9 +72,9 @@ def compute_rdr_baseline(cd, ref_cells, ref_clone=0, no_normal=False):
     """
     if ref_cells is None or int(ref_cells.sum()) == 0:
         return None
-    ref_cn = cd.cn_C[:, ref_clone] if no_normal else None
-    T = np.asarray(cd.X.sum(axis=0)).ravel()
-    return compute_baseline_proportions(cd.X, T, ref_cells, ref_cn=ref_cn)
+    ref_cn = count_data.cn_C[:, ref_clone] if no_normal else None
+    T = np.asarray(count_data.count_X.sum(axis=0)).ravel()
+    return compute_baseline_proportions(count_data.count_X, T, ref_cells, ref_cn=ref_cn)
 
 
 def clone_rdr_gk(lambda_g: np.ndarray, C: np.ndarray):
@@ -136,7 +136,7 @@ def empirical_rdr_gn(
 
 
 def estimate_tumor_proportion(
-    cd,
+    count_data,
     T: np.ndarray,
     base_props: np.ndarray,
     tau: float,
@@ -150,7 +150,7 @@ def estimate_tumor_proportion(
     over theta is therefore independent of clone assignment.
 
     Args:
-        cd: CountData with X, A, B, cn_C, cn_BAF, allele_mask, total_mask.
+        count_data: CountData with count_X, count_B, count_C, cn_C, cn_BAF, allele_mask, total_mask.
         T: (N,) per-spot library size.
         base_props: (G,) baseline lambda from normal cells.
         tau: BB concentration scalar.
@@ -160,11 +160,11 @@ def estimate_tumor_proportion(
     Returns:
         theta_arr: (N,) per-spot purity estimates in [1e-4, 1-1e-4].
     """
-    N = cd.num_cell
-    rdrs_tumor = clone_rdr_gk(base_props, cd.cn_C)[:, 1:]  # (G, K_tumor)
-    non_sub = ~cd.total_mask["SUBCLONAL"]
-    am = cd.allele_mask["IMBALANCED"] & non_sub & (base_props > 0)
-    tm = cd.total_mask["ANEUPLOID"] & non_sub & (base_props > 0)
+    N = count_data.num_cell
+    rdrs_tumor = clone_rdr_gk(base_props, count_data.cn_C)[:, 1:]  # (G, K_tumor)
+    non_sub = ~count_data.total_mask["SUBCLONAL"]
+    am = count_data.allele_mask["IMBALANCED"] & non_sub & (base_props > 0)
+    tm = count_data.total_mask["ANEUPLOID"] & non_sub & (base_props > 0)
     n_am = int(am.sum())
     n_tm = int(tm.sum())
     logging.info(f"init theta: {n_am} clonal imbalanced, {n_tm} clonal aneuploid bins")
@@ -177,12 +177,12 @@ def estimate_tumor_proportion(
         return theta_arr
 
     if use_a:
-        Y_am = cd.B[am]
-        D_am = (cd.A + cd.B)[am]
-        BAF_am = cd.cn_BAF[am, 1:]
+        Y_am = count_data.count_B[am]
+        D_am = count_data.count_C[am]
+        BAF_am = count_data.cn_BAF[am, 1:]
         rdrs_am = rdrs_tumor[am]
     if use_t:
-        X_tm = cd.X[tm]
+        X_tm = count_data.count_X[tm]
         lambda_tm = base_props[tm]
         rdrs_tm = rdrs_tumor[tm]
 

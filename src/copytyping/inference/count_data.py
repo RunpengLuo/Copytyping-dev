@@ -22,9 +22,10 @@ class CountData:
     Attributes:
         barcodes: per-cell metadata, one row per matrix column (num_cell).
         coordinates: per-segment metadata, one row per matrix row (num_segment).
-        X: read depth / total feature counts.
-        A: A-allele counts.
-        B: B-allele counts.
+        count_X: read depth / total feature counts.
+        count_A: A-allele counts.
+        count_B: B-allele counts.
+        count_C: total-allele counts (count_A + count_B); a read-only property.
         cn_A/cn_B/cn_C/cn_BAF: per-row, per-clone copy numbers + B-allele freq.
         clones: clone names (``["normal", "clone1", ...]``), populated by
             ``annotate_cnps`` (None until then).
@@ -39,9 +40,9 @@ class CountData:
 
     barcodes: pd.DataFrame
     coordinates: pd.DataFrame
-    X: np.ndarray | sparse.csr_matrix
-    A: np.ndarray | sparse.csr_matrix
-    B: np.ndarray | sparse.csr_matrix
+    count_X: np.ndarray | sparse.csr_matrix
+    count_A: np.ndarray | sparse.csr_matrix
+    count_B: np.ndarray | sparse.csr_matrix
     cn_A: np.ndarray | None = None
     cn_B: np.ndarray | None = None
     cn_C: np.ndarray | None = None
@@ -50,11 +51,16 @@ class CountData:
     allele_mask: dict[str, np.ndarray] | None = None
     total_mask: dict[str, np.ndarray] | None = None
 
+    @property
+    def count_C(self) -> np.ndarray | sparse.csr_matrix:
+        """Total-allele counts (count_A + count_B)."""
+        return self.count_A + self.count_B
+
     def __post_init__(self) -> None:
-        self.num_segment, self.num_cell = self.X.shape
+        self.num_segment, self.num_cell = self.count_X.shape
         shape = (self.num_segment, self.num_cell)
-        assert self.A.shape == shape, f"A shape {self.A.shape} != {shape}"
-        assert self.B.shape == shape, f"B shape {self.B.shape} != {shape}"
+        assert self.count_A.shape == shape, f"A shape {self.count_A.shape} != {shape}"
+        assert self.count_B.shape == shape, f"B shape {self.count_B.shape} != {shape}"
         assert len(self.barcodes) == self.num_cell, (
             f"barcodes rows ({len(self.barcodes)}) != num_cell ({self.num_cell})"
         )
@@ -64,27 +70,27 @@ class CountData:
         )
 
     def to_dense(self) -> None:
-        """Densify X/A/B in place (no-op for already-dense matrices)."""
-        if sparse.issparse(self.X):
-            self.X = np.asarray(self.X.todense())
-        if sparse.issparse(self.A):
-            self.A = np.asarray(self.A.todense())
-        if sparse.issparse(self.B):
-            self.B = np.asarray(self.B.todense())
+        """Densify count_X/count_A/count_B in place (no-op if already dense)."""
+        if sparse.issparse(self.count_X):
+            self.count_X = np.asarray(self.count_X.todense())
+        if sparse.issparse(self.count_A):
+            self.count_A = np.asarray(self.count_A.todense())
+        if sparse.issparse(self.count_B):
+            self.count_B = np.asarray(self.count_B.todense())
 
     def subset_by_rep(self, rep_id: str) -> tuple["CountData", np.ndarray]:
         """Return ``(CountData, column_mask)`` restricted to ``REP_ID == rep_id``.
 
-        Only the cell axis (columns of X/A/B + ``barcodes``) is subset; the
-        segment-axis fields (coordinates, cn_*, masks, clones) are shared.
+        Only the cell axis (columns of count_X/count_A/count_B + ``barcodes``) is
+        subset; the segment-axis fields (coordinates, cn_*, masks, clones) are shared.
         """
         mask = (self.barcodes["REP_ID"] == rep_id).to_numpy()
         sub = replace(
             self,
             barcodes=self.barcodes[mask].reset_index(drop=True),
-            X=self.X[:, mask],
-            A=self.A[:, mask],
-            B=self.B[:, mask],
+            count_X=self.count_X[:, mask],
+            count_A=self.count_A[:, mask],
+            count_B=self.count_B[:, mask],
         )
         return sub, mask
 
@@ -115,16 +121,18 @@ class CountData:
         )["PHASE"]
         assert ph.notna().all(), "some rows have no matching phase in bbc_phases"
         ph = ph.to_numpy()[:, None]  # 1=keep, 0=swap
-        A, B = self.A, self.B
+        A, B = self.count_A, self.count_B
         if sparse.issparse(A):
-            self.A = A.multiply(ph) + B.multiply(1 - ph)
-            self.B = B.multiply(ph) + A.multiply(1 - ph)
+            self.count_A = A.multiply(ph) + B.multiply(1 - ph)
+            self.count_B = B.multiply(ph) + A.multiply(1 - ph)
         else:
-            self.A = A * ph + B * (1 - ph)
-            self.B = B * ph + A * (1 - ph)
+            self.count_A = A * ph + B * (1 - ph)
+            self.count_B = B * ph + A * (1 - ph)
 
-        # map each row's midpoint to its bulk segment, index the parsed CN arrays
+        # map each row's midpoint to its bulk (HATCHet) segment; that index is the
+        # gold-truth seg_id used by segment_count_data, and indexes the CN arrays.
         idx = _map_bulk_seg_index(coords, seg_df)
+        self.coordinates["seg_id"] = idx
         self.clones = clones
         self.cn_A, self.cn_B, self.cn_C, self.cn_BAF = (
             cn_A[idx],
@@ -174,7 +182,7 @@ def initialize_count_data(
 ) -> CountData:
     """Read one modality's BBC files into a CountData.
 
-    Reads barcodes (+REP_ID), the sparse X/A/B count matrices, and the segment
+    Reads barcodes (+REP_ID), the sparse read/A/B count matrices, and the segment
     table; merges cell types and drops excluded labels when provided.
     """
     barcodes_df = pd.read_table(
@@ -200,9 +208,9 @@ def initialize_count_data(
     return CountData(
         barcodes=barcodes_df,
         coordinates=coordinates_df,
-        X=X,
-        A=A,
-        B=B,
+        count_X=X,
+        count_A=A,
+        count_B=B,
     )
 
 
@@ -210,30 +218,30 @@ def _adaptive_segment_ids(
     chrom: np.ndarray,
     start: np.ndarray,
     end: np.ndarray,
-    cn: np.ndarray,
+    seg_id: np.ndarray,
     snp_count: np.ndarray,
     min_snp_count: int,
     max_bin_length: int,
 ) -> np.ndarray:
-    """Per-row segment id: merge contiguous same-CN rows per chromosome until the
-    pseudobulk ``snp_count`` reaches ``min_snp_count`` or the span would exceed
-    ``max_bin_length`` bp. Returns genomic-order cumulative ids."""
+    """Per-row bin id: merge consecutive rows within the SAME gold-truth segment
+    (``seg_id``) until the pseudobulk ``snp_count`` reaches ``min_snp_count`` or the
+    span would exceed ``max_bin_length`` bp. A bin never crosses a segment boundary,
+    so it never spans a whitelist gap. Returns genomic-order cumulative ids."""
     order = np.lexsort((start, chrom))
     seg = np.empty(len(order), dtype=np.int64)
     sid = -1
-    cur_chrom = cur_cn = None
+    cur_seg = None
     cur_start = cur_snp = 0
     for i in order:
         start_new = (
             sid < 0
-            or chrom[i] != cur_chrom
-            or bool(np.any(cn[i] != cur_cn))
+            or seg_id[i] != cur_seg
             or (end[i] - cur_start) > max_bin_length
             or cur_snp >= min_snp_count
         )
         if start_new:
             sid += 1
-            cur_chrom, cur_cn, cur_start, cur_snp = chrom[i], cn[i], start[i], 0
+            cur_seg, cur_start, cur_snp = seg_id[i], start[i], 0
         seg[i] = sid
         cur_snp += snp_count[i]
     return seg
@@ -254,14 +262,16 @@ def segment_count_data(
     Each modality's X/A/B are summed with one sparse matmul; the grouped CN profile
     is carried onto every result.
 
-    - ``cnp_bin``: contiguous same-CN rows per chromosome, capped by ``min_snp_count``
-      / ``max_bin_length`` (a CN run split into smaller bins).
-    - ``cnp_segment``: all contiguous same-CN rows per chromosome (full CN segments,
-      no cap). Both yield per-segment ``segment_id`` + #CHR/START/END coordinates.
-    - ``cnp_cluster``: all same-CN rows genome-wide (like to_cluster_level);
-      coordinates carry only ``segment_id``.
+    - ``cnp_segment``: the gold-truth HATCHet segments (grouped by per-row ``seg_id``
+      from ``annotate_cnps``); never re-segmented. Yields ``segment_id`` +
+      #CHR/START/END.
+    - ``cnp_bin``: a finer split *within* each gold-truth segment, capped by
+      ``min_snp_count`` / ``max_bin_length``; a bin never crosses a segment boundary.
+    - ``cnp_cluster``: all same-CN rows genome-wide (like to_cluster_level), grouped by
+      CN identity for the EM model; coordinates carry only ``segment_id``.
 
-    All modes name the grouped row id ``segment_id``. Returns ``{assay: CountData}``.
+    All modes name the grouped row id ``segment_id`` and carry per-group ``#BBC``
+    (rows merged) + ``LENGTH`` (total bp). Returns ``{assay: CountData}``.
     """
     assays = list(count_data)
     ref = count_data[assays[0]]
@@ -277,31 +287,25 @@ def segment_count_data(
         coords = pd.DataFrame({"segment_id": np.arange(int(segment_ids.max()) + 1)})
     elif agg_level in ("cnp_segment", "cnp_bin"):
         c = ref.coordinates
+        assert "seg_id" in c.columns, "call annotate_cnps before segmenting"
         chrom, start, end = (
             c["#CHR"].to_numpy(),
             c["START"].to_numpy(),
             c["END"].to_numpy(),
         )
+        seg_id = c["seg_id"].to_numpy()  # gold-truth HATCHet segment per bbc row
         if agg_level == "cnp_bin":
             # joint pseudobulk allele count: pooled over all modalities' cells
             snp_count = sum(
-                np.asarray((count_data[a].A + count_data[a].B).sum(axis=1)).ravel()
-                for a in assays
+                np.asarray(count_data[a].count_C.sum(axis=1)).ravel() for a in assays
             )
             segment_ids = _adaptive_segment_ids(
-                chrom, start, end, cn, snp_count, min_snp_count, max_bin_length
+                chrom, start, end, seg_id, snp_count, min_snp_count, max_bin_length
             )
         else:
-            # full segments: every contiguous same-CN run per chromosome
-            order = np.lexsort((start, chrom))
-            cn_o, chrom_o = cn[order], chrom[order]
-            is_new = np.empty(n, dtype=bool)
-            is_new[0] = True
-            is_new[1:] = (chrom_o[1:] != chrom_o[:-1]) | np.any(
-                cn_o[1:] != cn_o[:-1], axis=1
-            )
-            segment_ids = np.empty(n, dtype=np.int64)
-            segment_ids[order] = np.cumsum(is_new) - 1
+            # gold-truth segments: exactly the HATCHet seg_df segments (never
+            # re-segmented). seg_df is genomic-ordered, so dense ids stay ordered.
+            segment_ids = np.unique(seg_id, return_inverse=True)[1].ravel()
         coords = (
             pd.DataFrame(
                 {"segment_id": segment_ids, "#CHR": chrom, "START": start, "END": end}
@@ -318,6 +322,13 @@ def segment_count_data(
         )
     else:
         raise ValueError(f"unknown agg_level: {agg_level!r}")
+
+    # per-group provenance: #BBC = number of bbc rows merged, LENGTH = total bp
+    bbc_len = ref.coordinates["END"].to_numpy() - ref.coordinates["START"].to_numpy()
+    coords["#BBC"] = np.bincount(segment_ids, minlength=len(coords))
+    coords["LENGTH"] = np.bincount(
+        segment_ids, weights=bbc_len, minlength=len(coords)
+    ).astype(np.int64)
 
     G = int(segment_ids.max()) + 1
     indicator = sparse.csr_matrix(
@@ -347,9 +358,9 @@ def segment_count_data(
         a: CountData(
             barcodes=count_data[a].barcodes,
             coordinates=coords.copy(),
-            X=_sum(count_data[a].X),
-            A=_sum(count_data[a].A),
-            B=_sum(count_data[a].B),
+            count_X=_sum(count_data[a].count_X),
+            count_A=_sum(count_data[a].count_A),
+            count_B=_sum(count_data[a].count_B),
             cn_A=cn_A,
             cn_B=cn_B,
             cn_C=cn_C,
@@ -425,7 +436,11 @@ def smooth_spatial_neighbors(
         def _dense_copy(m: np.ndarray | sparse.csr_matrix) -> np.ndarray:
             return np.asarray(m.todense()) if sparse.issparse(m) else np.array(m)
 
-        X, A, B = _dense_copy(cd.X), _dense_copy(cd.A), _dense_copy(cd.B)
+        X, A, B = (
+            _dense_copy(cd.count_X),
+            _dense_copy(cd.count_A),
+            _dense_copy(cd.count_B),
+        )
         pos = {bc: i for i, bc in enumerate(cd.barcodes["BARCODE"].to_numpy())}
         spot_k = np.zeros(cd.num_cell, dtype=int)  # smoothing radius per spot
 
@@ -465,32 +480,25 @@ def smooth_spatial_neighbors(
             f"[{assay}] spatial smoothing (max_k={max_k}, min_umi={min_umi}, "
             f"min_snp_umi={min_snp_umi}): {n_smoothed}/{cd.num_cell} spots smoothed"
         )
-        out[assay] = replace(cd, X=X, A=A, B=B)
+        out[assay] = replace(cd, count_X=X, count_A=A, count_B=B)
     return out
 
 
-def count_data_cnv_blocks(cd: CountData) -> pd.DataFrame:
-    """Genomic CNP-block table (#CHR/START/END/CNP/LENGTH) for plotting.
+def count_data_cnprofile(cd: CountData) -> pd.DataFrame:
+    """Per-row CNP-block table for plotting (segment, bin, or cluster level).
 
-    Requires a segment/bin-level CountData (``coordinates`` carries #CHR/START/END
-    and ``cn_A``/``cn_B`` are populated). ``CNP`` is the per-row, per-clone
-    ``A|B`` string joined by ``;`` (same convention as ``restrict_masks_to_cnp``).
+    Copies the CountData ``coordinates`` (which already carry ``#BBC``/``LENGTH``,
+    and #CHR/START/END for segment/bin levels) and adds a ``CNP`` column: the
+    per-row, per-clone ``A|B`` string joined by ``;`` (same convention as
+    ``restrict_masks_to_cnp``). Cluster-level coordinates carry no genomic
+    position, which the 2D scatter does not need.
     """
-    coords = cd.coordinates
+    df = cd.coordinates.copy()
     cn_A, cn_B = cd.cn_A, cd.cn_B
-    cnp = [
+    df["CNP"] = [
         ";".join(f"{a}|{b}" for a, b in zip(cn_A[g], cn_B[g]))
         for g in range(cd.num_segment)
     ]
-    df = pd.DataFrame(
-        {
-            "#CHR": coords["#CHR"].to_numpy(),
-            "START": coords["START"].to_numpy(),
-            "END": coords["END"].to_numpy(),
-            "CNP": cnp,
-        }
-    )
-    df["LENGTH"] = df["END"] - df["START"]
     return df
 
 
@@ -504,6 +512,6 @@ def save_count_data(count_data: dict[str, CountData], prefix: str) -> None:
     for assay, cd in count_data.items():
         p = f"{prefix}.{assay}"
         cd.coordinates.to_csv(f"{p}.tsv.gz", sep="\t", index=False, compression="gzip")
-        sparse.save_npz(f"{p}.X.npz", sparse.csr_matrix(cd.X))
-        sparse.save_npz(f"{p}.B.npz", sparse.csr_matrix(cd.B))
-        sparse.save_npz(f"{p}.C.npz", sparse.csr_matrix(cd.A + cd.B))
+        sparse.save_npz(f"{p}.X.npz", sparse.csr_matrix(cd.count_X))
+        sparse.save_npz(f"{p}.B.npz", sparse.csr_matrix(cd.count_B))
+        sparse.save_npz(f"{p}.C.npz", sparse.csr_matrix(cd.count_C))

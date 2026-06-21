@@ -45,7 +45,7 @@ logging.getLogger("fontTools").setLevel(logging.ERROR)
 def plot_heatmap(
     ax: plt.Axes,
     cell_labels: np.ndarray,
-    cnv_blocks: pd.DataFrame,
+    cnprofile: pd.DataFrame,
     X_mat: np.ndarray,
     wl_segments: pd.DataFrame,
     height=1,
@@ -57,16 +57,16 @@ def plot_heatmap(
     show_block_labels=True,
 ):
     (N, G) = X_mat.shape
-    assert len(cnv_blocks) == G, "unmatched data"
+    assert len(cnprofile) == G, "unmatched data"
     assert len(cell_labels) == N, "unmatched data"
 
-    wl = build_wl_coords(cnv_blocks, wl_segments)
+    wl = build_wl_coords(cnprofile, wl_segments)
     x_edges = wl["x_edges"]
     col_bin_ids = wl["col_bin_ids"]
     ch_coords = wl["ch_coords"]
     seg_coords = wl["seg_coords"]
     ch_offset = wl["chr_end"]
-    chs = cnv_blocks["#CHR"].unique()
+    chs = cnprofile["#CHR"].unique()
 
     # -------- build extended matrix with NaN gaps --------
     n_cols = len(col_bin_ids)
@@ -331,7 +331,7 @@ def plot_cnv_heatmap(
     read_counts: np.ndarray,
     ballele_counts: np.ndarray,
     total_allele_counts: np.ndarray,
-    cnv_blocks: pd.DataFrame,
+    cnprofile: pd.DataFrame,
     num_clones: int,
     anns: pd.DataFrame,
     region_bed: str,
@@ -381,7 +381,7 @@ def plot_cnv_heatmap(
     row_groups = _row_layout(primary_labels, uniq_labels, agg_size)
     row_primary = np.array([primary_labels[g[0]] for g in row_groups])
 
-    data_info = cnv_blocks
+    data_info = cnprofile
     if val == "BAF":
         data_matrix = prepare_baf(ballele_counts, total_allele_counts, row_groups)
         boundaries = np.linspace(0, 1, 11)  # [0.0, 0.1, ..., 1.0]
