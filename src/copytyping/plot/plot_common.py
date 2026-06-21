@@ -193,7 +193,7 @@ def plot_count_histograms(
 ):
     """Per-rep 2x2 histogram: total/aneuploid read counts, total/imbalanced allele counts.
 
-    All data_types in a single PDF, one page per (data_type, rep_id).
+    All assay_types in a single PDF, one page per (assay_type, rep_id).
     """
 
     def _hist(ax, vals, xlabel, title):
@@ -203,7 +203,7 @@ def plot_count_histograms(
         ax.set_title(f"{title} (n={len(vals)}, med={int(np.median(vals))})", fontsize=9)
 
     with PdfPages(outfile) as pdf:
-        for data_type, sx in data_sources.items():
+        for assay_type, sx in data_sources.items():
             aneu = sx.MASK["ANEUPLOID"]
             imb = sx.MASK["IMBALANCED"]
             n_aneu = int(aneu.sum())
@@ -233,7 +233,7 @@ def plot_count_histograms(
                     f"imbalanced allele count ({n_imb} bins)",
                 )
                 fig.suptitle(
-                    f"{sample} — {data_type} — {rep_id}",
+                    f"{sample} — {assay_type} — {rep_id}",
                     fontsize=12,
                     fontweight="bold",
                 )
@@ -255,11 +255,11 @@ def plot_init_baf_histograms(
     One page per cluster, title shows cluster index and (A,B) CN state.
     Only plots clusters in CLONAL_LOH mask.
     """
-    for data_type, sx in data_sources.items():
+    for assay_type, sx in data_sources.items():
         loh_mask = sx.MASK.get("CLONAL_LOH", np.zeros(sx.G, dtype=bool))
         if not loh_mask.any():
             continue
-        outfile = os.path.join(out_dir, f"{sample}.{data_type}.init_baf.pdf")
+        outfile = os.path.join(out_dir, f"{sample}.{assay_type}.init_baf.pdf")
         loh_idx = np.where(loh_mask)[0]
 
         with PdfPages(outfile) as pdf:
@@ -292,13 +292,13 @@ def plot_init_baf_histograms(
                 ax.legend(fontsize=8)
 
                 # title with cluster CN state
-                a_str = f"{sx.A[g, 1]}|{sx.B[g, 1]}"
+                a_str = f"{sx.cn_A[g, 1]}|{sx.cn_B[g, 1]}"
                 if sx.K > 2:
                     a_str = ";".join(
-                        f"{sx.A[g, k]}|{sx.B[g, k]}" for k in range(1, sx.K)
+                        f"{sx.cn_A[g, k]}|{sx.cn_B[g, k]}" for k in range(1, sx.K)
                     )
                 fig.suptitle(
-                    f"{sample} — {data_type} cluster {g} — CN: {a_str}",
+                    f"{sample} — {assay_type} cluster {g} — CN: {a_str}",
                     fontsize=11,
                     fontweight="bold",
                 )
@@ -488,7 +488,9 @@ def plot_cluster_observed_data(
 
             cn_parts = []
             for k in range(1, seg_sx.K):
-                cn_parts.append(f"{seg_sx.clones[k]}={seg_sx.A[g, k]}|{seg_sx.B[g, k]}")
+                cn_parts.append(
+                    f"{seg_sx.clones[k]}={seg_sx.cn_A[g, k]}|{seg_sx.cn_B[g, k]}"
+                )
             cn_str = ", ".join(cn_parts)
 
             fig, axes = plt.subplots(
@@ -582,7 +584,7 @@ def plot_cluster_observed_data(
             else:
                 continue
 
-            loh_mask = (seg_sx.B[:, k] == 0) & (seg_sx.A[:, k] > 0)
+            loh_mask = (seg_sx.cn_B[:, k] == 0) & (seg_sx.cn_A[:, k] > 0)
             n_loh = int(loh_mask.sum())
             if n_loh == 0:
                 continue
@@ -637,7 +639,7 @@ def plot_metrics_barplot(
     metrics=("precision", "recall", "f1"),
     auc_metrics=("AUC_hard", "AUC_soft"),
     sample_col="SAMPLE",
-    dtypes_col="DATA_TYPES",
+    assay_types_col="ASSAY_TYPES",
     group_col="cancer_type",
     dpi=200,
 ):
@@ -679,9 +681,10 @@ def plot_metrics_barplot(
                 .sort_values(sample_col)
             )
             samples = sample_df[sample_col].tolist()
-            if dtypes_col in sample_df.columns:
+            if assay_types_col in sample_df.columns:
                 tick_labels = [
-                    f"{s}\n({dt})" for s, dt in zip(samples, sample_df[dtypes_col])
+                    f"{s}\n({assay})"
+                    for s, assay in zip(samples, sample_df[assay_types_col])
                 ]
             else:
                 tick_labels = samples

@@ -171,7 +171,7 @@ def plot_rdr_baf_1d_pseudobulk(
     anns: pd.DataFrame,
     base_props: np.ndarray,
     sample: str,
-    data_type: str,
+    assay_type: str,
     genome_file: str,
     region_bed: str,
     haplo_blocks: pd.DataFrame = None,
@@ -312,9 +312,9 @@ def plot_rdr_baf_1d_pseudobulk(
             and cell_label in sx_data.clones
         ):
             clone_idx = sx_data.clones.index(cell_label)
-            clone_C_full = sx_data.C[:, clone_idx].astype(np.float64)
-            clone_A = sx_data.A[:, clone_idx]
-            clone_B = sx_data.B[:, clone_idx]
+            clone_C_full = sx_data.cn_C[:, clone_idx].astype(np.float64)
+            clone_A = sx_data.cn_A[:, clone_idx]
+            clone_B = sx_data.cn_B[:, clone_idx]
             bin_colors = [
                 state_style.get((int(a), int(b)), state_style["default"])
                 for a, b in zip(clone_A, clone_B)
@@ -367,13 +367,13 @@ def plot_rdr_baf_1d_pseudobulk(
         else:
             obs_rdr = np.full(len(positions), np.nan)
 
-        feat_label = {"atac": "fragment", "gex": "umi"}.get(data_type, "count")
+        feat_label = {"atac": "fragment", "gex": "umi"}.get(assay_type, "count")
         total_counts = int(np.sum(X[:, barcode_idxs]))
         snp_counts = int(np.sum(D[:, barcode_idxs]))
         prop = round(100 * num_bcs / total_cells, 1) if total_cells > 0 else 0.0
         rdr_title = (
             f"{cell_label} (n={num_bcs}, prop={prop}%,"
-            f" {data_type}-{feat_label}={total_counts:,},"
+            f" {assay_type}-{feat_label}={total_counts:,},"
             f" snp-{feat_label}={snp_counts:,})"
         )
         plot_scatter_1d_pseudobulk(
@@ -438,9 +438,7 @@ def plot_rdr_baf_1d_pseudobulk(
     else:
         plot_cnv_legend(axes[-1])
 
-    title = (
-        f"sample={sample}  platform={kwargs.get('platform', '')}  data_type={data_type}"
-    )
+    title = f"sample={sample}  platform={kwargs.get('platform', '')}  assay_type={assay_type}"
     if kwargs.get("subtitle"):
         title += f"\n{kwargs['subtitle']}"
     fig.suptitle(title, fontsize=12, fontweight="bold", y=1.02)

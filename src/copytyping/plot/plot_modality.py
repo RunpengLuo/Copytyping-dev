@@ -16,7 +16,7 @@ from copytyping.validation.metrics import compute_cluster_baf_metrics
 def plot_modality_panel(
     *,
     sample,
-    data_type,
+    assay_type,
     prefix,
     plot_dir,
     seg_sx,
@@ -42,15 +42,15 @@ def plot_modality_panel(
     """Per-modality + per-REP_ID plots: cluster_obs, cluster_2d, heatmap, 1d_scatter.
 
     Cluster-level plots reuse the model's fitted baseline (``cluster_base_props``,
-    i.e. ``model_params["{dt}-lambda"]``); the finer-resolution heatmap (seg) and
+    i.e. ``model_params["{assay}-lambda"]``); the finer-resolution heatmap (seg) and
     1d_scatter (bbc) derive theirs via ``baseline_fn(sx)``.
 
     Files written:
-        {plot_dir}/{prefix}.{data_type}.cluster_obs.{label}.pdf  (per plot_label)
-        {plot_dir}/{prefix}.{data_type}.cluster_2d.pdf
-        {plot_dir}/{prefix}.{data_type}.heatmap.agg{agg}.pdf
+        {plot_dir}/{prefix}.{assay_type}.cluster_obs.{label}.pdf  (per plot_label)
+        {plot_dir}/{prefix}.{assay_type}.cluster_2d.pdf
+        {plot_dir}/{prefix}.{assay_type}.heatmap.agg{agg}.pdf
             (multi-page: rep_id outer × val inner; labels shown as color strips)
-        {plot_dir}/{prefix}.{data_type}.1d_scatter.{label}.pdf
+        {plot_dir}/{prefix}.{assay_type}.1d_scatter.{label}.pdf
             (multi-page: one page per rep_id)
     """
     raw_lambda = (
@@ -64,14 +64,16 @@ def plot_modality_panel(
             baf_metrics = compute_cluster_baf_metrics(raw_clust, anns[obs_label].values)
             for g, m in sorted(baf_metrics.items()):
                 logging.info(
-                    f"  cluster {g} ({data_type}, {obs_label}): "
+                    f"  cluster {g} ({assay_type}, {obs_label}): "
                     f"within_var={m['within_var']:.4f}"
                 )
         plot_cluster_observed_data(
             raw_clust,
             anns,
             sample,
-            os.path.join(plot_dir, f"{prefix}.{data_type}.cluster_obs.{obs_label}.pdf"),
+            os.path.join(
+                plot_dir, f"{prefix}.{assay_type}.cluster_obs.{obs_label}.pdf"
+            ),
             label_col=obs_label,
             base_props=raw_lambda,
             baf_metrics=baf_metrics,
@@ -81,17 +83,17 @@ def plot_modality_panel(
         raw_clust,
         anns,
         sample,
-        os.path.join(plot_dir, f"{prefix}.{data_type}.cluster_2d.pdf"),
+        os.path.join(plot_dir, f"{prefix}.{assay_type}.cluster_2d.pdf"),
         label_col=primary_label,
         base_props=raw_lambda,
         dpi=dpi,
     )
 
-    bbc_df_dt, X_bbc, Y_bbc, D_bbc = bbc_data
+    bbc_df_assay, X_bbc, Y_bbc, D_bbc = bbc_data
     agg_bbc = None
-    if bbc_df_dt is not None:
+    if bbc_df_assay is not None:
         agg_bbc = adaptive_bin_bbc(
-            bbc_df_dt,
+            bbc_df_assay,
             X_bbc,
             Y_bbc,
             D_bbc,
@@ -115,7 +117,7 @@ def plot_modality_panel(
     for agg in [1, heatmap_agg]:
         fname = os.path.join(
             plot_dir,
-            f"{prefix}.{data_type}.heatmap.agg{agg}.pdf",
+            f"{prefix}.{assay_type}.heatmap.agg{agg}.pdf",
         )
         with PdfPages(fname) as pdf:
             for rep_id in rep_ids:
@@ -125,7 +127,7 @@ def plot_modality_panel(
                         continue
                     plot_cnv_heatmap(
                         sample,
-                        data_type,
+                        assay_type,
                         cnv_blocks,
                         v["seg_sx"],
                         v["anns"],
@@ -146,7 +148,7 @@ def plot_modality_panel(
     if agg_bbc is not None:
         for my_label in plot_labels:
             fname = os.path.join(
-                plot_dir, f"{prefix}.{data_type}.1d_scatter.{my_label}.pdf"
+                plot_dir, f"{prefix}.{assay_type}.1d_scatter.{my_label}.pdf"
             )
             with PdfPages(fname) as pdf:
                 for rep_id in rep_ids:
@@ -157,7 +159,7 @@ def plot_modality_panel(
                         v["anns"],
                         agg_lambda,
                         sample,
-                        data_type,
+                        assay_type,
                         genome_size,
                         haplo_blocks=cnv_blocks,
                         region_bed=region_bed,

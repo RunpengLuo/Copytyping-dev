@@ -37,7 +37,7 @@ def plot_scatter_2d_per_cell(
             cn_parts = []
             for k in range(1, sx_data.K):
                 cn_parts.append(
-                    f"{sx_data.clones[k]}={sx_data.A[g, k]}|{sx_data.B[g, k]}"
+                    f"{sx_data.clones[k]}={sx_data.cn_A[g, k]}|{sx_data.cn_B[g, k]}"
                 )
             cn_str = ", ".join(cn_parts)
 
@@ -72,9 +72,9 @@ def plot_scatter_2d_per_cell(
             # BAF: B/(A+B). log2RDR: log2(C_{g,k} / sum_g(lambda_g * C_{g,k})).
             exp_points = defaultdict(list)
             for k in range(sx_data.K):
-                C_k = sx_data.C[g, k]
-                exp_baf_k = sx_data.B[g, k] / C_k if C_k > 0 else 0.5
-                denom_k = float(np.sum(base_props * sx_data.C[:, k]))
+                C_k = sx_data.cn_C[g, k]
+                exp_baf_k = sx_data.cn_B[g, k] / C_k if C_k > 0 else 0.5
+                denom_k = float(np.sum(base_props * sx_data.cn_C[:, k]))
                 if denom_k > 0 and C_k > 0:
                     exp_log2rdr_k = np.log2(C_k / denom_k)
                 else:

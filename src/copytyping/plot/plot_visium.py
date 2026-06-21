@@ -407,7 +407,7 @@ def plot_visium_loh_baf(
         loh_ks = [
             k
             for k in range(1, raw_clust.K)
-            if raw_clust.B[gi, k] == 0 and raw_clust.A[gi, k] > 0
+            if raw_clust.cn_B[gi, k] == 0 and raw_clust.cn_A[gi, k] > 0
         ]
         if loh_ks:
             loh_clusters.append(gi)
@@ -470,7 +470,7 @@ def plot_visium_loh_baf(
         for gi in loh_clusters:
             row = raw_clust.cnv_blocks.iloc[gi]
             cn_parts = [
-                f"{raw_clust.clones[k]}={raw_clust.A[gi, k]}|{raw_clust.B[gi, k]}"
+                f"{raw_clust.clones[k]}={raw_clust.cn_A[gi, k]}|{raw_clust.cn_B[gi, k]}"
                 for k in range(raw_clust.K)
             ]
             length_mb = row.get("LENGTH", 0) / 1e6

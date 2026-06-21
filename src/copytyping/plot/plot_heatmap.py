@@ -321,7 +321,7 @@ def draw_label_legends(
 
 def plot_cnv_heatmap(
     sample: str,
-    data_type: str,
+    assay_type: str,
     haplo_blocks: pd.DataFrame,
     sx_data: SX_Data,
     anns: pd.DataFrame,
@@ -477,7 +477,7 @@ def plot_cnv_heatmap(
         plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
         plot_cnv_legend(axes[2])
 
-    title = f"{sample} {rep_id} {data_type} {val} Heatmap".replace("  ", " ")
+    title = f"{sample} {rep_id} {assay_type} {val} Heatmap".replace("  ", " ")
     if agg_size > 1:
         title += f"\n(pseudobulk-{agg_size} cell for visualization)"
     fig.suptitle(title, y=0.99, fontsize=14, fontweight="bold")
