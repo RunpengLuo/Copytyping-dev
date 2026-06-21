@@ -250,11 +250,13 @@ def plot_label_strips(
     color_maps: dict[str, dict[str, str]],
     strip_width: float = 0.012,
     gap: float = 0.004,
-) -> list[tuple[str, dict[str, str]]]:
+) -> list[tuple[str, dict[str, str], dict[str, float]]]:
     """Draw vertical categorical color strips to the LEFT of base_ax, one per label.
 
     row_label_map maps label name -> (n_rows,) values in bottom-to-top row order.
-    color_maps maps label name -> {value: color}. Returns [(name, {value: color})].
+    color_maps maps label name -> {value: color}. Returns
+    [(name, {value: color}, {value: fraction})], where fraction is the share of
+    rows holding that value (used to annotate legend entries).
     """
     fig.canvas.draw()
     bbox = base_ax.get_position()
@@ -262,6 +264,8 @@ def plot_label_strips(
     legends_info = []
     for name, values in row_label_map.items():
         values = np.array([str(v) for v in values])
+        n_rows = max(len(values), 1)
+        prop_dict = {v: int((values == v).sum()) / n_rows for v in color_maps[name]}
         color_dict = color_maps[name]
         order = list(color_dict)
         codes = np.array([order.index(v) for v in values], dtype=float)[:, None]
@@ -289,27 +293,31 @@ def plot_label_strips(
         ax.set_yticks([])
         ax.set_ylim(base_ax.get_ylim())
         x_cursor -= gap
-        legends_info.append((name, color_dict))
+        legends_info.append((name, color_dict, prop_dict))
     return legends_info
 
 
 def draw_label_legends(
     fig: plt.Figure,
     base_ax: plt.Axes,
-    legends_info: list[tuple[str, dict[str, str]]],
+    legends_info: list[tuple[str, dict[str, str], dict[str, float]]],
     x0: float,
     entry_h: float = 0.038,
     gap: float = 0.06,
 ) -> None:
     """Stack one borderless categorical legend per label, top-aligned, at figure-x x0.
 
-    Legend titles are bold; entries are large for readability.
+    Legend titles are bold; entries are large for readability. Each entry is
+    annotated with the value's share of rows, e.g. ``clone1 (10.12%)``.
     """
     fig.canvas.draw()
     bbox = base_ax.get_position()
     y_top = bbox.y1
-    for name, color_dict in legends_info:
-        handles = [Patch(facecolor=col, label=v) for v, col in color_dict.items()]
+    for name, color_dict, prop_dict in legends_info:
+        handles = [
+            Patch(facecolor=col, label=f"{v} ({prop_dict.get(v, 0.0) * 100:.2f}%)")
+            for v, col in color_dict.items()
+        ]
         leg = fig.legend(
             handles=handles,
             title=_display_name(name),
