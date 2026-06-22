@@ -162,14 +162,25 @@ def plot_heatmap(
     return x_edges, y_edges, C
 
 
-def _row_layout(cell_labels: np.ndarray, uniq_labels: list, agg_size: int):
+def _row_layout(
+    cell_labels: np.ndarray,
+    uniq_labels: list,
+    agg_size: int,
+    secondary: list[np.ndarray] | None = None,
+):
     """Per-output-row original cell indices, grouping agg_size cells within each label.
 
-    Rows are emitted in uniq_labels order (bottom-to-top in the heatmap).
+    Rows are emitted in uniq_labels order (bottom-to-top in the heatmap). Within each
+    primary-label block, cells are first sub-sorted by ``secondary`` (successive label
+    arrays, e.g. cell_type) so same-secondary cells cluster before agg chunking.
     """
     groups = []
     for lab in uniq_labels:
         idx = np.where(cell_labels == lab)[0]
+        if secondary:
+            # lexsort: last key is primary, so reverse to make secondary[0] primary
+            codes = [np.unique(s, return_inverse=True)[1][idx] for s in secondary]
+            idx = idx[np.lexsort(tuple(reversed(codes)))]
         for g in range(0, len(idx), agg_size):
             sub = idx[g : g + agg_size]
             if len(sub) > 0:
@@ -363,7 +374,20 @@ def plot_cnv_heatmap(
         present = set(primary_labels)
         uniq_labels = [lab for lab in reversed(desired) if lab in present]
 
-    row_groups = _row_layout(primary_labels, uniq_labels, agg_size)
+    # within each primary block, sub-sort cells by the other label columns
+    # (e.g. cell_type) so same-secondary cells cluster before agg chunking
+    secondary_vals = (
+        [
+            anns[c].to_numpy()
+            for c in label_cols
+            if c != primary_label and c in anns.columns
+        ]
+        if anns is not None
+        else None
+    )
+    row_groups = _row_layout(
+        primary_labels, uniq_labels, agg_size, secondary=secondary_vals
+    )
     row_primary = np.array([primary_labels[g[0]] for g in row_groups])
 
     data_info = cnprofile
@@ -444,7 +468,7 @@ def plot_cnv_heatmap(
 
     title = f"{sample} {rep_id} {assay_type} {val} Heatmap".replace("  ", " ")
     if agg_size > 1:
-        title += f"\n(pseudobulk-{agg_size} cell for visualization)"
+        title += f"\n(pseudobulk {agg_size} cell for visualization)"
     fig.suptitle(title, y=0.99, fontsize=14, fontweight="bold")
 
     fig.tight_layout(rect=[0.0, 0.0, 0.95, 0.99])
