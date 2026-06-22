@@ -9,7 +9,7 @@ from scipy import sparse
 
 from copytyping.inference.model_utils import compute_rdr_baseline
 from copytyping.io_utils import load_spatial_neighbors
-from copytyping.plot.plot_visium import plot_visium_all
+from copytyping.plot.plot_spatial import plot_visium_all
 from copytyping.utils import add_file_logging, normalize_args, setup_logging
 
 from analysis_plots import (

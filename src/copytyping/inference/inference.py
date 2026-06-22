@@ -30,7 +30,7 @@ from copytyping.io_utils import (
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_scatter_2d import plot_scatter_2d_per_cell
-from copytyping.plot.plot_visium import plot_visium_all
+from copytyping.plot.plot_spatial import plot_visium_all
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,

@@ -4,10 +4,15 @@ import os
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import squidpy as sq
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.collections import PatchCollection
+
+from sklearn.metrics import roc_auc_score
 
 from copytyping.inference.inference_utils import compute_loh_baf
 from copytyping.plot.plot_common import (
@@ -20,6 +25,13 @@ from copytyping.plot.plot_common import (
 from copytyping.utils import is_tumor_label, NA_CELLTYPE
 
 logging.getLogger("anndata").setLevel(logging.WARNING)
+
+
+def _set_pdf_fonts():
+    """Embed TrueType fonts (type 42) so PDF/SVG text stays editable."""
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.rcParams["ps.fonttype"] = 42
+    plt.rcParams["svg.fonttype"] = "none"
 
 
 ##################################################
@@ -155,26 +167,34 @@ def build_legend(categories: list):
 
 
 def blend_purity_rgba(adata: sc.AnnData, label_col: str, purity_col: str):
-    """Blend label color with gray by purity. Returns (N, 4) RGBA."""
+    """Blend each spot's label color toward gray by its purity. Returns (N, 4) RGBA.
+
+    NA/Unknown labels and NaN-purity spots are made transparent (alpha 0).
+    """
     gray = np.array(mcolors.to_rgb(NORMAL_COLOR))
     labels = adata.obs[label_col].astype("category")
     cats = list(labels.cat.categories)
-    colors = build_label_colors(cats)
-    cat_rgb = {c: np.array(mcolors.to_rgb(colors[i])) for i, c in enumerate(cats)}
+    cat_rgb = np.array([mcolors.to_rgb(c) for c in build_label_colors(cats)])  # (C, 3)
+    codes = labels.cat.codes.to_numpy()  # (N,); -1 for NaN
 
+    base = np.where(codes[:, None] >= 0, cat_rgb[codes.clip(min=0)], gray)  # (N, 3)
     raw_purity = adata.obs[purity_col].to_numpy(dtype=float)
-    na_mask = np.isnan(raw_purity)
-    purity = np.clip(np.nan_to_num(raw_purity, nan=0.0), 0.0, 1.0)
-    n = len(adata)
-    rgba = np.ones((n, 4), dtype=float)
-    for i in range(n):
-        c = cat_rgb.get(labels.iloc[i], gray)
-        rgba[i, :3] = purity[i] * c + (1 - purity[i]) * gray
-    rgba[na_mask, 3] = 0.0  # NA purity → transparent
-    # NA labels → transparent
-    na_labels = labels.isin(["NA", "Unknown"])
-    rgba[na_labels.values, 3] = 0.0
+    purity = np.clip(np.nan_to_num(raw_purity, nan=0.0), 0.0, 1.0)[:, None]  # (N, 1)
+
+    rgba = np.ones((len(labels), 4), dtype=float)
+    rgba[:, :3] = purity * base + (1.0 - purity) * gray
+    transparent = np.isnan(raw_purity) | labels.isin(["NA", "Unknown"]).to_numpy()
+    rgba[transparent, 3] = 0.0
     return rgba
+
+
+def _apply_purity_blend(ax: plt.Axes, adata: sc.AnnData, label_col: str):
+    """Recolor the spatial-scatter patches on ``ax`` by purity-blended RGBA."""
+    rgba = blend_purity_rgba(adata, label_col, "tumor_purity")
+    for child in ax.get_children():
+        if isinstance(child, PatchCollection) and len(child.get_paths()) == len(rgba):
+            child.set_facecolors(rgba)
+            break
 
 
 # ── Plot functions ──
@@ -206,12 +226,7 @@ def plot_visium_panel(
     best_cutoff_label: column name in anns for best (pcut, post) cutoff labels.
     best_cutoff_metrics: dict with ARI_clone, f1 for the row title.
     """
-    import squidpy as sq
-    from matplotlib.collections import PatchCollection as _PC
-
-    plt.rcParams["pdf.fonttype"] = 42
-    plt.rcParams["ps.fonttype"] = 42
-    plt.rcParams["svg.fonttype"] = "none"
+    _set_pdf_fonts()
 
     has_path = path_label in slices[0][1].columns
     ref_purity_col = f"{path_label}-tumor_purity"
@@ -344,11 +359,7 @@ def plot_visium_panel(
             img=False,
             edgecolors="none",
         )
-        rgba = blend_purity_rgba(sub5, spot_label, "tumor_purity")
-        for child in axes[ri, ci].get_children():
-            if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
-                child.set_facecolors(rgba)
-                break
+        _apply_purity_blend(axes[ri, ci], sub5, spot_label)
         old_legend = axes[ri, ci].get_legend()
         if old_legend:
             old_legend.remove()
@@ -374,11 +385,7 @@ def plot_visium_panel(
                 img=True,
                 edgecolors="none",
             )
-            rgba = blend_purity_rgba(sub6, best_cutoff_label, "tumor_purity")
-            for child in axes[ri, ci].get_children():
-                if isinstance(child, _PC) and len(child.get_paths()) == len(rgba):
-                    child.set_facecolors(rgba)
-                    break
+            _apply_purity_blend(axes[ri, ci], sub6, best_cutoff_label)
             old_legend = axes[ri, ci].get_legend()
             if old_legend:
                 old_legend.remove()
@@ -451,11 +458,7 @@ def plot_visium_loh_baf(
       showing per-spot BAF. Title = CN states.
     - One page per tumor clone, showing aggregated BAF across its LOH clusters.
     """
-    import squidpy as sq
-    from matplotlib.backends.backend_pdf import PdfPages
-
-    plt.rcParams["pdf.fonttype"] = 42
-    plt.rcParams["ps.fonttype"] = 42
+    _set_pdf_fonts()
 
     ncols = len(slices)
     num_segment = ballele_counts.shape[0]
@@ -546,10 +549,7 @@ def plot_visium_iters(
     size: float = 1.5,
 ):
     """Two PDFs: spatial (H&E + labels) and histograms (posterior + purity)."""
-    import squidpy as sq
-    from matplotlib.backends.backend_pdf import PdfPages
-    from sklearn.metrics import roc_auc_score
-    from matplotlib.collections import PatchCollection as _PC
+    _set_pdf_fonts()
 
     niters = len(labeling_trace)
     ncols = len(slices)
@@ -632,33 +632,17 @@ def plot_visium_iters(
 
                 ax0 = axes[0, ci]
                 set_label_colors(vis_adata, label_col, iter_color_map)
+                sq.pl.spatial_scatter(
+                    vis_adata,
+                    color=label_col,
+                    size=size,
+                    library_id=rep_id,
+                    ax=ax0,
+                    edgecolors="none",
+                    img=False,
+                )
                 if has_purity:
-                    sq.pl.spatial_scatter(
-                        vis_adata,
-                        color=label_col,
-                        size=size,
-                        library_id=rep_id,
-                        ax=ax0,
-                        edgecolors="none",
-                        img=False,
-                    )
-                    rgba = blend_purity_rgba(vis_adata, label_col, "tumor_purity")
-                    for child in ax0.get_children():
-                        if isinstance(child, _PC) and len(child.get_paths()) == len(
-                            rgba
-                        ):
-                            child.set_facecolors(rgba)
-                            break
-                else:
-                    sq.pl.spatial_scatter(
-                        vis_adata,
-                        color=label_col,
-                        size=size,
-                        library_id=rep_id,
-                        ax=ax0,
-                        edgecolors="none",
-                        img=False,
-                    )
+                    _apply_purity_blend(ax0, vis_adata, label_col)
                 # per-slice subtitle with normal accuracy on page 0
                 subtitle = f"{rep_id}"
                 if ri == 0 and ref_label and ref_label in barcodes.columns:
