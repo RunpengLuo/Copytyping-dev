@@ -6,31 +6,46 @@ import pandas as pd
 import scanpy as sc
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 
 from copytyping.inference.inference_utils import compute_loh_baf
-from copytyping.utils import is_tumor_label, INVALID_LABELS, NA_CELLTYPE
+from copytyping.plot.plot_common import (
+    NORMAL_COLOR,
+    PURITY_CMAP,
+    build_label_color_maps,
+    build_label_colors,
+    make_baf_cmap,
+)
+from copytyping.utils import is_tumor_label, NA_CELLTYPE
 
 logging.getLogger("anndata").setLevel(logging.WARNING)
 
 
+##################################################
+# orchestrator
+##################################################
+
+
 def plot_visium_all(
     *,
-    sample,
-    anns,
-    h5ad_source,
-    raw_clust,
-    plot_dir,
-    spot_label,
-    ref_label,
-    best_cutoff_label=None,
-    best_cutoff_metrics=None,
-    labeling_trace=None,
-    barcodes=None,
-    clones=None,
-    dpi=200,
+    sample: str,
+    anns: pd.DataFrame,
+    h5ad_source: str | sc.AnnData,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    cluster_barcodes: pd.DataFrame,
+    clones: list[str],
+    plot_dir: str,
+    spot_label: str,
+    ref_label: str,
+    best_cutoff_label: str | None = None,
+    best_cutoff_metrics: dict | None = None,
+    labeling_trace: list | None = None,
+    barcodes: pd.DataFrame | None = None,
+    dpi: int = 200,
 ):
     """Sample-level visium orchestrator (panel + LOH BAF + iters).
 
@@ -40,11 +55,13 @@ def plot_visium_all(
     Args:
         anns: per-spot DataFrame with BARCODE, REP_ID, label columns.
         h5ad_source: path to .h5ad or AnnData with spatial coords.
-        raw_clust: cluster-level SX_Data for the gex modality (for LOH BAF).
+        ballele_counts/total_allele_counts: (G, N) cluster-level gex counts (LOH BAF).
+        cn_A/cn_B: (G, K) per-clone copy numbers.
+        cluster_barcodes: cluster-level gex barcodes DataFrame (BARCODE column).
+        clones: clone names list.
         labeling_trace: optional list of EM-iter dicts (from Spot_Model);
             if provided, also runs plot_visium_iters.
         barcodes: union barcodes DataFrame (used by plot_visium_iters).
-        clones: clone names list (from raw_clust.clones).
     """
     slices = build_visium_slices(anns, h5ad_source, ref_label)
     plot_visium_panel(
@@ -58,11 +75,18 @@ def plot_visium_all(
         dpi=dpi,
     )
     try:
-        loh_baf, loh_info = compute_loh_baf(raw_clust)
+        loh_baf, loh_info = compute_loh_baf(
+            ballele_counts, total_allele_counts, cn_A, cn_B, clones
+        )
         plot_visium_loh_baf(
             sample,
             slices,
-            raw_clust,
+            cluster_barcodes,
+            ballele_counts,
+            total_allele_counts,
+            cn_A,
+            cn_B,
+            clones,
             loh_baf,
             loh_info,
             os.path.join(plot_dir, f"{sample}.visium_loh_baf.pdf"),
@@ -83,7 +107,14 @@ def plot_visium_all(
         )
 
 
-def build_visium_slices(anns, h5ad_source, ref_label):
+##################################################
+# slice + color helpers
+##################################################
+
+
+def build_visium_slices(
+    anns: pd.DataFrame, h5ad_source: str | sc.AnnData, ref_label: str
+):
     """Build per-rep (rep_id, anns_vis, vis_adata) slices for visium plotting.
 
     h5ad_source can be a path to a .h5ad file or an already-loaded AnnData.
@@ -108,61 +139,22 @@ def build_visium_slices(anns, h5ad_source, ref_label):
     return slices
 
 
-# ── Unified color palette ──
-# normal=gray, NA=tab10[0], tumor clones=tab10[1:]
-NORMAL_COLOR = "lightgray"
-NA_COLOR = "darkgray"
-_TUMOR_COLORS = sns.color_palette("tab10", 10).as_hex()
-
-
-def _label_color_index(label):
-    """Stable color index for a label. clone1→0, clone2→1, etc. Others by sorted name."""
-    import re
-
-    m = re.match(r"clone(\d+)", label)
-    if m:
-        return int(m.group(1)) - 1
-    return hash(label) % len(_TUMOR_COLORS)
-
-
-def build_label_colors(categories: list, clone_indexed=True) -> list:
-    """Return color list for categories. Consistent regardless of subset/order.
-
-    - INVALID_LABELS → NA_COLOR
-    - "normal" → NORMAL_COLOR
-    - clone_indexed=True: "cloneN" → stable tab10 index by N, others by hash
-    - clone_indexed=False: non-normal labels get sequential distinct colors
-    """
-    colors = []
-    tumor_i = 0
-    for c in categories:
-        if c in INVALID_LABELS:
-            colors.append(NA_COLOR)
-        elif c == "normal":
-            colors.append(NORMAL_COLOR)
-        elif clone_indexed:
-            colors.append(_TUMOR_COLORS[_label_color_index(c) % len(_TUMOR_COLORS)])
-        else:
-            colors.append(_TUMOR_COLORS[tumor_i % len(_TUMOR_COLORS)])
-            tumor_i += 1
-    return colors
-
-
-def set_label_colors(adata, col, clone_indexed=True):
-    """Set adata.uns colors using unified scheme."""
+def set_label_colors(adata: sc.AnnData, col: str, color_map: dict[str, str]):
+    """Set adata.uns[col+'_colors'] from an explicit {value: color} map
+    (built once via build_label_color_maps so all columns share one palette)."""
     adata.obs[col] = adata.obs[col].astype("category")
-    adata.uns[f"{col}_colors"] = build_label_colors(
-        list(adata.obs[col].cat.categories), clone_indexed=clone_indexed
-    )
+    adata.uns[f"{col}_colors"] = [
+        color_map.get(str(c), NORMAL_COLOR) for c in adata.obs[col].cat.categories
+    ]
 
 
-def build_legend(categories: list) -> list:
+def build_legend(categories: list):
     """Build legend handles using unified colors."""
     colors = build_label_colors(categories)
     return [mpatches.Patch(color=colors[i], label=c) for i, c in enumerate(categories)]
 
 
-def blend_purity_rgba(adata, label_col, purity_col):
+def blend_purity_rgba(adata: sc.AnnData, label_col: str, purity_col: str):
     """Blend label color with gray by purity. Returns (N, 4) RGBA."""
     gray = np.array(mcolors.to_rgb(NORMAL_COLOR))
     labels = adata.obs[label_col].astype("category")
@@ -188,18 +180,23 @@ def blend_purity_rgba(adata, label_col, purity_col):
 # ── Plot functions ──
 
 
+##################################################
+# page plotters
+##################################################
+
+
 def plot_visium_panel(
     sample: str,
     slices: list,
     out_dir: str,
-    spot_label="spot_label",
-    path_label="Microregion_annotation",
-    best_cutoff_label=None,
-    best_cutoff_metrics=None,
-    dpi=300,
-    size=1.5,
-    alpha=0.8,
-    title_info="",
+    spot_label: str = "spot_label",
+    path_label: str = "Microregion_annotation",
+    best_cutoff_label: str | None = None,
+    best_cutoff_metrics: dict | None = None,
+    dpi: int = 300,
+    size: float = 1.5,
+    alpha: float = 0.8,
+    title_info: str = "",
 ):
     """Single-page PDF visium panel per slice.
 
@@ -234,9 +231,7 @@ def plot_visium_panel(
         and best_cutoff_label in slices[0][1].columns
         and best_cutoff_label != spot_label
     )
-    best_cutoff_ri = None
     if has_best_cutoff:
-        best_cutoff_ri = len(row_labels)
         m = best_cutoff_metrics or {}
         ari = m.get("ARI_clone", float("nan"))
         f1 = m.get("f1", float("nan"))
@@ -254,6 +249,22 @@ def plot_visium_panel(
     nrows = len(row_labels)
     ncols = len(slices)
 
+    # one shared palette across all label columns (clone label first, then path /
+    # best-cutoff); a value reused across columns keeps one color
+    def _union(col: str):
+        vals = set()
+        for _, anns_vis, _ in slices:
+            if col in anns_vis.columns:
+                vals.update(anns_vis[col].astype(str).tolist())
+        return sorted(vals)
+
+    label_vals = {spot_label: _union(spot_label)}
+    if has_path:
+        label_vals[path_label] = _union(path_label)
+    if has_best_cutoff:
+        label_vals[best_cutoff_label] = _union(best_cutoff_label)
+    color_maps = build_label_color_maps(label_vals, primary_label=spot_label)
+
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
@@ -263,10 +274,10 @@ def plot_visium_panel(
 
     for ci, (rep_id, anns_vis, vis_adata) in enumerate(slices):
         vis_adata.obs[spot_label] = anns_vis[spot_label].astype("category")
-        set_label_colors(vis_adata, spot_label)
+        set_label_colors(vis_adata, spot_label, color_maps[spot_label])
         if has_path:
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
-            set_label_colors(vis_adata, path_label, clone_indexed=False)
+            set_label_colors(vis_adata, path_label, color_maps[path_label])
         if has_ref_purity:
             vis_adata.obs[ref_purity_col] = anns_vis[ref_purity_col].values
         vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
@@ -298,7 +309,7 @@ def plot_visium_panel(
                 size=size,
                 library_id=rep_id,
                 ax=axes[ri, ci],
-                cmap="magma_r",
+                cmap=PURITY_CMAP,
                 vmin=0,
                 vmax=1,
                 edgecolors="none",
@@ -312,7 +323,7 @@ def plot_visium_panel(
             size=size,
             library_id=rep_id,
             ax=axes[ri, ci],
-            cmap="magma_r",
+            cmap=PURITY_CMAP,
             vmin=0,
             vmax=1,
             edgecolors="none",
@@ -323,7 +334,7 @@ def plot_visium_panel(
         keep5 = vis_adata.obs[spot_label] != "NA"
         sub5 = vis_adata[keep5].copy()
         sub5.obs[spot_label] = sub5.obs[spot_label].cat.remove_unused_categories()
-        set_label_colors(sub5, spot_label)
+        set_label_colors(sub5, spot_label, color_maps[spot_label])
         sq.pl.spatial_scatter(
             sub5,
             color=spot_label,
@@ -353,7 +364,7 @@ def plot_visium_panel(
             sub6.obs[best_cutoff_label] = sub6.obs[
                 best_cutoff_label
             ].cat.remove_unused_categories()
-            set_label_colors(sub6, best_cutoff_label)
+            set_label_colors(sub6, best_cutoff_label, color_maps[best_cutoff_label])
             sq.pl.spatial_scatter(
                 sub6,
                 color=best_cutoff_label,
@@ -412,24 +423,32 @@ def plot_visium_panel(
 def plot_visium_loh_baf(
     sample: str,
     slices: list,
-    raw_clust,
-    loh_baf,
-    loh_info,
+    cluster_barcodes: pd.DataFrame,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cn_A: np.ndarray,
+    cn_B: np.ndarray,
+    clones: list[str],
+    loh_baf: np.ndarray,
+    loh_info: list,
     out_file: str,
-    dpi=200,
-    size=1.5,
-    alpha=0.8,
+    dpi: int = 200,
+    size: float = 1.5,
+    alpha: float = 0.8,
 ):
     """PDF with visium LOH BAF spatial plots.
 
     Args:
-        raw_clust: cluster-level SX_Data-like object (from seg_sx.to_cluster_level()).
+        cluster_barcodes: cluster-level gex barcodes DataFrame (BARCODE column).
+        ballele_counts/total_allele_counts: (G, N) cluster-level gex counts.
+        cn_A/cn_B: (G, K) per-clone copy numbers.
+        clones: clone names, length K.
         loh_baf: float (N, K_tumor) from compute_loh_baf — aggregated BAF per clone.
         loh_info: list of (clone_name, entries) from compute_loh_baf.
 
     Pages:
     - One page per CNP cluster with LOH in at least one tumor clone,
-      showing per-spot BAF. Title = CN states + segments.
+      showing per-spot BAF. Title = CN states.
     - One page per tumor clone, showing aggregated BAF across its LOH clusters.
     """
     import squidpy as sq
@@ -439,15 +458,15 @@ def plot_visium_loh_baf(
     plt.rcParams["ps.fonttype"] = 42
 
     ncols = len(slices)
-    bc_to_idx = {bc: i for i, bc in enumerate(raw_clust.barcodes["BARCODE"])}
+    num_segment = ballele_counts.shape[0]
+    num_clones = len(clones)
+    bc_to_idx = {bc: i for i, bc in enumerate(cluster_barcodes["BARCODE"])}
 
     # Find clusters with LOH in at least one tumor clone
     loh_clusters = []
-    for gi in range(raw_clust.G):
+    for gi in range(num_segment):
         loh_ks = [
-            k
-            for k in range(1, raw_clust.K)
-            if raw_clust.B[gi, k] == 0 and raw_clust.A[gi, k] > 0
+            k for k in range(1, num_clones) if cn_B[gi, k] == 0 and cn_A[gi, k] > 0
         ]
         if loh_ks:
             loh_clusters.append(gi)
@@ -466,21 +485,7 @@ def plot_visium_loh_baf(
         return vals
 
     # BAF colormap matching plot_heatmap: NaN=white, 0.5=gray
-    baf_colors = [
-        "#1f77b4",
-        "#3b8bc6",
-        "#67a9cf",
-        "#90c4d6",
-        "#b8d6da",
-        "#d9d9d9",
-        "#fddbc7",
-        "#f4a582",
-        "#d6604d",
-        "#b2182b",
-    ]
-    baf_cmap = mcolors.ListedColormap(baf_colors, name="baf_disc")
-    baf_cmap.set_bad("white")
-    baf_norm = mcolors.BoundaryNorm(np.linspace(0, 1, 11), baf_cmap.N, clip=True)
+    baf_cmap, baf_norm = make_baf_cmap()
 
     def _plot_page(pdf, col_data, title):
         fig, axes = plt.subplots(1, ncols, figsize=(6 * ncols, 6), squeeze=False)
@@ -508,20 +513,14 @@ def plot_visium_loh_baf(
     with PdfPages(out_file) as pdf:
         # Per-cluster pages
         for gi in loh_clusters:
-            row = raw_clust.cnv_blocks.iloc[gi]
             cn_parts = [
-                f"{raw_clust.clones[k]}={raw_clust.A[gi, k]}|{raw_clust.B[gi, k]}"
-                for k in range(raw_clust.K)
+                f"{clones[k]}={cn_A[gi, k]}|{cn_B[gi, k]}" for k in range(num_clones)
             ]
-            length_mb = row.get("LENGTH", 0) / 1e6
-            n_bbc = int(row.get("#BBC", 0))
-            title = (
-                f"cluster {gi} ({length_mb:.1f}Mb, {n_bbc} BBCs): {', '.join(cn_parts)}"
-            )
+            title = f"cluster {gi}: {', '.join(cn_parts)}"
 
-            D_g = raw_clust.D[gi].astype(float)
-            Y_g = raw_clust.Y[gi].astype(float)
-            baf_g = np.where(D_g > 0, Y_g / D_g, np.nan)
+            total_allele_g = total_allele_counts[gi].astype(float)
+            ballele_g = ballele_counts[gi].astype(float)
+            baf_g = np.where(total_allele_g > 0, ballele_g / total_allele_g, np.nan)
             _plot_page(pdf, baf_g, title)
 
         # Aggregated LOH BAF per clone
@@ -541,10 +540,10 @@ def plot_visium_iters(
     labeling_trace: list,
     barcodes: pd.DataFrame,
     out_dir: str,
-    clones: list = None,
-    ref_label=None,
-    dpi=100,
-    size=1.5,
+    clones: list | None = None,
+    ref_label: str | None = None,
+    dpi: int = 100,
+    size: float = 1.5,
 ):
     """Two PDFs: spatial (H&E + labels) and histograms (posterior + purity)."""
     import squidpy as sq
@@ -602,6 +601,12 @@ def plot_visium_iters(
     spatial_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
     hist_file = os.path.join(out_dir, f"{sample}.iter_histograms.pdf")
 
+    # shared clone palette across all iterations
+    all_iter_labels = sorted({str(x) for lt in labeling_trace for x in lt["labels"]})
+    iter_color_map = build_label_color_maps(
+        {label_col: all_iter_labels}, primary_label=label_col
+    )[label_col]
+
     # --- Spatial PDF ---
     with PdfPages(spatial_file) as pdf:
         for ri, lt in enumerate(labeling_trace):
@@ -626,7 +631,7 @@ def plot_visium_iters(
                     vis_adata.obs["tumor_purity"] = purity[idx]
 
                 ax0 = axes[0, ci]
-                set_label_colors(vis_adata, label_col)
+                set_label_colors(vis_adata, label_col, iter_color_map)
                 if has_purity:
                     sq.pl.spatial_scatter(
                         vis_adata,
@@ -685,7 +690,7 @@ def plot_visium_iters(
                     library_id=rep_id,
                     ax=ax1,
                     edgecolors="none",
-                    cmap="magma_r",
+                    cmap=PURITY_CMAP,
                     vmin=0,
                     vmax=1,
                     img=False,

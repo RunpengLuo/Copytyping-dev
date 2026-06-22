@@ -21,19 +21,22 @@ matching the user-specified --sol_pattern (default: "*{SOLID}*.tsv"),
 creating one run per matched solfile.
 """
 
+import argparse
 import glob
 import logging
 import os
 
 import pandas as pd
 
-from copytyping.plot.plot_common import plot_joincount_boxplot, plot_metrics_barplot
-
-from copytyping.copytyping_parser import check_arguments_inference
+from copytyping.copytyping_parser import (
+    add_arguments_pipeline,
+    check_arguments_inference,
+)
 from copytyping.inference.inference import run as run_inference
-from copytyping.inference.validation import _eval_subset
-from copytyping.utils import normalize_args
-from copytyping.validation.validate import run as run_validate
+from copytyping.utils import normalize_args, setup_logging
+
+from analysis_plots import _eval_subset, plot_joincount_boxplot, plot_metrics_barplot
+from validate import run as run_validate
 
 
 def _build_base_args(row):
@@ -128,7 +131,7 @@ def _eval_metrics(ann_file, eval_file, ref_label, platform, prefix, run_dir):
     metrics = {"log_likelihood": _read_loglik(run_dir, prefix)}
     anns = pd.read_table(ann_file)
     qry_labels = [
-        c for c in anns.columns if c.endswith("-label") and not c.endswith("-refined")
+        c for c in anns.columns if c.endswith("_label") and not c.endswith("-refined")
     ]
     if qry_labels and ref_label in anns.columns:
         qry_label = qry_labels[0]
@@ -173,7 +176,7 @@ def _run_one(pipeline_args, base_args, run_dir):
         qry_labels = [
             c
             for c in anns.columns
-            if c.endswith("-label") and not c.endswith("-refined")
+            if c.endswith("_label") and not c.endswith("-refined")
         ]
         if qry_labels and ref_label in anns.columns:
             qry_label = qry_labels[0]
@@ -187,7 +190,7 @@ def _run_one(pipeline_args, base_args, run_dir):
         val_args["sample"] = sample
         val_args["processed_data"] = os.path.join(run_dir, "processed_data")
         val_args["pred_labels"] = ann_file
-        val_args["pred_label"] = "copytyping-label"
+        val_args["pred_label"] = "copytyping_label"
         val_args["ref_labels"] = inf_args["cell_type"]
         val_args["ref_label"] = ref_label
         val_args["method"] = inf_args["method"]
@@ -252,15 +255,15 @@ def run(args):
 
             status, metrics = _run_one(args, row_args, run_dir)
 
-            dtypes = []
+            assay_types = []
             if row_args["gex_dir"]:
-                dtypes.append("gex")
+                assay_types.append("gex")
             if row_args["atac_dir"]:
-                dtypes.append("atac")
+                assay_types.append("atac")
             info = dict(row)
             info["OUT_PREFIX"] = os.path.relpath(run_dir, out_dir)
             info["SOLFILE"] = solfile or ""
-            info["DATA_TYPES"] = "+".join(dtypes) if dtypes else ""
+            info["ASSAY_TYPES"] = "+".join(assay_types) if assay_types else ""
             info["STATUS"] = status
             info.update(metrics)
             summary_rows.append(info)
@@ -297,3 +300,15 @@ def run(args):
             summary,
             os.path.join(out_dir, "pipeline_joincount.pdf"),
         )
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="pipeline")
+    add_arguments_pipeline(parser)
+    args = normalize_args(parser.parse_args(argv))
+    setup_logging(args)
+    run(args)
+
+
+if __name__ == "__main__":
+    main()

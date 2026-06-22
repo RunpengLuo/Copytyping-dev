@@ -1,15 +1,153 @@
-import logging
-import os
+import re
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.colors as mcolors
 
-from copytyping.utils import NA_CELLTYPE, is_tumor_label
+from copytyping.utils import INVALID_LABELS, NA_CELLTYPE
 
 
-def build_wl_coords(cnv_blocks, wl_segments):
+# ── Unified label color palette (shared by heatmap + visium) ──
+# normal-like -> gray, invalid/NA -> dark gray, tumor clones -> qualitative palette
+NORMAL_COLOR = "lightgray"
+NA_COLOR = "darkgray"
+BLACK = (0, 0, 0, 1)
+_TUMOR_COLORS = [mcolors.to_hex(c) for c in plt.get_cmap("tab10").colors]
+_TUMOR_COLORS_20 = [mcolors.to_hex(c) for c in plt.get_cmap("tab20").colors]
+
+# Sequential purity / posterior overlay; shared by heatmap + visium.
+PURITY_CMAP = "magma_r"
+
+# Diverging BAF palette (blue = A-skewed, gray = balanced, red = B-skewed),
+# 10 discrete bins. Shared by heatmap (BAF/pi_gk) and visium LOH BAF.
+BAF_COLORS = [
+    "#1f77b4",
+    "#3b8bc6",
+    "#67a9cf",
+    "#90c4d6",
+    "#b8d6da",
+    "#d9d9d9",
+    "#fddbc7",
+    "#f4a582",
+    "#d6604d",
+    "#b2182b",
+]
+
+
+def _is_normal_like(label: str):
+    """True for the diploid/normal reference label (e.g. 'normal', 'Normal_cell')."""
+    return str(label).lower().startswith("normal")
+
+
+def _label_color_index(label: str):
+    """Stable color index for a label: clone1->0, clone2->1, ...; others by hash."""
+    m = re.match(r"clone(\d+)", str(label))
+    if m:
+        return int(m.group(1)) - 1
+    return hash(str(label)) % len(_TUMOR_COLORS)
+
+
+def build_label_colors(categories: list, clone_indexed: bool = True):
+    """Clone-label colors: INVALID->NA_COLOR, 'normal'->NORMAL_COLOR, cloneN->tab10[N-1].
+
+    Consistent regardless of subset/order.
+    """
+    colors = []
+    tumor_i = 0
+    for c in categories:
+        if c in INVALID_LABELS:
+            colors.append(NA_COLOR)
+        elif c == "normal":
+            colors.append(NORMAL_COLOR)
+        elif clone_indexed:
+            colors.append(_TUMOR_COLORS[_label_color_index(c) % len(_TUMOR_COLORS)])
+        else:
+            colors.append(_TUMOR_COLORS[tumor_i % len(_TUMOR_COLORS)])
+            tumor_i += 1
+    return colors
+
+
+def make_baf_cmap():
+    """Discrete diverging BAF colormap + [0,1] BoundaryNorm (10 bins, NaN -> white)."""
+    cmap = mcolors.ListedColormap(BAF_COLORS, name="baf_disc")
+    cmap.set_bad("white")
+    norm = mcolors.BoundaryNorm(np.linspace(0, 1, 11), cmap.N, clip=True)
+    return cmap, norm
+
+
+def _clone_order_key(c: str):
+    """Sort key for the clone label: normal first, then clone1, clone2, ...,
+    then any other label, with invalid/NA last."""
+    if c == "normal":
+        return (0, 0, "")
+    m = re.match(r"clone(\d+)$", c)
+    if m:
+        return (1, int(m.group(1)), "")
+    if c in INVALID_LABELS:
+        return (3, 0, c)
+    return (2, 0, c)
+
+
+def _is_colored_label(c: str):
+    """A label that consumes a palette slot (not gray): not normal-like, not NA."""
+    return c not in INVALID_LABELS and c not in NA_CELLTYPE and not _is_normal_like(c)
+
+
+def build_label_color_maps(
+    row_label_map: dict[str, np.ndarray], primary_label: str | None
+):
+    """Per-label {value: color} maps drawn from ONE shared palette.
+
+    Colors are assigned to distinct label *values* (a global set union), so a value
+    that appears in several label sets — e.g. ``normal`` in both copytyping and a
+    path annotation, or shared clones — gets the SAME color everywhere. The primary
+    (clone) label is visited first, ordered normal -> clone1 -> clone2 -> ..., so
+    clones take the leading palette slots; remaining sets (sorted alphabetically)
+    contribute any new values. Normal-like values are gray and invalid/NA are dark
+    gray (these consume no palette slot). Palette is tab10, or tab20 when more than
+    10 distinct colored values are needed."""
+    # primary first (clone order), then the rest (alphabetical)
+    names = ([primary_label] if primary_label in row_label_map else []) + [
+        n for n in row_label_map if n != primary_label
+    ]
+
+    def cats_for(name: str):
+        uniq = {str(v) for v in row_label_map[name]}
+        return (
+            sorted(uniq, key=_clone_order_key)
+            if name == primary_label
+            else sorted(uniq)
+        )
+
+    # global value -> color: first encounter (in visit order) fixes the color
+    ordered_values = []
+    seen = set()
+    for name in names:
+        for c in cats_for(name):
+            if _is_colored_label(c) and c not in seen:
+                seen.add(c)
+                ordered_values.append(c)
+    palette = (
+        _TUMOR_COLORS if len(ordered_values) <= len(_TUMOR_COLORS) else _TUMOR_COLORS_20
+    )
+    value_color = {c: palette[i % len(palette)] for i, c in enumerate(ordered_values)}
+
+    color_maps = {}
+    for name in names:
+        cmap = {}
+        for c in cats_for(name):
+            if c in INVALID_LABELS or c in NA_CELLTYPE:
+                cmap[c] = NA_COLOR
+            elif _is_normal_like(c):
+                cmap[c] = NORMAL_COLOR
+            else:
+                cmap[c] = value_color[c]
+        color_maps[name] = cmap
+    return color_maps
+
+
+def build_wl_coords(cnprofile: pd.DataFrame, wl_segments: pd.DataFrame):
     """Map bins to the wl_segments coordinate system (same as plot_cnv_profile).
 
     Returns a dict with:
@@ -18,12 +156,12 @@ def build_wl_coords(cnv_blocks, wl_segments):
         ch_coords, seg_coords — chromosome / centromere boundary offsets
         chr_vlines, chr_end, xlab_chrs, xtick_chrs — axis decoration
     """
-    cnv_blocks = cnv_blocks.reset_index(drop=True)
-    chs = cnv_blocks["#CHR"].unique()
+    cnprofile = cnprofile.reset_index(drop=True)
+    chs = cnprofile["#CHR"].unique()
     wl_chs = wl_segments.groupby("#CHR", sort=False)
-    bins_chs = cnv_blocks.groupby("#CHR", sort=False, observed=True)
+    bins_chs = cnprofile.groupby("#CHR", sort=False, observed=True)
 
-    G = len(cnv_blocks)
+    G = len(cnprofile)
     positions = np.full(G, np.nan)
     abs_starts = np.full(G, np.nan)
     abs_ends = np.full(G, np.nan)
@@ -115,7 +253,9 @@ def build_wl_coords(cnv_blocks, wl_segments):
     }
 
 
-def plot_loss(losses: list, out_loss_file: str, val_type="log-likelihood", dpi=100):
+def plot_loss(
+    losses: list, out_loss_file: str, val_type: str = "log-likelihood", dpi: int = 100
+):
     fig, ax = plt.subplots()
     ax.plot(losses)
     ax.set_xlabel("iterations")
@@ -123,680 +263,3 @@ def plot_loss(losses: list, out_loss_file: str, val_type="log-likelihood", dpi=1
     fig.tight_layout()
     fig.savefig(out_loss_file, dpi=dpi)
     plt.close(fig)
-
-
-def plot_count_histograms(
-    data_sources: dict,
-    sample: str,
-    outfile: str,
-    dpi=100,
-):
-    """Per-rep 2x2 histogram: total/aneuploid read counts, total/imbalanced allele counts.
-
-    All data_types in a single PDF, one page per (data_type, rep_id).
-    """
-
-    def _hist(ax, vals, xlabel, title):
-        ax.hist(vals, bins=50, edgecolor="black", linewidth=0.3)
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("count")
-        ax.set_title(f"{title} (n={len(vals)}, med={int(np.median(vals))})", fontsize=9)
-
-    with PdfPages(outfile) as pdf:
-        for data_type, sx in data_sources.items():
-            aneu = sx.MASK["ANEUPLOID"]
-            imb = sx.MASK["IMBALANCED"]
-            n_aneu = int(aneu.sum())
-            n_imb = int(imb.sum())
-
-            total_x = sx.X.sum(axis=0)
-            aneu_x = sx.X[aneu].sum(axis=0) if n_aneu > 0 else np.zeros(sx.N)
-            total_d = sx.D.sum(axis=0)
-            imb_d = sx.D[imb].sum(axis=0) if n_imb > 0 else np.zeros(sx.N)
-            rep_ids = sx.barcodes["REP_ID"].unique()
-
-            for rep_id in rep_ids:
-                rm = sx.barcodes["REP_ID"].values == rep_id
-                fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-                _hist(axes[0, 0], total_x[rm], "read count", "total read count")
-                _hist(
-                    axes[0, 1],
-                    aneu_x[rm],
-                    "read count",
-                    f"aneuploid read count ({n_aneu} bins)",
-                )
-                _hist(axes[1, 0], total_d[rm], "allele count", "total allele count")
-                _hist(
-                    axes[1, 1],
-                    imb_d[rm],
-                    "allele count",
-                    f"imbalanced allele count ({n_imb} bins)",
-                )
-                fig.suptitle(
-                    f"{sample} — {data_type} — {rep_id}",
-                    fontsize=12,
-                    fontweight="bold",
-                )
-                fig.tight_layout()
-                pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
-                plt.close(fig)
-    logging.info(f"saved count histograms to {outfile}")
-
-
-def plot_init_baf_histograms(
-    data_sources: dict,
-    is_normal: np.ndarray,
-    sample: str,
-    out_dir: str,
-    dpi=100,
-):
-    """Per-LOH-cluster BAF histogram, colored by init normal/tumor label.
-
-    One page per cluster, title shows cluster index and (A,B) CN state.
-    Only plots clusters in CLONAL_LOH mask.
-    """
-    for data_type, sx in data_sources.items():
-        loh_mask = sx.MASK.get("CLONAL_LOH", np.zeros(sx.G, dtype=bool))
-        if not loh_mask.any():
-            continue
-        outfile = os.path.join(out_dir, f"{sample}.{data_type}.init_baf.pdf")
-        loh_idx = np.where(loh_mask)[0]
-
-        with PdfPages(outfile) as pdf:
-            for g in loh_idx:
-                D_g = sx.D[g]
-                valid = D_g > 0
-                if valid.sum() == 0:
-                    continue
-                baf_g = sx.Y[g, valid].astype(float) / D_g[valid].astype(float)
-                labels_g = is_normal[valid]
-
-                fig, ax = plt.subplots(figsize=(8, 4))
-                baf_normal = baf_g[labels_g]
-                baf_tumor = baf_g[~labels_g]
-                ax.hist(
-                    [baf_normal, baf_tumor],
-                    bins=50,
-                    range=(0, 1),
-                    stacked=True,
-                    label=[
-                        f"normal (n={len(baf_normal)})",
-                        f"tumor (n={len(baf_tumor)})",
-                    ],
-                    color=["lightgray", "#d62728"],
-                    edgecolor="black",
-                    linewidth=0.3,
-                )
-                ax.set_xlabel("BAF", fontsize=10)
-                ax.set_ylabel("count", fontsize=10)
-                ax.legend(fontsize=8)
-
-                # title with cluster CN state
-                a_str = f"{sx.A[g, 1]}|{sx.B[g, 1]}"
-                if sx.K > 2:
-                    a_str = ";".join(
-                        f"{sx.A[g, k]}|{sx.B[g, k]}" for k in range(1, sx.K)
-                    )
-                fig.suptitle(
-                    f"{sample} — {data_type} cluster {g} — CN: {a_str}",
-                    fontsize=11,
-                    fontweight="bold",
-                )
-                fig.tight_layout()
-                pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
-                plt.close(fig)
-        logging.info(f"saved init BAF histograms to {outfile}")
-
-
-def _is_na_label(label):
-    """Check if label is uninformative (NA/Unknown, case-insensitive)."""
-    return label.lower() in {x.lower() for x in NA_CELLTYPE}
-
-
-def plot_crosstab(
-    assign_df: pd.DataFrame,
-    sample: str,
-    outfile: str,
-    metric: dict,
-    acol="copytyping-label",
-    bcol="cell_type",
-):
-    """Plot cross-tabulation heatmap: rows = GT labels (bcol), cols = predicted (acol)."""
-    ct = pd.crosstab(assign_df[bcol], assign_df[acol])
-
-    gt_tumor = sorted([r for r in ct.index if is_tumor_label(r)])
-    gt_normal = sorted([r for r in ct.index if not is_tumor_label(r)])
-    row_order = gt_normal + gt_tumor
-
-    pred_normal = [c for c in ct.columns if c == "normal"]
-    pred_tumor = sorted([c for c in ct.columns if is_tumor_label(c)])
-    pred_na = [c for c in ct.columns if c in NA_CELLTYPE]
-    pred_other = sorted(
-        [c for c in ct.columns if c not in pred_normal + pred_tumor + pred_na]
-    )
-    col_order = pred_normal + pred_tumor + pred_other + pred_na
-
-    row_order = [r for r in row_order if r in ct.index]
-    col_order = [c for c in col_order if c in ct.columns]
-    ct = ct.loc[row_order, col_order]
-    counts = ct.to_numpy(dtype=float)
-    num_rows, num_cols = counts.shape
-
-    prec = metric.get("precision", np.nan)
-    rec = metric.get("recall", np.nan)
-    f1 = metric.get("f1", np.nan)
-
-    error = np.zeros((num_rows, num_cols), dtype=bool)
-    for i, gt_lab in enumerate(row_order):
-        if _is_na_label(gt_lab):
-            continue
-        gt_is_tumor = is_tumor_label(gt_lab)
-        for j, pred_lab in enumerate(col_order):
-            pred_is_tumor = is_tumor_label(pred_lab)
-            pred_is_na = pred_lab in NA_CELLTYPE
-            pred_is_normal = pred_lab == "normal"
-            if pred_is_na:
-                error[i, j] = True
-            elif gt_is_tumor and pred_is_normal:
-                error[i, j] = True
-            elif not gt_is_tumor and pred_is_tumor:
-                error[i, j] = True
-
-    rgba = np.ones((num_rows, num_cols, 4))
-    for i in range(num_rows):
-        for j in range(num_cols):
-            if error[i, j] and counts[i, j] > 0:
-                rgba[i, j] = [1.0, 0.85, 0.85, 1.0]
-
-    cell_w = max(0.5, min(0.7, 5.0 / num_cols))
-    cell_h = max(0.35, min(0.5, 4.0 / num_rows))
-    fig_w = max(4, cell_w * num_cols + 2.5)
-    fig_h = max(2.5, cell_h * num_rows + 1.8)
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-
-    ax.imshow(rgba, aspect="auto")
-
-    font_size = max(5, min(8, int(160 / max(num_cols, num_rows))))
-    for i in range(num_rows):
-        for j in range(num_cols):
-            n = int(counts[i, j])
-            color = "grey" if n == 0 else "black"
-            ax.text(
-                j, i, str(n), ha="center", va="center", color=color, fontsize=font_size
-            )
-
-    total_n = counts.sum()
-    col_sums = counts.sum(axis=0)
-    row_sums_1d = counts.sum(axis=1)
-    col_labels = [
-        f"{c}\n({int(col_sums[j])}, {col_sums[j] / total_n * 100:.1f}%)"
-        for j, c in enumerate(col_order)
-    ]
-    row_labels = [
-        f"{r}\n({int(row_sums_1d[i])}, {row_sums_1d[i] / total_n * 100:.1f}%)"
-        for i, r in enumerate(row_order)
-    ]
-    ax.set_xticks(np.arange(num_cols))
-    ax.set_xticklabels(col_labels, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(np.arange(num_rows))
-    ax.set_yticklabels(row_labels, fontsize=8)
-    ax.tick_params(length=0)
-    ax.set_xlabel(f"predicted ({acol})", fontsize=10)
-    ax.set_ylabel(f"reference ({bcol})", fontsize=10)
-    ax.set_title(
-        f"{sample}\nprec={prec:.3f}  recall={rec:.3f}  f1={f1:.3f}", fontsize=11
-    )
-
-    for i in range(num_rows + 1):
-        ax.axhline(i - 0.5, color="grey", linewidth=0.5)
-    for j in range(num_cols + 1):
-        ax.axvline(j - 0.5, color="grey", linewidth=0.5)
-
-    plt.tight_layout()
-    plt.savefig(outfile, dpi=300, bbox_inches="tight")
-    plt.close()
-
-
-def plot_purity_histograms(
-    anns: pd.DataFrame,
-    sample: str,
-    outfile: str,
-    label_col: str,
-    purity_col="tumor_purity",
-    xlabel="tumor purity",
-    dpi=100,
-):
-    """Per-label histogram of `purity_col`. One page per label in a PDF."""
-    if purity_col not in anns.columns:
-        return
-    labels = sorted(anns[label_col].unique(), key=lambda x: (x != "normal", x))
-    with PdfPages(outfile) as pdf:
-        for lab in labels:
-            mask = anns[label_col] == lab
-            vals = anns.loc[mask, purity_col].dropna().values
-            if len(vals) == 0:
-                continue
-            fig, ax = plt.subplots(figsize=(8, 4))
-            ax.hist(vals, bins=50, range=(0, 1), edgecolor="black", linewidth=0.3)
-            ax.set_xlabel(xlabel, fontsize=10)
-            ax.set_ylabel("count", fontsize=10)
-            ax.set_title(
-                f"{sample} — {lab} (n={len(vals)}, "
-                f"median={np.median(vals):.2f}, mean={np.mean(vals):.2f})",
-                fontsize=11,
-            )
-            fig.tight_layout()
-            pdf.savefig(fig, dpi=dpi)
-            plt.close(fig)
-    logging.info(f"saved {xlabel} histograms to {outfile}")
-
-
-def plot_cluster_observed_data(
-    seg_sx,
-    anns: pd.DataFrame,
-    sample: str,
-    outfile: str,
-    label_col: str,
-    base_props=None,
-    baf_metrics=None,
-    dpi=100,
-):
-    """Per-cluster observed B-allele count, BAF, RDR. One page per cluster, one row per label."""
-    labels = sorted(anns[label_col].unique(), key=lambda x: (x != "normal", x))
-    n_labels = len(labels)
-    label_idx = {lab: np.where(anns[label_col].values == lab)[0] for lab in labels}
-
-    if base_props is None:
-        base_props = seg_sx.X.sum(axis=1) / max(seg_sx.T.sum(), 1)
-
-    informative = seg_sx.MASK["IMBALANCED"] | seg_sx.MASK["ANEUPLOID"]
-    cluster_indices = np.where(informative)[0]
-
-    with PdfPages(outfile) as pdf:
-        for g in cluster_indices:
-            row = seg_sx.cnv_blocks.iloc[g]
-            cnp_str = row.get("CNP", "")
-            length_mb = row["LENGTH"] / 1e6 if "LENGTH" in row.index else np.nan
-            n_bbc = int(row["#BBC"]) if "#BBC" in row.index else 0
-            is_imb = seg_sx.MASK["IMBALANCED"][g]
-            is_ane = seg_sx.MASK["ANEUPLOID"][g]
-            tag = []
-            if is_imb:
-                tag.append("IMB")
-            if is_ane:
-                tag.append("ANE")
-
-            cn_parts = []
-            for k in range(1, seg_sx.K):
-                cn_parts.append(f"{seg_sx.clones[k]}={seg_sx.A[g, k]}|{seg_sx.B[g, k]}")
-            cn_str = ", ".join(cn_parts)
-
-            fig, axes = plt.subplots(
-                n_labels,
-                3,
-                figsize=(18, 3 * n_labels),
-                squeeze=False,
-            )
-            for ri, lab in enumerate(labels):
-                idx = label_idx[lab]
-                D_g = seg_sx.D[g, idx].astype(float)
-                Y_g = seg_sx.Y[g, idx].astype(float)
-                X_g = seg_sx.X[g, idx].astype(float)
-                T_i = seg_sx.T[idx].astype(float)
-                lam_g = base_props[g]
-
-                valid_d = D_g > 0
-                baf = np.divide(Y_g, D_g, out=np.full_like(D_g, np.nan), where=valid_d)
-                mu = T_i * lam_g
-                valid_x = mu > 0
-                rdr = np.divide(X_g, mu, out=np.full_like(X_g, np.nan), where=valid_x)
-
-                # B-allele count
-                ax = axes[ri, 0]
-                ax.hist(Y_g[valid_d], bins=50, edgecolor="black", linewidth=0.3)
-                ax.set_xlabel("B-allele count")
-                ax.set_ylabel("count")
-                ax.set_title(f"{lab} (n={len(idx)})", fontsize=9)
-
-                # BAF
-                ax = axes[ri, 1]
-                baf_valid = baf[valid_d]
-                d_valid = D_g[valid_d]
-                baf_lo = baf_valid[d_valid <= 3]
-                baf_hi = baf_valid[d_valid > 3]
-                ax.hist(
-                    [baf_hi, baf_lo],
-                    bins=50,
-                    range=(0, 1),
-                    stacked=True,
-                    label=[f"D>3 (n={len(baf_hi)})", f"D<=3 (n={len(baf_lo)})"],
-                    color=["#1f77b4", "#d3d3d3"],
-                    edgecolor="black",
-                    linewidth=0.3,
-                )
-                ax.legend(fontsize=6)
-                ax.set_xlabel("BAF")
-                ax.set_ylabel("count")
-                med_baf = np.median(baf_valid) if len(baf_valid) > 0 else np.nan
-                ax.set_title(f"BAF median={med_baf:.3f}", fontsize=9)
-
-                # RDR
-                ax = axes[ri, 2]
-                rdr_valid = rdr[valid_x & np.isfinite(rdr)]
-                rdr_clip = np.clip(rdr_valid, 0, 5)
-                ax.hist(
-                    rdr_clip, bins=50, range=(0, 5), edgecolor="black", linewidth=0.3
-                )
-                ax.set_xlabel("RDR")
-                ax.set_ylabel("count")
-                med_rdr = np.median(rdr_valid) if len(rdr_valid) > 0 else np.nan
-                ax.set_title(f"RDR median={med_rdr:.3f}", fontsize=9)
-
-            metric_str = ""
-            if baf_metrics and g in baf_metrics:
-                m = baf_metrics[g]
-                metric_str = (
-                    f"\nwithin_var={m['within_var']:.4f}"
-                    f"  within_var_tumor={m['within_var_tumor']:.4f}"
-                )
-            fig.suptitle(
-                f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
-                f"{'/'.join(tag)}{metric_str}\nCN: {cn_str}",
-                fontsize=10,
-                fontweight="bold",
-            )
-            fig.tight_layout()
-            pdf.savefig(fig, dpi=dpi)
-            plt.close(fig)
-
-        # LOH pages: one page per clone label, aggregated across LOH clusters
-        clones = seg_sx.clones
-        for lab in labels:
-            idx = label_idx[lab]
-            if len(idx) == 0:
-                continue
-            if lab == "normal":
-                k = 0
-            elif lab in clones:
-                k = clones.index(lab)
-            else:
-                continue
-
-            loh_mask = (seg_sx.B[:, k] == 0) & (seg_sx.A[:, k] > 0)
-            n_loh = int(loh_mask.sum())
-            if n_loh == 0:
-                continue
-
-            loh_length_mb = 0
-            if "LENGTH" in seg_sx.cnv_blocks.columns:
-                loh_length_mb = seg_sx.cnv_blocks.loc[loh_mask, "LENGTH"].sum() / 1e6
-
-            Y_loh = seg_sx.Y[loh_mask][:, idx].sum(axis=0).astype(float)
-            D_loh = seg_sx.D[loh_mask][:, idx].sum(axis=0).astype(float)
-            valid = D_loh > 0
-            baf_loh = np.divide(
-                Y_loh, D_loh, out=np.full_like(Y_loh, np.nan), where=valid
-            )
-
-            fig, axes = plt.subplots(1, 3, figsize=(18, 4))
-            axes[0].hist(Y_loh, bins=50, edgecolor="black", linewidth=0.3)
-            axes[0].set_xlabel("Y_loh (B-allele count)")
-            axes[0].set_ylabel("count")
-            axes[0].set_title(f"Y_loh  median={np.median(Y_loh):.0f}", fontsize=9)
-
-            axes[1].hist(D_loh, bins=50, edgecolor="black", linewidth=0.3)
-            axes[1].set_xlabel("D_loh (total allele count)")
-            axes[1].set_ylabel("count")
-            axes[1].set_title(f"D_loh  median={np.median(D_loh):.0f}", fontsize=9)
-
-            baf_valid = baf_loh[valid]
-            axes[2].hist(
-                baf_valid, bins=50, range=(0, 1), edgecolor="black", linewidth=0.3
-            )
-            axes[2].set_xlabel("BAF_loh")
-            axes[2].set_ylabel("count")
-            med_baf = np.median(baf_valid) if len(baf_valid) > 0 else np.nan
-            axes[2].set_title(f"BAF_loh  median={med_baf:.3f}", fontsize=9)
-
-            fig.suptitle(
-                f"{sample} — {lab} (n={len(idx)}) — "
-                f"{n_loh} LOH clusters ({loh_length_mb:.1f}Mb)",
-                fontsize=11,
-                fontweight="bold",
-            )
-            fig.tight_layout()
-            pdf.savefig(fig, dpi=dpi)
-            plt.close(fig)
-
-    logging.info(f"saved cluster observed data to {outfile}")
-
-
-def plot_metrics_barplot(
-    summary: pd.DataFrame,
-    outfile: str,
-    metrics=("precision", "recall", "f1"),
-    auc_metrics=("AUC_hard", "AUC_soft"),
-    sample_col="SAMPLE",
-    dtypes_col="DATA_TYPES",
-    group_col="cancer_type",
-    dpi=200,
-):
-    """Bar plot of prec/recall/f1 per sample, one page per cancer_type group.
-
-    If AUC columns are available, adds a second row with AUC bars.
-    """
-    colors = {
-        "precision": "#1f77b4",
-        "recall": "#ff7f0e",
-        "f1": "#2ca02c",
-        "AUC_hard": "#d62728",
-        "AUC_soft": "#9467bd",
-    }
-
-    metric_cols = [m for m in metrics if m in summary.columns]
-    if not metric_cols:
-        logging.info(f"skipping metrics barplot: no {list(metrics)} columns in summary")
-        return
-    valid = summary.dropna(subset=metric_cols, how="all").copy()
-    if valid.empty:
-        return
-
-    auc_cols = [c for c in auc_metrics if c in valid.columns]
-    has_auc = len(auc_cols) > 0 and not valid[auc_cols].isna().all().all()
-
-    has_groups = group_col in valid.columns
-    groups = sorted(valid[group_col].unique()) if has_groups else [None]
-
-    with PdfPages(outfile) as pdf:
-        for grp in groups:
-            df = valid[valid[group_col] == grp] if grp is not None else valid
-            if df.empty:
-                continue
-
-            sample_df = (
-                df.sort_values("f1", ascending=False)
-                .drop_duplicates(subset=[sample_col], keep="first")
-                .sort_values(sample_col)
-            )
-            samples = sample_df[sample_col].tolist()
-            if dtypes_col in sample_df.columns:
-                tick_labels = [
-                    f"{s}\n({dt})" for s, dt in zip(samples, sample_df[dtypes_col])
-                ]
-            else:
-                tick_labels = samples
-            n = len(samples)
-            x = np.arange(n)
-
-            nrows = 2 if has_auc else 1
-            fig_w = max(6, n * 0.8 + 2)
-            fig, axes = plt.subplots(
-                nrows=nrows,
-                ncols=1,
-                figsize=(fig_w, 4 * nrows),
-                squeeze=False,
-            )
-
-            # Row 0: precision / recall / f1
-            ax0 = axes[0, 0]
-            n_metrics = len(metrics)
-            bar_w = 1.0 / (n_metrics + 0.5)
-            for mi, m in enumerate(metrics):
-                vals = sample_df[m].astype(float).to_numpy()
-                bars = ax0.bar(
-                    x + mi * bar_w,
-                    vals,
-                    width=bar_w,
-                    color=colors.get(m, f"C{mi}"),
-                    label=m,
-                )
-                for bar, v in zip(bars, vals):
-                    if np.isfinite(v):
-                        ax0.text(
-                            bar.get_x() + bar.get_width() / 2,
-                            v + 0.01,
-                            f"{v:.2f}",
-                            ha="center",
-                            va="bottom",
-                            fontsize=6,
-                        )
-            ax0.set_xticks(x + bar_w * (n_metrics - 1) / 2)
-            ax0.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
-            ax0.set_ylim(0, 1.15)
-            ax0.set_ylabel("Score")
-            ax0.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.0, 0.5))
-            title = grp if grp else "all samples"
-            ax0.set_title(title, fontsize=11, fontweight="bold")
-
-            # Row 1: AUC
-            if has_auc:
-                ax1 = axes[1, 0]
-                n_auc = len(auc_cols)
-                bar_w_auc = 1.0 / (n_auc + 0.5)
-                for mi, m in enumerate(auc_cols):
-                    vals = sample_df[m].astype(float).to_numpy()
-                    bars = ax1.bar(
-                        x + mi * bar_w_auc,
-                        vals,
-                        width=bar_w_auc,
-                        color=colors.get(m, f"C{mi + 3}"),
-                        label=m,
-                    )
-                    for bar, v in zip(bars, vals):
-                        if np.isfinite(v):
-                            ax1.text(
-                                bar.get_x() + bar.get_width() / 2,
-                                v + 0.01,
-                                f"{v:.2f}",
-                                ha="center",
-                                va="bottom",
-                                fontsize=6,
-                            )
-                ax1.set_xticks(x + bar_w_auc * (n_auc - 1) / 2)
-                ax1.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
-                ax1.set_ylim(0, 1.15)
-                ax1.set_ylabel("AUC")
-                ax1.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.0, 0.5))
-
-            fig.tight_layout()
-            pdf.savefig(fig, dpi=dpi)
-            plt.close(fig)
-
-
-def plot_joincount_boxplot(
-    summary: pd.DataFrame,
-    outfile: str,
-    sample_col="SAMPLE",
-    group_col="cancer_type",
-    rank_metric="f1",
-    dpi=200,
-):
-    """Boxplot of per-rep per-clone joincount z-scores (tumor clones only).
-
-    For each sample, picks the best run (by rank_metric), then each dot
-    is one JC_{rep}_{clone} value from that run. One page per group.
-    """
-    # Collect JC columns (JC_{rep}_{clone} format, exclude old JC_normal)
-    jc_cols = [c for c in summary.columns if c.startswith("JC_")]
-    if not jc_cols:
-        return
-
-    has_groups = group_col in summary.columns
-    groups = sorted(summary[group_col].unique()) if has_groups else [None]
-
-    with PdfPages(outfile) as pdf:
-        for grp in groups:
-            df = summary[summary[group_col] == grp] if grp is not None else summary
-            if df.empty:
-                continue
-
-            # Pick best run per sample
-            best_rows = []
-            for sample, sub in df.groupby(sample_col):
-                if rank_metric in sub.columns:
-                    valid = sub.dropna(subset=[rank_metric])
-                    if not valid.empty:
-                        best_rows.append(valid.loc[valid[rank_metric].idxmax()])
-                        continue
-                best_rows.append(sub.iloc[0])
-            if not best_rows:
-                continue
-            best = pd.DataFrame(best_rows)
-
-            # Melt JC columns into long format
-            samples = sorted(best[sample_col].unique())
-            all_vals = []
-            for _, row in best.iterrows():
-                sample = row[sample_col]
-                for c in jc_cols:
-                    v = row.get(c)
-                    if pd.notna(v):
-                        all_vals.append({"sample": sample, "jc": float(v)})
-            if not all_vals:
-                continue
-            long = pd.DataFrame(all_vals)
-
-            n = len(samples)
-            fig_w = max(6, n * 1.2 + 2)
-            fig, ax = plt.subplots(figsize=(fig_w, 4))
-
-            box_data = [long[long["sample"] == s]["jc"].values for s in samples]
-            bp = ax.boxplot(
-                box_data,
-                positions=range(n),
-                widths=0.5,
-                patch_artist=True,
-                showfliers=False,
-            )
-            for patch in bp["boxes"]:
-                patch.set_facecolor("#5b7fb5")
-                patch.set_alpha(0.7)
-
-            rng = np.random.default_rng(42)
-            for si, sample in enumerate(samples):
-                vals = long[long["sample"] == sample]["jc"].values
-                jitter = rng.uniform(-0.15, 0.15, size=len(vals))
-                ax.scatter(
-                    si + jitter,
-                    vals,
-                    color="#2c4d75",
-                    edgecolors="#1a1a1a",
-                    s=25,
-                    linewidths=0.5,
-                    zorder=3,
-                    alpha=0.8,
-                )
-
-            ax.set_xticks(range(n))
-            ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=9)
-            ax.set_ylabel("Spatial coherence (JC z-score)", fontsize=10)
-            ax.axhline(0, color="gray", linestyle="--", linewidth=0.5)
-            title = grp if grp else "all samples"
-            ax.set_title(
-                f"{title} — joincount z-score (tumor clones)",
-                fontsize=11,
-                fontweight="bold",
-            )
-            fig.tight_layout()
-            pdf.savefig(fig, dpi=dpi)
-            plt.close(fig)

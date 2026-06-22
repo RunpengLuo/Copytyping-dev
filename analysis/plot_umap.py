@@ -6,13 +6,14 @@ from scanpy import AnnData
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.io_utils import *
+
+from sx_data import SX_Data
 
 
 def plot_umap_copynumber(
     sample: str,
-    data_type: str,
+    assay_type: str,
     features: np.ndarray,
     anns: pd.DataFrame,
     lab_type="cell_label",
@@ -50,7 +51,7 @@ def plot_umap_copynumber(
             cmap="viridis",
             ax=axes[2],
         )
-        plt.suptitle(f"{sample} {data_type} UMAP")
+        plt.suptitle(f"{sample} {assay_type} UMAP")
         plt.tight_layout()
         pdf.savefig(fig, dpi=dpi)
         plt.close()
@@ -61,7 +62,7 @@ def plot_umap_total_expression(
     sx_data: SX_Data,
     anns: pd.DataFrame,
     sample: str,
-    data_type: str,
+    assay_type: str,
     mask_cnp=True,
     mask_id="CNP",
     lab_type="cell_label",

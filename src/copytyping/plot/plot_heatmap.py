@@ -5,23 +5,35 @@ import numpy as np
 
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
-from scipy.cluster.hierarchy import linkage, leaves_list
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import TwoSlopeNorm
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Patch, Rectangle
 
-from copytyping.sx_data.sx_data import SX_Data
 from copytyping.utils import read_whitelist_segments
+from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
 from copytyping.plot.plot_copynumber import (
-    BLACK,
     plot_ascn_legend,
     plot_ascn_profile,
     plot_cnv_legend,
     plot_cnv_profile,
 )
-from copytyping.plot.plot_common import build_wl_coords
+from copytyping.plot.plot_common import (
+    BAF_COLORS,
+    BLACK,
+    PURITY_CMAP,
+    build_label_color_maps,
+    build_wl_coords,
+    make_baf_cmap,
+)
 
-from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
+# pretty display names for label columns (strip titles + legend titles)
+_LABEL_DISPLAY = {"copytyping_label": "Copy-typing"}
+
+
+def _display_name(name: str):
+    return _LABEL_DISPLAY.get(name, name)
+
 
 # Silence fontTools subsetter chatter
 logging.getLogger("fontTools.subset").setLevel(logging.ERROR)
@@ -32,27 +44,28 @@ logging.getLogger("fontTools").setLevel(logging.ERROR)
 def plot_heatmap(
     ax: plt.Axes,
     cell_labels: np.ndarray,
-    cnv_blocks: pd.DataFrame,
+    cnprofile: pd.DataFrame,
     X_mat: np.ndarray,
     wl_segments: pd.DataFrame,
-    height=1,
-    plot_chrname=True,
-    title=None,
-    ylabel=None,
-    cmap=None,
-    norm=None,
+    height: int = 1,
+    plot_chrname: bool = True,
+    title: str | None = None,
+    ylabel: str | None = None,
+    cmap: mcolors.Colormap | None = None,
+    norm: mcolors.Normalize | None = None,
+    show_block_labels: bool = True,
 ):
     (N, G) = X_mat.shape
-    assert len(cnv_blocks) == G, "unmatched data"
+    assert len(cnprofile) == G, "unmatched data"
     assert len(cell_labels) == N, "unmatched data"
 
-    wl = build_wl_coords(cnv_blocks, wl_segments)
+    wl = build_wl_coords(cnprofile, wl_segments)
     x_edges = wl["x_edges"]
     col_bin_ids = wl["col_bin_ids"]
     ch_coords = wl["ch_coords"]
     seg_coords = wl["seg_coords"]
     ch_offset = wl["chr_end"]
-    chs = cnv_blocks["#CHR"].unique()
+    chs = cnprofile["#CHR"].unique()
 
     # -------- build extended matrix with NaN gaps --------
     n_cols = len(col_bin_ids)
@@ -134,8 +147,12 @@ def plot_heatmap(
         yticks.append(0.5 * (y0 + y1))
         yticklabels.append(f"{label} ({proportion}%)")
 
-    ax.set_yticks(yticks)
-    ax.set_yticklabels(yticklabels, fontsize=11, fontweight="bold")
+    if show_block_labels:
+        ax.set_yticks(yticks)
+        ax.set_yticklabels(yticklabels, fontsize=11, fontweight="bold")
+    else:
+        # labels live in the left color strips / right legends instead
+        ax.set_yticks([])
     ax.tick_params(axis="y", length=0)
 
     if ylabel is not None:
@@ -145,165 +162,189 @@ def plot_heatmap(
     return x_edges, y_edges, C
 
 
-def cluster_per_group(
-    mask: np.ndarray,
-    X: np.ndarray,
+def _row_layout(
     cell_labels: np.ndarray,
     uniq_labels: list,
+    agg_size: int,
+    secondary: list[np.ndarray] | None = None,
 ):
-    # cluster within groups
-    order_indices = []
-    for cat in uniq_labels:
-        cell_mask = cell_labels == cat
-        if np.sum(cell_mask) == 0:
-            continue
-        X_group = X[cell_mask][:, mask]
-        X_group = np.nan_to_num(X_group, nan=0.5)
-        if X_group.shape[0] > 2:
-            Z = linkage(X_group, method="ward", metric="euclidean")
-            leaf_order = leaves_list(Z)
-            order_indices.extend(np.where(cell_mask)[0][leaf_order])
-        else:
-            order_indices.extend(np.where(cell_mask)[0])
-    return X[order_indices]
+    """Per-output-row original cell indices, grouping agg_size cells within each label.
+
+    Rows are emitted in uniq_labels order (bottom-to-top in the heatmap). Within each
+    primary-label block, cells are first sub-sorted by ``secondary`` (successive label
+    arrays, e.g. cell_type) so same-secondary cells cluster before agg chunking.
+    """
+    groups = []
+    for lab in uniq_labels:
+        idx = np.where(cell_labels == lab)[0]
+        if secondary:
+            # lexsort: last key is primary, so reverse to make secondary[0] primary
+            codes = [np.unique(s, return_inverse=True)[1][idx] for s in secondary]
+            idx = idx[np.lexsort(tuple(reversed(codes)))]
+        for g in range(0, len(idx), agg_size):
+            sub = idx[g : g + agg_size]
+            if len(sub) > 0:
+                groups.append(sub)
+    return groups
+
+
+def _aggregate_columns(mat: np.ndarray, row_groups: list[np.ndarray]):
+    """Sum mat[:, group] over each row group -> (n_bins, n_rows)."""
+    return np.column_stack([mat[:, g].sum(axis=1) for g in row_groups])
+
+
+def _mode(arr: np.ndarray):
+    """Most frequent value in arr (ties broken by sort order)."""
+    vals, counts = np.unique(arr, return_counts=True)
+    return vals[np.argmax(counts)]
 
 
 def prepare_rdr(
-    sx_data: SX_Data,
-    cell_labels=None,
-    uniq_labels=None,
-    base_props=None,
-    agg_size=1,
-    log2=True,
-    cluster_by_val=False,
+    read_counts: np.ndarray,
+    row_groups: list[np.ndarray],
+    base_props: np.ndarray,
+    log2: bool = True,
 ):
-    X_agg_list, Tn_agg_list, cell_labels_agg = [], [], []
-    for lab in uniq_labels:
-        idx = np.where(cell_labels == lab)[0]
-        n_cells = len(idx)
-        n_groups = int(np.ceil(n_cells / agg_size))
-        for g in range(n_groups):
-            sub_idx = idx[g * agg_size : (g + 1) * agg_size]
-            if len(sub_idx) == 0:
-                continue
-            # sum counts per bin
-            X_sum = sx_data.X[:, sub_idx].sum(axis=1)
-            Tn_sum = sx_data.T[sub_idx].sum()
-            X_agg_list.append(X_sum)
-            Tn_agg_list.append(Tn_sum)
-            cell_labels_agg.append(lab)
-    X = np.column_stack(X_agg_list)  # (n_bins, new_cells)
-    T = np.array(Tn_agg_list, dtype=np.int32)
-    cell_labels = np.array(cell_labels_agg)
-
-    rdr_matrix = empirical_rdr_gn(X, T, base_props, log2=log2)
-    rdr_matrix = rdr_matrix.T
-
-    # group cells by labels, clustering.
-    if cluster_by_val:
-        aneuploid_mask = sx_data.MASK["ANEUPLOID"]
-        rdr_matrix = cluster_per_group(
-            aneuploid_mask, rdr_matrix, cell_labels, uniq_labels
-        )
-    return rdr_matrix, cell_labels
+    library_size = read_counts.sum(axis=0)
+    X = _aggregate_columns(read_counts, row_groups)
+    T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
+    return empirical_rdr_gn(X, T, base_props, log2=log2).T
 
 
-def prepare_pi_gk(
-    sx_data: SX_Data,
-    cell_labels=None,
-    uniq_labels=None,
-    base_props=None,
-    agg_size=1,
-    cluster_by_val=False,
-):
-    X_agg_list, Tn_agg_list, cell_labels_agg = [], [], []
-    for lab in uniq_labels:
-        idx = np.where(cell_labels == lab)[0]
-        n_cells = len(idx)
-        n_groups = int(np.ceil(n_cells / agg_size))
-        for g in range(n_groups):
-            sub_idx = idx[g * agg_size : (g + 1) * agg_size]
-            if len(sub_idx) == 0:
-                continue
-            # sum counts per bin
-            X_sum = sx_data.X[:, sub_idx].sum(axis=1)
-            Tn_sum = sx_data.T[sub_idx].sum()
-            X_agg_list.append(X_sum)
-            Tn_agg_list.append(Tn_sum)
-            cell_labels_agg.append(lab)
-    X = np.column_stack(X_agg_list)  # (n_bins, new_cells)
-    T = np.array(Tn_agg_list, dtype=np.int32)
-    cell_labels = np.array(cell_labels_agg)
+def prepare_pi_gk(read_counts: np.ndarray, row_groups: list[np.ndarray]):
+    library_size = read_counts.sum(axis=0)
+    X = _aggregate_columns(read_counts, row_groups)
+    T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
     pi_gk_matrix = X / T[None, :]
     pi_gk_matrix[pi_gk_matrix == 0] = np.nan
-    pi_gk_matrix = pi_gk_matrix.T
-    # group cells by labels, clustering.
-    if cluster_by_val:
-        aneuploid_mask = sx_data.MASK["ANEUPLOID"]
-        pi_gk_matrix = cluster_per_group(
-            aneuploid_mask, pi_gk_matrix, cell_labels, uniq_labels
-        )
-    return pi_gk_matrix, cell_labels
+    return pi_gk_matrix.T
 
 
 def prepare_baf(
-    sx_data: SX_Data,
-    cell_labels=None,
-    uniq_labels=None,
-    agg_size=1,
-    cluster_by_val=False,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    row_groups: list[np.ndarray],
 ):
-    Y_agg_list, D_agg_list, cell_labels_agg = [], [], []
-    for lab in uniq_labels:
-        idx = np.where(cell_labels == lab)[0]
-        n_cells = len(idx)
-        n_groups = int(np.ceil(n_cells / agg_size))
-        for g in range(n_groups):
-            sub_idx = idx[g * agg_size : (g + 1) * agg_size]
-            if len(sub_idx) == 0:
-                continue
-            # sum counts per bin
-            Y_sum = sx_data.Y[:, sub_idx].sum(axis=1)
-            D_sum = sx_data.D[:, sub_idx].sum(axis=1)
-            Y_agg_list.append(Y_sum)
-            D_agg_list.append(D_sum)
-            cell_labels_agg.append(lab)
-    Y = np.column_stack(Y_agg_list)  # (n_bins, new_cells)
-    D = np.column_stack(D_agg_list)
-    cell_labels = np.array(cell_labels_agg)
+    Y = _aggregate_columns(ballele_counts, row_groups)
+    D = _aggregate_columns(total_allele_counts, row_groups)
+    return empirical_baf_gn(Y, D).T
 
-    baf_matrix = empirical_baf_gn(Y, D)
-    baf_matrix = baf_matrix.T
 
-    # group cells by labels, clustering.
-    if cluster_by_val:
-        imbalanced_mask = sx_data.MASK["IMBALANCED"]
-        baf_matrix = cluster_per_group(
-            imbalanced_mask, baf_matrix, cell_labels, uniq_labels
+def plot_label_strips(
+    fig: plt.Figure,
+    base_ax: plt.Axes,
+    y_edges: np.ndarray,
+    row_label_map: dict[str, np.ndarray],
+    color_maps: dict[str, dict[str, str]],
+    strip_width: float = 0.012,
+    gap: float = 0.004,
+):
+    """Draw vertical categorical color strips to the LEFT of base_ax, one per label.
+
+    row_label_map maps label name -> (n_rows,) values in bottom-to-top row order.
+    color_maps maps label name -> {value: color}. Returns
+    [(name, {value: color}, {value: fraction})], where fraction is the share of
+    rows holding that value (used to annotate legend entries).
+    """
+    fig.canvas.draw()
+    bbox = base_ax.get_position()
+    x_cursor = bbox.x0 - gap
+    legends_info = []
+    for name, values in row_label_map.items():
+        values = np.array([str(v) for v in values])
+        n_rows = max(len(values), 1)
+        prop_dict = {v: int((values == v).sum()) / n_rows for v in color_maps[name]}
+        color_dict = color_maps[name]
+        order = list(color_dict)
+        codes = np.array([order.index(v) for v in values], dtype=float)[:, None]
+        x_cursor -= strip_width
+        ax = fig.add_axes([x_cursor, bbox.y0, strip_width, bbox.height])
+        strip_cmap = mcolors.ListedColormap([color_dict[v] for v in order])
+        strip_norm = mcolors.BoundaryNorm(np.arange(len(order) + 1) - 0.5, strip_cmap.N)
+        ax.pcolormesh(
+            np.array([0.0, 1.0]),
+            y_edges,
+            codes,
+            cmap=strip_cmap,
+            norm=strip_norm,
+            shading="flat",
+            rasterized=True,
         )
-    return baf_matrix, cell_labels
+        ax.set_xticks([0.5])
+        # vertical, bold strip title (thin strips → vertical avoids overlap)
+        ax.set_xticklabels(
+            [_display_name(name)], rotation=90, fontsize=11, fontweight="bold"
+        )
+        ax.tick_params(
+            axis="x", labeltop=True, labelbottom=False, top=False, bottom=False
+        )
+        ax.set_yticks([])
+        ax.set_ylim(base_ax.get_ylim())
+        x_cursor -= gap
+        legends_info.append((name, color_dict, prop_dict))
+    return legends_info
+
+
+def draw_label_legends(
+    fig: plt.Figure,
+    base_ax: plt.Axes,
+    legends_info: list[tuple[str, dict[str, str], dict[str, float]]],
+    x0: float,
+    entry_h: float = 0.038,
+    gap: float = 0.06,
+):
+    """Stack one borderless categorical legend per label, top-aligned, at figure-x x0.
+
+    Legend titles are bold; entries are large for readability. Each entry is
+    annotated with the value's share of rows, e.g. ``clone1 (10.12%)``.
+    """
+    fig.canvas.draw()
+    bbox = base_ax.get_position()
+    y_top = bbox.y1
+    for name, color_dict, prop_dict in legends_info:
+        handles = [
+            Patch(facecolor=col, label=f"{v} ({prop_dict.get(v, 0.0) * 100:.2f}%)")
+            for v, col in color_dict.items()
+        ]
+        leg = fig.legend(
+            handles=handles,
+            title=_display_name(name),
+            loc="upper left",
+            bbox_to_anchor=(x0, y_top),
+            frameon=False,
+            fontsize=13,
+            title_fontsize=15,
+        )
+        leg.get_title().set_fontweight("bold")
+        fig.add_artist(leg)
+        y_top -= entry_h * (len(handles) + 1) + gap
 
 
 def plot_cnv_heatmap(
     sample: str,
-    data_type: str,
+    assay_type: str,
     haplo_blocks: pd.DataFrame,
-    sx_data: SX_Data,
+    read_counts: np.ndarray,
+    ballele_counts: np.ndarray,
+    total_allele_counts: np.ndarray,
+    cnprofile: pd.DataFrame,
+    num_clones: int,
     anns: pd.DataFrame,
     region_bed: str,
-    proportions=None,
-    val="BAF",
-    base_props=None,
-    agg_size=5,
-    lab_type="cell_label",
-    figsize=(20, 13),
-    hratios=[10, 2, 2],
-    filename=None,
-    pdf_pages=None,
-    dpi=300,
-    transparent=False,
-    title_info="",
-    ascn_profile=False,
+    proportions: np.ndarray | None = None,
+    val: str = "BAF",
+    base_props: np.ndarray | None = None,
+    agg_size: int = 5,
+    label_cols: list | None = None,
+    primary_label: str | None = None,
+    figsize: tuple = (20, 13),
+    hratios: list = [10, 2, 2],
+    filename: str | None = None,
+    pdf_pages: PdfPages | None = None,
+    dpi: int = 300,
+    transparent: bool = False,
+    rep_id: str = "",
+    ascn_profile: bool = False,
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
     wl_fragments = read_whitelist_segments(region_bed)
@@ -313,72 +354,49 @@ def plot_cnv_heatmap(
     plt.rcParams["ps.fonttype"] = 42
     plt.rcParams["svg.fonttype"] = "none"
 
-    if anns is None:
-        cell_labels = np.full(sx_data.N, fill_value="unknown")
+    if label_cols is None:
+        label_cols = []
+    if primary_label is None:
+        primary_label = label_cols[0] if label_cols else None
+
+    num_cells = read_counts.shape[1]
+    if primary_label is None or anns is None:
+        primary_labels = np.full(num_cells, fill_value="unknown")
     else:
-        cell_labels = anns[lab_type].to_numpy()
-    assert len(cell_labels) == sx_data.N
+        primary_labels = anns[primary_label].to_numpy()
+    assert len(primary_labels) == num_cells
 
-    # order cells by labels, aggregate same label cells
-    uniq_labels = np.unique(cell_labels)
-    if lab_type and lab_type.startswith("copytyping-label"):
+    # order cells (bottom-to-top) by the primary label, then aggregate within label
+    uniq_labels = list(np.unique(primary_labels))
+    if primary_label and primary_label.startswith("copytyping_label"):
         # pcolormesh y=0 is bottom, so reverse desired top-to-bottom order
-        desired = ["NA", "normal"] + [f"clone{c}" for c in range(1, sx_data.K)]
-        uniq_labels = [
-            lab for lab in reversed(desired) if lab in np.unique(cell_labels)
+        desired = ["NA", "normal"] + [f"clone{c}" for c in range(1, num_clones)]
+        present = set(primary_labels)
+        uniq_labels = [lab for lab in reversed(desired) if lab in present]
+
+    # within each primary block, sub-sort cells by the other label columns
+    # (e.g. cell_type) so same-secondary cells cluster before agg chunking
+    secondary_vals = (
+        [
+            anns[c].to_numpy()
+            for c in label_cols
+            if c != primary_label and c in anns.columns
         ]
+        if anns is not None
+        else None
+    )
+    row_groups = _row_layout(
+        primary_labels, uniq_labels, agg_size, secondary=secondary_vals
+    )
+    row_primary = np.array([primary_labels[g[0]] for g in row_groups])
 
-    # order props by unique labels, since data also get ordered in prepare step
-    # then aggregate to match agg_size grouping
-    if proportions is not None:
-        ord_props = []
-        for lab in uniq_labels:
-            idx = np.where(cell_labels == lab)[0]
-            lab_props = proportions[idx]
-            if agg_size > 1:
-                agg = [
-                    np.mean(lab_props[g : g + agg_size])
-                    for g in range(0, len(lab_props), agg_size)
-                ]
-                ord_props.extend(agg)
-            else:
-                ord_props.extend(lab_props)
-        proportions = np.array(ord_props)
-
-    cluster_by_val = False
-    data_info = sx_data.cnv_blocks
+    data_info = cnprofile
     if val == "BAF":
-        data_matrix, cell_labels = prepare_baf(
-            sx_data, cell_labels, uniq_labels, agg_size, cluster_by_val
-        )
-        boundaries = np.linspace(0, 1, 11)  # [0.0, 0.1, ..., 1.0]
-        colors = [
-            "#1f77b4",
-            "#3b8bc6",
-            "#67a9cf",
-            "#90c4d6",
-            "#b8d6da",
-            "#d9d9d9",
-            "#fddbc7",
-            "#f4a582",
-            "#d6604d",
-            "#b2182b",
-        ]
+        data_matrix = prepare_baf(ballele_counts, total_allele_counts, row_groups)
+        cmap, norm = make_baf_cmap()
         cticks = [0.0, 0.25, 0.5, 0.75, 1.0]
-
-        cmap = mcolors.ListedColormap(colors, name="baf_disc")
-        cmap.set_bad("white")
-        norm = mcolors.BoundaryNorm(boundaries, cmap.N, clip=True)
     elif val in ["RDR", "log2RDR"]:
-        data_matrix, cell_labels = prepare_rdr(
-            sx_data,
-            cell_labels,
-            uniq_labels,
-            base_props,
-            agg_size,
-            val == "log2RDR",
-            cluster_by_val=cluster_by_val,
-        )
+        data_matrix = prepare_rdr(read_counts, row_groups, base_props, val == "log2RDR")
         cmap = "coolwarm"
         if val == "log2RDR":
             norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
@@ -387,43 +405,42 @@ def plot_cnv_heatmap(
             norm = TwoSlopeNorm(vmin=0, vcenter=1, vmax=2)
             cticks = [0.0, 0.5, 1.0, 1.50, 2.0]
     elif val == "pi_gk":
-        data_matrix, cell_labels = prepare_pi_gk(
-            sx_data, cell_labels, uniq_labels, base_props, agg_size, cluster_by_val
+        data_matrix = prepare_pi_gk(read_counts, row_groups)
+        cticks = [0.0, 0.25, 0.5, 0.75, 1.0]
+        cmap = mcolors.LinearSegmentedColormap.from_list("pi_cont", BAF_COLORS, N=256)
+        norm = mcolors.Normalize(
+            vmin=np.nanmin(data_matrix), vmax=np.nanmax(data_matrix)
         )
 
-        colors = [
-            "#1f77b4",
-            "#3b8bc6",
-            "#67a9cf",
-            "#90c4d6",
-            "#b8d6da",
-            "#d9d9d9",
-            "#fddbc7",
-            "#f4a582",
-            "#d6604d",
-            "#b2182b",
-        ]
-        cticks = [0.0, 0.25, 0.5, 0.75, 1.0]
-
-        cmap = mcolors.LinearSegmentedColormap.from_list("pi_cont", colors, N=256)
-        norm = mcolors.Normalize(vmin=data_matrix.min(), vmax=data_matrix.max())
-
+    # per-row purity (mean over each aggregated group)
+    row_props = None
     if proportions is not None:
-        logging.debug("plot tumor proportions")
-        N = data_matrix.shape[0]
-        assert len(proportions) == N
-        change_pts = np.flatnonzero(cell_labels[1:] != cell_labels[:-1]) + 1
-        boundaries = np.r_[0, change_pts, N]
+        row_props = np.array([np.mean(proportions[g]) for g in row_groups])
 
-        idx = np.arange(N)
-        for start, end in zip(boundaries[:-1], boundaries[1:]):
-            # DESC proportion
-            order = np.argsort(proportions[start:end])[::-1]
-            idx[start:end] = idx[start:end][order]
+    # within each primary-label block, order rows by DESC purity
+    if row_props is not None:
+        logging.debug("order rows by tumor proportions")
+        n_rows = len(row_groups)
+        change_pts = np.flatnonzero(row_primary[1:] != row_primary[:-1]) + 1
+        block_bounds = np.r_[0, change_pts, n_rows]
+        perm = np.arange(n_rows)
+        for start, end in zip(block_bounds[:-1], block_bounds[1:]):
+            order = np.argsort(row_props[start:end])[::-1]
+            perm[start:end] = perm[start:end][order]
+        row_groups = [row_groups[i] for i in perm]
+        row_primary = row_primary[perm]
+        data_matrix = data_matrix[perm]
+        row_props = row_props[perm]
 
-        data_matrix = data_matrix[idx]
-        cell_labels = cell_labels[idx]
-        proportions = proportions[idx]
+    # per-row value of every requested label column (mode within each group)
+    row_label_map = {}
+    if anns is not None:
+        for col in label_cols:
+            if col not in anns.columns:
+                continue
+            col_vals = anns[col].to_numpy()
+            row_label_map[col] = np.array([_mode(col_vals[g]) for g in row_groups])
+    color_maps = build_label_color_maps(row_label_map, primary_label)
 
     fig, axes = plt.subplots(
         nrows=3, ncols=1, figsize=figsize, gridspec_kw={"height_ratios": hratios}
@@ -432,13 +449,14 @@ def plot_cnv_heatmap(
 
     x_edges, y_edges, _ = plot_heatmap(
         axes[0],
-        cell_labels,
+        row_primary,
         data_info,
         data_matrix,
         wl_fragments,
         height=10,
         cmap=cmap,
         norm=norm,
+        show_block_labels=False,
     )
 
     if ascn_profile:
@@ -448,17 +466,18 @@ def plot_cnv_heatmap(
         plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
         plot_cnv_legend(axes[2])
 
-    title = f"{sample} {data_type} {val} Heatmap"
+    title = f"{sample} {rep_id} {assay_type} {val} Heatmap".replace("  ", " ")
     if agg_size > 1:
-        title += f" (pseudobulk-{agg_size} cell for visualization)"
-    if title_info != "":
-        title += f"\n{title_info}"
+        title += f"\n(pseudobulk {agg_size} cell for visualization)"
     fig.suptitle(title, y=0.99, fontsize=14, fontweight="bold")
 
     fig.tight_layout(rect=[0.0, 0.0, 0.95, 0.99])
 
+    # left: one categorical color strip per label column (clone label, cell type, ...)
+    legends_info = plot_label_strips(fig, axes[0], y_edges, row_label_map, color_maps)
+
     extra_pad = 0.0
-    if proportions is not None:
+    if row_props is not None:
         fig.canvas.draw()
         bbox = axes[0].get_position()
         cbar_width = 0.01  # in figure coords
@@ -473,8 +492,8 @@ def plot_cnv_heatmap(
             ]
         )
         x = np.array([0, 1])
-        C = proportions[:, None]
-        purity_cmap = "magma_r"
+        C = row_props[:, None]
+        purity_cmap = PURITY_CMAP
         norm_vec = mcolors.Normalize(vmin=0.0, vmax=1.0)
         ax_vec.pcolormesh(
             x,
@@ -513,6 +532,11 @@ def plot_cnv_heatmap(
 
     cb = fig.colorbar(sm, cax=cax)
     cb.set_ticks(cticks)
+
+    # right: one categorical legend per label column (value -> color)
+    if legends_info:
+        legend_x0 = bbox.x1 + extra_pad + 0.05
+        draw_label_legends(fig, axes[0], legends_info, x0=legend_x0)
 
     if pdf_pages is not None:
         pdf_pages.savefig(fig, dpi=dpi, bbox_inches="tight", transparent=transparent)

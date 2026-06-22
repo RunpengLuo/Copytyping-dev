@@ -9,13 +9,18 @@ import pandas as pd
 import yaml
 
 
-def load_defaults() -> dict:
+##################################################
+# config / runtime defaults
+##################################################
+
+
+def load_defaults():
     """Load packaged tuning defaults from src/copytyping/copytyping.yaml."""
     text = files("copytyping").joinpath("copytyping.yaml").read_text(encoding="utf-8")
     return yaml.safe_load(text)
 
 
-def normalize_args(args) -> dict:
+def normalize_args(args: argparse.Namespace | dict):
     """Convert Namespace→dict if needed and merge YAML defaults under it (args win).
 
     Argparse parsers use ``default=argparse.SUPPRESS`` so unparsed flags are
@@ -26,7 +31,11 @@ def normalize_args(args) -> dict:
     return {**load_defaults(), **args}
 
 
-ALL_PLATFORMS = ["single_cell", "spatial"]
+##################################################
+# constants
+##################################################
+
+ALL_PLATFORMS = ["single_cell", "spatial", "multiome"]
 SPATIAL_PLATFORMS = {"spatial"}
 
 TUMOR_LABELS = {"Tumor_cell", "tumor", "Tumor"}
@@ -36,29 +45,44 @@ INVALID_LABELS = {"Doublet", "doublet", "Unknown", "NA"}
 NA_CELLTYPE = {"Unknown", "NA"}
 
 
-def is_tumor_label(label: str) -> bool:
+##################################################
+# label predicates
+##################################################
+
+
+def is_tumor_label(label: str):
     return label.lower().startswith(TUMOR_PREFIXES) or label in TUMOR_LABELS
 
 
-def is_normal_label(label: str) -> bool:
+def is_normal_label(label: str):
     return not is_tumor_label(label) and label not in INVALID_LABELS
 
 
-def get_chr2ord(ch):
-    chr2ord = {}
-    for i in range(1, 23):
-        chr2ord[f"{ch}{i}"] = i
-    chr2ord[f"{ch}X"] = 23
-    chr2ord[f"{ch}Y"] = 24
-    chr2ord[f"{ch}M"] = 25
-    return chr2ord
+##################################################
+# chromosome utilities
+##################################################
+
+
+def chrom_sort_key(chrom: str | int):
+    """Genomic sort key: autosomes numerically (any count), then X, Y, M, then unknowns.
+
+    Accepts ``chr``-prefixed or bare names, as str or int.
+    """
+    core = str(chrom)
+    if core.lower().startswith("chr"):
+        core = core[3:]
+    if core.isdigit():
+        return (0, int(core), "")
+    special = {"X": 1, "Y": 2, "M": 3, "MT": 3}
+    if core.upper() in special:
+        return (1, special[core.upper()], "")
+    return (2, 0, core)
 
 
 def sort_chroms(chromosomes: list):
+    """Sort chromosome names in genomic order. See :func:`chrom_sort_key`."""
     assert len(chromosomes) != 0
-    ch = "chr" if str(chromosomes[0]).startswith("chr") else ""
-    chr2ord = get_chr2ord(ch)
-    return sorted(chromosomes, key=lambda x: chr2ord[x])
+    return sorted((str(c) for c in chromosomes), key=chrom_sort_key)
 
 
 def get_chr_sizes(sz_file: str):
@@ -71,14 +95,21 @@ def get_chr_sizes(sz_file: str):
     return chr_sizes
 
 
-def sort_df_chr(df: pd.DataFrame, ch="#CHR", pos="POS"):
+def sort_df_chr(df: pd.DataFrame, ch: str = "#CHR", pos: str = "POS"):
     chs = sort_chroms(df[ch].unique().tolist())
     df[ch] = pd.Categorical(df[ch], categories=chs, ordered=True)
     df.sort_values(by=[ch, pos], inplace=True, ignore_index=True)
     return df
 
 
-def read_seg_ucn_file(seg_ucn_file: str):
+##################################################
+# bulk file readers
+##################################################
+
+
+def read_seg_ucn_file(
+    seg_ucn_file: str,
+):
     segs_df = pd.read_table(seg_ucn_file, sep="\t")
     segs_df = sort_df_chr(segs_df, pos="START")
 
@@ -102,7 +133,12 @@ def read_whitelist_segments(bed_file: str):
     return wl_fragments
 
 
-def setup_logging(args) -> None:
+##################################################
+# logging
+##################################################
+
+
+def setup_logging(args: argparse.Namespace | dict):
     v = args["verbosity"] if isinstance(args, dict) else args.verbosity
     level = logging.DEBUG if v >= 2 else logging.INFO
     logging.basicConfig(
@@ -112,7 +148,7 @@ def setup_logging(args) -> None:
     )
 
 
-def log_arguments(args) -> None:
+def log_arguments(args: argparse.Namespace | dict):
     d = vars(args) if hasattr(args, "__dict__") else args
     lines = "\n".join(f"  {k}: {v}" for k, v in sorted(d.items()) if k != "func")
     logging.info(f"parsed arguments:\n{lines}")
@@ -136,16 +172,3 @@ def add_file_logging(out_dir: str, command: str = "copytyping"):
     if logging.root.level > level:
         logging.root.setLevel(level)
     return fh
-
-
-def save_phased_bbc(bbc_df, X_bbc, Y_bbc, D_bbc, prefix):
-    """Save phase-corrected BBC data (DataFrame + sparse matrices).
-
-    Files: {prefix}.tsv.gz, {prefix}.X.npz, {prefix}.Y.npz, {prefix}.D.npz
-    """
-    from scipy import sparse
-
-    bbc_df.to_csv(f"{prefix}.tsv.gz", sep="\t", index=False, compression="gzip")
-    sparse.save_npz(f"{prefix}.X.npz", X_bbc)
-    sparse.save_npz(f"{prefix}.Y.npz", Y_bbc)
-    sparse.save_npz(f"{prefix}.D.npz", D_bbc)

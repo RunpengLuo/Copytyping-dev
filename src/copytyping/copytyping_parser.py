@@ -4,14 +4,16 @@ import os
 from copytyping.utils import ALL_PLATFORMS
 
 
-def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
+def add_arguments_inference_inputs(
+    parser: argparse.ArgumentParser,
+):
     """I/O paths and run-control flags for a single inference run."""
     parser.add_argument(
         "--platform",
         required=True,
         type=str,
         choices=ALL_PLATFORMS,
-        help="Platform: single_cell (Cell_Model) or spatial (Spot_Model)",
+        help="Platform: single_cell/multiome (Cell_Model) or spatial (Spot_Model)",
     )
     parser.add_argument("--sample", required=True, type=str, help="sample name")
     parser.add_argument(
@@ -113,7 +115,9 @@ def add_arguments_inference_inputs(parser: argparse.ArgumentParser):
     return parser
 
 
-def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
+def add_arguments_inference_parameters(
+    parser: argparse.ArgumentParser,
+):
     """Model, smoothing, and plot parameters (all defaulted, tunable from CLI)."""
     parser.add_argument(
         "--exclude",
@@ -130,7 +134,8 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
         default=argparse.SUPPRESS,
         help="Comma-separated whitelist of CNP rows (each row is the existing "
         "';'-joined per-clone format, e.g. '1|1;2|0;2|1,1|1;1|1;2|0'). "
-        "Segments whose CNP is not in the list are dropped. Default: keep all.",
+        "Restricts inference to these CNP clusters; plots/disk keep all. "
+        "Default: keep all.",
     )
     parser.add_argument(
         "--save_processed_data",
@@ -156,9 +161,9 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
         required=False,
         type=str,
         default=argparse.SUPPRESS,
-        choices=["hybrid", "allele_only", "total_only"],
-        help="Likelihood mode: hybrid (BAF+RDR), "
-        "allele_only (BAF only), total_only (RDR only)",
+        choices=["allele_total", "allele", "total"],
+        help="Likelihood mode: allele_total (BAF+RDR), "
+        "allele (BAF only), total (RDR only)",
     )
     parser.add_argument(
         "--niters",
@@ -201,24 +206,23 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--update_pi",
         required=False,
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
-        help="Update pi (clone mixing proportions) during EM. "
-        "Default: fix pi at its initial value.",
+        help="update pi (clone mixing proportions) during EM (default: on)",
     )
     parser.add_argument(
         "--update_tau",
         required=False,
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
-        help="if set, update BB dispersion (tau) in M-step (cell model only)",
+        help="update BB dispersion (tau) in M-step (default: on)",
     )
     parser.add_argument(
         "--update_invphi",
         required=False,
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
-        help="if set, update NB dispersion (inv_phi) in M-step (cell model only)",
+        help="update NB dispersion (inv_phi) in M-step (default: on)",
     )
     parser.add_argument(
         "--n_neighs",
@@ -280,7 +284,9 @@ def add_arguments_inference_parameters(parser: argparse.ArgumentParser):
     return parser
 
 
-def add_arguments_inference(parser: argparse.ArgumentParser):
+def add_arguments_inference(
+    parser: argparse.ArgumentParser,
+):
     add_arguments_inference_inputs(parser)
     add_arguments_inference_parameters(parser)
     return parser
@@ -293,10 +299,10 @@ def check_arguments_inference(args: dict):
     args["gex_h5ad"] = None
     args["atac_h5ad"] = None
 
-    data_types = []
+    assay_types = []
     if gex_dir is not None:
         assert os.path.isdir(gex_dir), f"--gex_dir={gex_dir} is not a directory"
-        data_types.append("gex")
+        assay_types.append("gex")
         cnv_segments = os.path.join(gex_dir, "cnv_segments.tsv")
         barcodes = os.path.join(gex_dir, "barcodes.tsv.gz")
         x_count = os.path.join(gex_dir, "bb.Xcount.npz")
@@ -316,7 +322,7 @@ def check_arguments_inference(args: dict):
 
     if atac_dir is not None:
         assert os.path.isdir(atac_dir), f"--atac_dir={atac_dir} is not a directory"
-        data_types.append("atac")
+        assay_types.append("atac")
         cnv_segments = os.path.join(atac_dir, "cnv_segments.tsv")
         barcodes = os.path.join(atac_dir, "barcodes.tsv.gz")
         x_count = os.path.join(atac_dir, "bb.Xcount.npz")
@@ -330,22 +336,29 @@ def check_arguments_inference(args: dict):
         args["atac_A_allele"] = a_allele
         args["atac_B_allele"] = b_allele
 
-    assert len(data_types) > 0, (
+    assert len(assay_types) > 0, (
         "at least one of --gex_dir or --atac_dir must be provided"
     )
-    args["data_types"] = data_types
+    args["assay_types"] = assay_types
     platform = args["platform"]
     if platform == "spatial":
         assert gex_dir is not None, (
             "--gex_dir is required for spatial platform (h5ad with spatial coords)"
         )
+    if platform == "multiome":
+        assert gex_dir is not None and atac_dir is not None, (
+            "--gex_dir and --atac_dir are both required for multiome platform"
+        )
 
-    assert os.path.exists(args["seg_ucn"]), f"invalid --seg_ucn file"
-    assert os.path.exists(args["bbc_phases"]), f"invalid --bbc_phases file"
+    assert os.path.exists(args["seg_ucn"]), "invalid --seg_ucn file"
+    assert os.path.exists(args["bbc_phases"]), "invalid --bbc_phases file"
     if args["solfile"] is not None:
         assert os.path.exists(args["solfile"]), f"invalid --solfile: {args['solfile']}"
-    assert args["region_bed"] is not None and os.path.exists(args["region_bed"]), (
+    assert os.path.exists(args["region_bed"]), (
         f"invalid --region_bed: {args['region_bed']}"
+    )
+    assert os.path.exists(args["genome_size"]), (
+        f"invalid --genome_size: {args['genome_size']}"
     )
 
     def _parse_bounds(s):
@@ -360,117 +373,15 @@ def check_arguments_inference(args: dict):
     args["min_invphi"] = min_invphi
     args["max_invphi"] = max_invphi
 
+    args["exclude_cell_types"] = (
+        set(args["exclude"].split(",")) if args["exclude"] else None
+    )
     return args
 
 
-def add_arguments_cnphmm_parameters(parser: argparse.ArgumentParser):
-    """Factorial CNP-HMM knobs (all defaulted in copytyping.yaml)."""
-    parser.add_argument(
-        "--cnphmm_method",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        choices=["baum_welch", "block_ascent"],
-        help="baum_welch (forward-backward) or block_ascent (Viterbi coordinate)",
-    )
-    parser.add_argument(
-        "--decode",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        choices=["map", "viterbi"],
-        help="baum_welch per-cell decode: map (posterior) or viterbi (joint-MAP)",
-    )
-    parser.add_argument(
-        "--c_max",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Max total copy number for the (a,b) state grid",
-    )
-    parser.add_argument(
-        "--mask_mode",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        choices=["full", "bulk", "bulk_neighbor"],
-        help="State-space mask: full grid, bulk-observed, or bulk+neighbors",
-    )
-    parser.add_argument(
-        "--prior_s",
-        required=False,
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Dirichlet concentration s for the transition prior",
-    )
-    parser.add_argument(
-        "--prior_omega",
-        required=False,
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Bulk-vs-baseline mix weight (0=baseline, 1=bulk)",
-    )
-    parser.add_argument(
-        "--prior_t",
-        required=False,
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Baseline self-transition probability",
-    )
-    parser.add_argument(
-        "--prior_eps",
-        required=False,
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Smoothing constant for bulk transition counts",
-    )
-    parser.add_argument(
-        "--fix_dispersion",
-        required=False,
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="Fix BB tau / NB inv_phi at init instead of updating them in M-step "
-        "(default: update both)",
-    )
-    parser.add_argument(
-        "--cluster_method",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        choices=["lexsort", "cnt_nj", "cnt_upgma", "cnt_complete"],
-        help="Heatmap cell ordering: lexsort, or a CNT-distance tree "
-        "(cnt_nj / cnt_upgma / cnt_complete); distance methods fall back to "
-        "lexsort above ~2000 unique profiles",
-    )
-    parser.add_argument(
-        "--n_clones",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Max clones per REP for flat clustering of decoded paths (CNT-distance)",
-    )
-    return parser
-
-
-def add_arguments_cnphmm(parser: argparse.ArgumentParser):
-    add_arguments_inference_inputs(parser)
-    add_arguments_inference_parameters(parser)
-    add_arguments_cnphmm_parameters(parser)
-    return parser
-
-
-def check_arguments_cnphmm(args: dict):
-    """Validate shared inference inputs, then the CNP-HMM-specific knobs."""
-    args = check_arguments_inference(args)
-    assert args["c_max"] >= 1, f"--c_max must be >= 1, got {args['c_max']}"
-    assert 0.0 <= args["prior_omega"] <= 1.0, "--prior_omega must be in [0, 1]"
-    assert 0.0 < args["prior_t"] < 1.0, "--prior_t must be in (0, 1)"
-    assert args["prior_s"] > 0, "--prior_s must be > 0"
-    assert args["prior_eps"] > 0, "--prior_eps must be > 0"
-    return args
-
-
-def add_arguments_pipeline(parser):
+def add_arguments_pipeline(
+    parser: argparse.ArgumentParser,
+):
     parser.add_argument(
         "panel_tsv",
         type=str,
@@ -499,7 +410,7 @@ def add_arguments_pipeline(parser):
         "--platform_filter",
         default=None,
         type=str,
-        choices=["spatial", "single_cell"],
+        choices=ALL_PLATFORMS,
         help="Only run samples matching this platform",
     )
     parser.add_argument(
@@ -529,107 +440,4 @@ def add_arguments_pipeline(parser):
         help="Verbose level for each inference run",
     )
     add_arguments_inference_parameters(parser)
-    add_arguments_validate_parameters(parser)
-    return parser
-
-
-def add_arguments_validate_parameters(parser: argparse.ArgumentParser):
-    """Validate-only parameters (cutoff sweeps). Plot/smoothing params are
-    inherited from add_arguments_inference_parameters."""
-    parser.add_argument(
-        "--purity_cutoff",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="comma-separated purity cutoffs for hard label evaluation. "
-        "Spots with purity <= cutoff labeled normal.",
-    )
-    parser.add_argument(
-        "--post_cutoff",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="comma-separated max_posterior cutoffs. "
-        "Tumor spots with max_posterior <= cutoff labeled NA (excluded from metrics).",
-    )
-    return parser
-
-
-def add_arguments_validate(parser: argparse.ArgumentParser):
-    parser.add_argument(
-        "--processed_data",
-        required=True,
-        type=str,
-        help="Directory with cnp_profile.tsv, X/Y/D.npz, model_params.npz",
-    )
-    parser.add_argument(
-        "--pred_labels",
-        required=True,
-        type=str,
-        help="TSV with BARCODE + predicted label columns",
-    )
-    parser.add_argument(
-        "--pred_label",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Column name for predicted labels",
-    )
-    parser.add_argument(
-        "--ref_labels",
-        required=False,
-        type=str,
-        default=None,
-        help="TSV with BARCODE + reference label columns",
-    )
-    parser.add_argument(
-        "--ref_label",
-        required=False,
-        type=str,
-        default="path_label",
-        help="Column name for reference labels (default: path_label)",
-    )
-    parser.add_argument(
-        "--method",
-        required=False,
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Method that produced the labels: copytyping or others. "
-        "Non-copytyping skips init normal, purity sweep, trace, count histograms.",
-    )
-    parser.add_argument("--sample", required=True, type=str, help="sample name")
-    parser.add_argument(
-        "--genome_size",
-        required=False,
-        type=str,
-        default=None,
-        help="Chromosome sizes file (for 1d scatter)",
-    )
-    parser.add_argument(
-        "--region_bed",
-        required=False,
-        type=str,
-        default=None,
-        help="Chromosome regions BED file (for heatmap/scatter)",
-    )
-    parser.add_argument(
-        "--h5ad",
-        required=False,
-        type=str,
-        default=None,
-        help="h5ad file for spatial neighbors (joincount + visium plots)",
-    )
-    parser.add_argument(
-        "-o", "--out_dir", required=True, type=str, help="output directory"
-    )
-    parser.add_argument(
-        "-v",
-        "--verbosity",
-        required=False,
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Verbose level",
-    )
-    add_arguments_inference_parameters(parser)
-    add_arguments_validate_parameters(parser)
     return parser

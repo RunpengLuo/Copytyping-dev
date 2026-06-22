@@ -9,8 +9,8 @@ verbosity: 0
 
 ##################################################
 # inference — model fit
-# fit_mode: hybrid | allele_only | total_only
-fit_mode: hybrid
+# fit_mode: allele_total | allele | total
+fit_mode: allele_total
 # If true, use major clone CNP to derive baseline.
 no_normal: false
 niters: 100
@@ -23,12 +23,12 @@ invphi_bounds: "1e-6,1e6"
 # Symmetric Dirichlet prior on pi (clone mixing proportions).
 # 1: non-informative (default), <1: sparse, >1: smoothing
 pi_alpha: 1.0
-# Update pi (clone mixing proportions) during EM? Default: fix at init.
-update_pi: false
-# Update BB tau in M-step? (cell model only)
-update_tau: false
-# Update NB inv_phi in M-step? (cell model only)
-update_invphi: false
+# Update pi (clone mixing proportions) during EM?
+update_pi: true
+# Update BB tau in M-step?
+update_tau: true
+# Update NB inv_phi in M-step?
+update_invphi: true
 
 ##################################################
 # inference — segment filtering & data control
@@ -46,7 +46,7 @@ exclude: "Doublet,doublet,Unknown,NA"
 # Comma-separated whitelist of CNP rows (joint A|B per-clone format). null = keep all.
 keep_cn_row: null
 # Output prefix: <out_dir>/<out_prefix>.* (defaults to --sample when unset)
-out_prefix: sample
+out_prefix: null
 # If true, also save heavy processed_data files (~300MB/run). Always saved:
 # annotations.tsv, cnp_profile.tsv, metadata.tsv, model_params.npz.
 save_processed_data: false
