@@ -11,7 +11,7 @@ conda activate copytyping-env
 pip install -e .
 ```
 
-External tools required on `PATH`: `bedtools`, `bcftools`, `samtools`, `mosdepth`, `whatshap`.
+The package is pure-Python (no external CLI tools on `PATH`); inputs are expected pre-built.
 
 ### Getting started
 

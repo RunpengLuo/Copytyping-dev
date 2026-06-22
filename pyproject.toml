@@ -2,18 +2,16 @@
 name = "copytyping"
 version = "0.0.1"
 dependencies = [
+    "anndata",
     "matplotlib",
     "numpy",
     "pandas",
-    "pyranges",
-    "pysam",
     "PyYAML",
     "scanpy",
     "scikit-learn",
     "scipy",
     "seaborn",
     "squidpy>=1.4.1",
-    "statsmodels",
 ]
 
 [tool.setuptools]

@@ -1,23 +1,16 @@
 name: copytyping-env
 channels:
   - conda-forge
-  - bioconda
   - defaults
 dependencies:
   - python>=3.11
-  - bcftools>=1.19
-  - bedtools
-  - tabix
+  - anndata
   - matplotlib-base
   - numpy
   - pandas
-  - pysam
-  - pyranges
+  - pyyaml
+  - scanpy
   - scikit-learn
   - scipy
   - seaborn
-  - scanpy
   - squidpy>=1.4.1
-  - statsmodels
-  - pyyaml
-
