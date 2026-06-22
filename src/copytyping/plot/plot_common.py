@@ -14,6 +14,7 @@ NORMAL_COLOR = "lightgray"
 NA_COLOR = "darkgray"
 BLACK = (0, 0, 0, 1)
 _TUMOR_COLORS = [mcolors.to_hex(c) for c in plt.get_cmap("tab10").colors]
+_TUMOR_COLORS_20 = [mcolors.to_hex(c) for c in plt.get_cmap("tab20").colors]
 
 # Sequential purity / posterior overlay; shared by heatmap + visium.
 PURITY_CMAP = "magma_r"
@@ -32,11 +33,6 @@ BAF_COLORS = [
     "#d6604d",
     "#b2182b",
 ]
-
-# Qualitative palettes for non-clone label sets (cell_type, path annotation, ...).
-# The clone/primary label always uses the tab10 clone scheme (build_label_colors);
-# each additional label set gets its own palette here, indexed by slot.
-_CATEGORICAL_PALETTES = ["Set2", "Dark2", "Set3", "tab20b"]
 
 
 def _is_normal_like(label: str):
@@ -72,24 +68,6 @@ def build_label_colors(categories: list, clone_indexed: bool = True):
     return colors
 
 
-def build_categorical_colors(categories: list, palette: str = "Set2"):
-    """Arbitrary label set: normal-like -> gray, invalid/NA -> dark gray, rest from
-    `palette` (a qualitative cmap). Used for non-clone strips (e.g. cell_type)."""
-    base = [mcolors.to_hex(c) for c in plt.get_cmap(palette).colors]
-    colors = []
-    i = 0
-    for c in categories:
-        cs = str(c)
-        if cs in INVALID_LABELS or cs in NA_CELLTYPE:
-            colors.append(NA_COLOR)
-        elif _is_normal_like(cs):
-            colors.append(NORMAL_COLOR)
-        else:
-            colors.append(base[i % len(base)])
-            i += 1
-    return colors
-
-
 def make_baf_cmap():
     """Discrete diverging BAF colormap + [0,1] BoundaryNorm (10 bins, NaN -> white)."""
     cmap = mcolors.ListedColormap(BAF_COLORS, name="baf_disc")
@@ -98,31 +76,74 @@ def make_baf_cmap():
     return cmap, norm
 
 
-def label_colors_for(categories: list, is_primary: bool, palette_index: int = 0):
-    """Colors for one label column. The primary (clone) label uses the tab10 clone
-    scheme; any other label set uses its own qualitative palette (by palette_index).
-    Shared by heatmap strips and visium so coloring stays consistent across plots."""
-    if is_primary:
-        return build_label_colors(categories, clone_indexed=True)
-    palette = _CATEGORICAL_PALETTES[palette_index % len(_CATEGORICAL_PALETTES)]
-    return build_categorical_colors(categories, palette=palette)
+def _clone_order_key(c: str):
+    """Sort key for the clone label: normal first, then clone1, clone2, ...,
+    then any other label, with invalid/NA last."""
+    if c == "normal":
+        return (0, 0, "")
+    m = re.match(r"clone(\d+)$", c)
+    if m:
+        return (1, int(m.group(1)), "")
+    if c in INVALID_LABELS:
+        return (3, 0, c)
+    return (2, 0, c)
+
+
+def _is_colored_label(c: str):
+    """A label that consumes a palette slot (not gray): not normal-like, not NA."""
+    return c not in INVALID_LABELS and c not in NA_CELLTYPE and not _is_normal_like(c)
 
 
 def build_label_color_maps(
     row_label_map: dict[str, np.ndarray], primary_label: str | None
 ):
-    """Per-label {value: color} maps. The primary (clone) label uses the tab10 clone
-    scheme; each other label set gets its own distinct qualitative palette. Normal-like
-    values are gray in every scheme (consistent with visium)."""
+    """Per-label {value: color} maps drawn from ONE shared palette.
+
+    Colors are assigned to distinct label *values* (a global set union), so a value
+    that appears in several label sets — e.g. ``normal`` in both copytyping and a
+    path annotation, or shared clones — gets the SAME color everywhere. The primary
+    (clone) label is visited first, ordered normal -> clone1 -> clone2 -> ..., so
+    clones take the leading palette slots; remaining sets (sorted alphabetically)
+    contribute any new values. Normal-like values are gray and invalid/NA are dark
+    gray (these consume no palette slot). Palette is tab10, or tab20 when more than
+    10 distinct colored values are needed."""
+    # primary first (clone order), then the rest (alphabetical)
+    names = ([primary_label] if primary_label in row_label_map else []) + [
+        n for n in row_label_map if n != primary_label
+    ]
+
+    def cats_for(name: str):
+        uniq = {str(v) for v in row_label_map[name]}
+        return (
+            sorted(uniq, key=_clone_order_key)
+            if name == primary_label
+            else sorted(uniq)
+        )
+
+    # global value -> color: first encounter (in visit order) fixes the color
+    ordered_values = []
+    seen = set()
+    for name in names:
+        for c in cats_for(name):
+            if _is_colored_label(c) and c not in seen:
+                seen.add(c)
+                ordered_values.append(c)
+    palette = (
+        _TUMOR_COLORS if len(ordered_values) <= len(_TUMOR_COLORS) else _TUMOR_COLORS_20
+    )
+    value_color = {c: palette[i % len(palette)] for i, c in enumerate(ordered_values)}
+
     color_maps = {}
-    other_i = 0
-    for name, values in row_label_map.items():
-        cats = sorted({str(v) for v in values})
-        is_primary = name == primary_label
-        cols = label_colors_for(cats, is_primary=is_primary, palette_index=other_i)
-        if not is_primary:
-            other_i += 1
-        color_maps[name] = dict(zip(cats, cols))
+    for name in names:
+        cmap = {}
+        for c in cats_for(name):
+            if c in INVALID_LABELS or c in NA_CELLTYPE:
+                cmap[c] = NA_COLOR
+            elif _is_normal_like(c):
+                cmap[c] = NORMAL_COLOR
+            else:
+                cmap[c] = value_color[c]
+        color_maps[name] = cmap
     return color_maps
 
 

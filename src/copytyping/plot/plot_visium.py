@@ -13,8 +13,8 @@ from copytyping.inference.inference_utils import compute_loh_baf
 from copytyping.plot.plot_common import (
     NORMAL_COLOR,
     PURITY_CMAP,
+    build_label_color_maps,
     build_label_colors,
-    label_colors_for,
     make_baf_cmap,
 )
 from copytyping.utils import is_tumor_label, NA_CELLTYPE
@@ -139,18 +139,13 @@ def build_visium_slices(
     return slices
 
 
-def set_label_colors(
-    adata: sc.AnnData, col: str, is_primary: bool = True, palette_index: int = 0
-):
-    """Set adata.uns colors using the unified scheme (shared with heatmap strips):
-    primary/clone label -> tab10 clone colors; other label sets -> a qualitative
-    palette chosen by palette_index."""
+def set_label_colors(adata: sc.AnnData, col: str, color_map: dict[str, str]):
+    """Set adata.uns[col+'_colors'] from an explicit {value: color} map
+    (built once via build_label_color_maps so all columns share one palette)."""
     adata.obs[col] = adata.obs[col].astype("category")
-    adata.uns[f"{col}_colors"] = label_colors_for(
-        list(adata.obs[col].cat.categories),
-        is_primary=is_primary,
-        palette_index=palette_index,
-    )
+    adata.uns[f"{col}_colors"] = [
+        color_map.get(str(c), NORMAL_COLOR) for c in adata.obs[col].cat.categories
+    ]
 
 
 def build_legend(categories: list):
@@ -254,6 +249,22 @@ def plot_visium_panel(
     nrows = len(row_labels)
     ncols = len(slices)
 
+    # one shared palette across all label columns (clone label first, then path /
+    # best-cutoff); a value reused across columns keeps one color
+    def _union(col: str):
+        vals = set()
+        for _, anns_vis, _ in slices:
+            if col in anns_vis.columns:
+                vals.update(anns_vis[col].astype(str).tolist())
+        return sorted(vals)
+
+    label_vals = {spot_label: _union(spot_label)}
+    if has_path:
+        label_vals[path_label] = _union(path_label)
+    if has_best_cutoff:
+        label_vals[best_cutoff_label] = _union(best_cutoff_label)
+    color_maps = build_label_color_maps(label_vals, primary_label=spot_label)
+
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
@@ -263,10 +274,10 @@ def plot_visium_panel(
 
     for ci, (rep_id, anns_vis, vis_adata) in enumerate(slices):
         vis_adata.obs[spot_label] = anns_vis[spot_label].astype("category")
-        set_label_colors(vis_adata, spot_label)
+        set_label_colors(vis_adata, spot_label, color_maps[spot_label])
         if has_path:
             vis_adata.obs[path_label] = anns_vis[path_label].astype("category")
-            set_label_colors(vis_adata, path_label, is_primary=False, palette_index=0)
+            set_label_colors(vis_adata, path_label, color_maps[path_label])
         if has_ref_purity:
             vis_adata.obs[ref_purity_col] = anns_vis[ref_purity_col].values
         vis_adata.obs["tumor_purity"] = anns_vis["tumor_purity"].values
@@ -323,7 +334,7 @@ def plot_visium_panel(
         keep5 = vis_adata.obs[spot_label] != "NA"
         sub5 = vis_adata[keep5].copy()
         sub5.obs[spot_label] = sub5.obs[spot_label].cat.remove_unused_categories()
-        set_label_colors(sub5, spot_label)
+        set_label_colors(sub5, spot_label, color_maps[spot_label])
         sq.pl.spatial_scatter(
             sub5,
             color=spot_label,
@@ -353,7 +364,7 @@ def plot_visium_panel(
             sub6.obs[best_cutoff_label] = sub6.obs[
                 best_cutoff_label
             ].cat.remove_unused_categories()
-            set_label_colors(sub6, best_cutoff_label)
+            set_label_colors(sub6, best_cutoff_label, color_maps[best_cutoff_label])
             sq.pl.spatial_scatter(
                 sub6,
                 color=best_cutoff_label,
@@ -590,6 +601,12 @@ def plot_visium_iters(
     spatial_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
     hist_file = os.path.join(out_dir, f"{sample}.iter_histograms.pdf")
 
+    # shared clone palette across all iterations
+    all_iter_labels = sorted({str(x) for lt in labeling_trace for x in lt["labels"]})
+    iter_color_map = build_label_color_maps(
+        {label_col: all_iter_labels}, primary_label=label_col
+    )[label_col]
+
     # --- Spatial PDF ---
     with PdfPages(spatial_file) as pdf:
         for ri, lt in enumerate(labeling_trace):
@@ -614,7 +631,7 @@ def plot_visium_iters(
                     vis_adata.obs["tumor_purity"] = purity[idx]
 
                 ax0 = axes[0, ci]
-                set_label_colors(vis_adata, label_col)
+                set_label_colors(vis_adata, label_col, iter_color_map)
                 if has_purity:
                     sq.pl.spatial_scatter(
                         vis_adata,

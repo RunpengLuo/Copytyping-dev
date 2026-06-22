@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.plot.plot_common import build_label_colors
+from copytyping.plot.plot_common import _clone_order_key, build_label_colors
 
 
 def plot_scatter_2d_per_cell(
@@ -83,7 +83,7 @@ def plot_scatter_2d_per_cell(
             log2rdr = np.log2(np.clip(rdr, 1e-6, None))
             hue = labels[valid]
 
-            uniq = sorted(set(hue), key=lambda x: (x != "normal", x))
+            uniq = sorted(set(hue), key=_clone_order_key)
             palette = dict(zip(uniq, build_label_colors(uniq, clone_indexed=True)))
 
             df = pd.DataFrame({"BAF": baf, "log2RDR": log2rdr, label_col: hue})
@@ -117,6 +117,7 @@ def plot_scatter_2d_per_cell(
                 x="BAF",
                 y="log2RDR",
                 hue=label_col,
+                hue_order=uniq,
                 palette=palette,
                 xlim=xlim,
                 ylim=ylim,

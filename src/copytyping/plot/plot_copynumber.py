@@ -87,9 +87,7 @@ def _draw_chr_boundaries(ax: plt.Axes, ch_coords: list):
         line.set_clip_on(False)
 
 
-def _decorate_cnp_xaxis(
-    ax: plt.Axes, ch_coords: list, chs: list, plot_chrname: bool
-):
+def _decorate_cnp_xaxis(ax: plt.Axes, ch_coords: list, chs: list, plot_chrname: bool):
     """Shared x-axis styling for CNP profiles: limits, hidden spines, chrom ticks."""
     ax.grid(False)
     ax.set_xlim(0, ch_coords[-1])
@@ -112,9 +110,7 @@ def _decorate_cnp_xaxis(
         ax.set_xticklabels([])
 
 
-def _clone_ylabels(
-    num_clones: int, plot_clone_name: bool, clone_ploidies: list | None
-):
+def _clone_ylabels(num_clones: int, plot_clone_name: bool, clone_ploidies: list | None):
     """Per-clone y-tick labels (top-to-bottom): 'Clone N' (+ optional ploidy line)."""
     ylabels = []
     for ci in range(num_clones, 0, -1):
