@@ -265,19 +265,19 @@ def _draw_mirror_swatches(
 ):
     """Two mirror-CNA arrow swatches (right-pointing (a,b), left-pointing (b,a)).
 
-    Shared between plot_cnv_legend and plot_ascn_legend so both use the same
-    style. Returns the x-position after the last swatch.
+    All gaps are multiples of ``mirror_w`` so the block scales with one knob.
+    Returns the x-position after the last swatch.
     """
     ax.text(
         leg_x,
         mirror_y0 + mirror_w / 2.0,
-        "Mirrored CNA",
+        "Mirrored",
         ha="right",
         va="center",
         fontsize=fontsize,
         fontweight="bold",
     )
-    leg_x += 0.3  # small gap between text and first symbol
+    leg_x += 0.25 * mirror_w  # small gap between text and first symbol
 
     # right triangle box (a, b)
     ax.add_patch(
@@ -309,9 +309,8 @@ def _draw_mirror_swatches(
         ha="center",
         va="top",
         fontsize=fontsize,
-        fontweight="bold",
     )
-    leg_x += mirror_w + 0.5
+    leg_x += 1.25 * mirror_w  # small gap to the second box
 
     # left triangle box (b, a)
     ax.add_patch(
@@ -343,7 +342,6 @@ def _draw_mirror_swatches(
         ha="center",
         va="top",
         fontsize=fontsize,
-        fontweight="bold",
     )
     return leg_x + mirror_w
 
@@ -355,11 +353,12 @@ def plot_cnv_legend(ax: plt.Axes):
     pair_w = 2  # width of each (a,b) box
     pair_h = 0.6  # height of each box
     gap_pairs = 0.0  # horizontal gap between boxes in same group
-    gap_groups = 1.5  # horizontal gap between total-CN groups
+    gap_groups = 0.75 * pair_w  # horizontal gap between total-CN groups
+    mirror_gap = 1.5 * pair_w  # gap before/after the mirrored swatch block
 
     leg_x = 0.0  # running x position (data coords)
 
-    for total, states in sorted(tcn_states.items()):
+    for _total, states in sorted(tcn_states.items()):
         # merge mirrored pairs like (1,2),(2,1) -> (2,1)
         uniq_pairs = sorted({tuple(sorted(s, reverse=True)) for s in states})
         n_pairs = len(uniq_pairs)
@@ -390,16 +389,6 @@ def plot_cnv_legend(ax: plt.Axes):
                 fontsize=10,
             )
 
-        # group title above the boxes
-        ax.text(
-            group_x0 + group_w / 2.0,
-            pair_h + 0.1,
-            f"Total CN={total}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
-
         leg_x = group_x0 + group_w + gap_groups
 
     # --- CN>7 default box ----------------------------------------------------
@@ -415,19 +404,28 @@ def plot_cnv_legend(ax: plt.Axes):
     ax.add_patch(rect)
     ax.text(
         group_x0 + pair_w / 2.0,
-        pair_h + 0.1,
-        "Total CN>7",
+        -0.2,
+        ">7",
         ha="center",
-        va="bottom",
+        va="top",
         fontsize=10,
     )
     leg_x = group_x0 + pair_w + gap_groups
 
     # --- mirrored CNA symbol on the right ------------------------------------
-    leg_x = _draw_mirror_swatches(ax, leg_x + 3.0, fontsize=10, alpha=1.0) + 3.0
+    leg_x = _draw_mirror_swatches(ax, leg_x + mirror_gap, fontsize=10, alpha=1.0)
+    leg_x += mirror_gap
 
     # main title on the left
-    ax.text(-0.5, pair_h / 2.0, "Copy numbers", fontsize=12, ha="right", va="center")
+    ax.text(
+        -0.5,
+        pair_h / 2.0,
+        "CNA",
+        fontsize=12,
+        fontweight="bold",
+        ha="right",
+        va="center",
+    )
 
     # nice limits + aspect
     ax.set_xlim(-2.0, leg_x)
