@@ -185,5 +185,3 @@ def plot_scatter_2d_per_cell(
             g0.figure.tight_layout()
             pdf.savefig(g0.figure, dpi=dpi, bbox_inches="tight")
             plt.close(g0.figure)
-
-    logging.info(f"saved 2d scatter to {outfile}")
