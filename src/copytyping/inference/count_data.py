@@ -6,6 +6,7 @@ import pandas as pd
 from scipy import sparse
 
 from copytyping.io_utils import exclude_barcodes, read_barcodes
+from copytyping.utils import sort_chroms
 
 
 ##################################################
@@ -229,7 +230,9 @@ def _adaptive_segment_ids(
     (``seg_id``) until the pseudobulk ``snp_count`` reaches ``min_snp_count`` or the
     span would exceed ``max_bin_length`` bp. A bin never crosses a segment boundary,
     so it never spans a whitelist gap. Returns genomic-order cumulative ids."""
-    order = np.lexsort((start, chrom))
+    chr_rank = {c: i for i, c in enumerate(sort_chroms(list(pd.unique(chrom))))}
+    ranks = np.array([chr_rank[str(c)] for c in chrom], dtype=np.int64)
+    order = np.lexsort((start, ranks))
     seg = np.empty(len(order), dtype=np.int64)
     sid = -1
     cur_seg = None

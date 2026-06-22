@@ -63,21 +63,26 @@ def is_normal_label(label: str):
 ##################################################
 
 
-def get_chr2ord(ch: str):
-    chr2ord = {}
-    for i in range(1, 23):
-        chr2ord[f"{ch}{i}"] = i
-    chr2ord[f"{ch}X"] = 23
-    chr2ord[f"{ch}Y"] = 24
-    chr2ord[f"{ch}M"] = 25
-    return chr2ord
+def chrom_sort_key(chrom: str | int):
+    """Genomic sort key: autosomes numerically (any count), then X, Y, M, then unknowns.
+
+    Accepts ``chr``-prefixed or bare names, as str or int.
+    """
+    core = str(chrom)
+    if core.lower().startswith("chr"):
+        core = core[3:]
+    if core.isdigit():
+        return (0, int(core), "")
+    special = {"X": 1, "Y": 2, "M": 3, "MT": 3}
+    if core.upper() in special:
+        return (1, special[core.upper()], "")
+    return (2, 0, core)
 
 
-def sort_chroms(chromosomes: list[str]):
+def sort_chroms(chromosomes: list):
+    """Sort chromosome names in genomic order. See :func:`chrom_sort_key`."""
     assert len(chromosomes) != 0
-    ch = "chr" if str(chromosomes[0]).startswith("chr") else ""
-    chr2ord = get_chr2ord(ch)
-    return sorted(chromosomes, key=lambda x: chr2ord[x])
+    return sorted((str(c) for c in chromosomes), key=chrom_sort_key)
 
 
 def get_chr_sizes(sz_file: str):
