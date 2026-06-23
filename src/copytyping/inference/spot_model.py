@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 from scipy.special import logsumexp
@@ -35,6 +37,7 @@ class Spot_Model(Base_Model):
     ):
         super().__init__(count_data, platform, assay_types, **kwargs)
         self.num_em_clones = len(self.tumor_clones)
+        logging.info("=" * 20 + " Start Spot_Model " + "=" * 20)
 
     def _init_params(self, fit_mode: str) -> dict:
         assert not self.no_normal, "no_normal is single-cell only"

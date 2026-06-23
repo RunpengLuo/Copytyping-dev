@@ -16,6 +16,7 @@ from copytyping.inference.count_data import (
     segment_count_data,
     smooth_spatial_neighbors,
 )
+from copytyping.inference.inference_utils import evaluate_malignant_accuracy
 from copytyping.inference.model_utils import (
     compute_rdr_baseline,
     model_kwargs_from_args,
@@ -282,10 +283,16 @@ def run(args: dict | None = None):
             barcodes=anns,
             dpi=args["dpi"],
         )
-    
+
     # ---- validate ----------------------------------------------------------
-    if cell_type_df is not None:
-        pass
+    if cell_type_df is not None and args["ref_label"] in anns.columns:
+        tumor_post = "tumor_purity" if "tumor_purity" in anns.columns else "tumor"
+        evaluate_malignant_accuracy(
+            anns,
+            qry_label=label,
+            ref_label=args["ref_label"],
+            tumor_post=tumor_post,
+        )
 
     logging.info(f"inference complete. outputs in {out_dir}")
     logging.root.removeHandler(_file_handler)
@@ -307,7 +314,7 @@ def run_copytyping(
     spatial_graphs: dict | None,
     args: dict,
 ):
-    cluster_count_data = segment_count_data(bbc_data, agg_level="cnp_cluster")
+    cluster_count_data = segment_count_data(bbc_data, agg_level=args["agg_level"])
     restrict_masks_to_cnp(cluster_count_data, args["keep_cn_row"])
 
     if platform in SPATIAL_PLATFORMS:

@@ -119,9 +119,12 @@ def _eval_subset(anns_sub, qry_label, ref_label, tumor_post):
         )
         ari_binary = adjusted_rand_score(ref_binary, pred_binary)
 
-    # ARI_clone: also on both-known
+    # ARI_clone: only when the reference resolves >1 tumor-like label (i.e. it
+    # actually carries clone structure). For a plain cell-type reference with a
+    # single tumor label this would compare clones to cell types -> leave NaN.
     ari_clone = np.nan
-    if len(anns_bin) > 0 and anns_bin[ref_label].nunique() > 1:
+    tumor_ref_labels = {c for c in anns_bin[ref_label].unique() if is_tumor_label(c)}
+    if len(tumor_ref_labels) > 1:
         ari_clone = adjusted_rand_score(anns_bin[ref_label], anns_bin[qry_label])
 
     label_counts = anns_sub[qry_label].value_counts()

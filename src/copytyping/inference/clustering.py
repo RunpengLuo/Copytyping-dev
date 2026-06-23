@@ -14,10 +14,13 @@ def prepare_rdr_baf_features(
     count_data: Count_Data, base_props: np.ndarray, norm: bool = True
 ):
     """Build cell x feature matrix from BAF + log2RDR at informative bins."""
-    Y = np.asarray(count_data.count_B)
-    D = np.asarray(count_data.count_C)
+    count_B = np.asarray(count_data.count_B)
+    count_N = np.asarray(count_data.count_C)
     baf_matrix = np.divide(
-        Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
+        count_B,
+        count_N,
+        out=np.full_like(count_N, fill_value=np.nan, dtype=np.float32),
+        where=count_N > 0,
     )
     baf_matrix = baf_matrix.T
     baf_masks = count_data.allele_mask["IMBALANCED"]

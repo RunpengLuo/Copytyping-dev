@@ -428,7 +428,12 @@ def plot_rdr_baf_1d_pseudobulk(
         agg_tcounts = np.sum(total_allele_counts[:, barcode_idxs], axis=1).astype(
             np.float64
         )
-        obs_baf = np.where(agg_tcounts > 0, agg_bcounts / agg_tcounts, np.nan)
+        obs_baf = np.divide(
+            agg_bcounts,
+            agg_tcounts,
+            out=np.full_like(agg_bcounts, np.nan),
+            where=agg_tcounts > 0,
+        )
         baf_exp_lines = None
         if (
             is_inferred
@@ -468,9 +473,7 @@ def plot_rdr_baf_1d_pseudobulk(
     if ascn_profile:
         plot_ascn_legend(axes[-1])
     else:
-        plot_cnv_legend(
-            axes[-1], has_mirror=has_cnp and cnp_has_mirror(haplo_blocks)
-        )
+        plot_cnv_legend(axes[-1], has_mirror=has_cnp and cnp_has_mirror(haplo_blocks))
 
     title = f"sample={sample}  platform={kwargs.get('platform', '')}  assay_type={assay_type}"
     if kwargs.get("subtitle"):

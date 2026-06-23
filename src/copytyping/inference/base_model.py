@@ -27,6 +27,7 @@ class Base_Model:
         update_pi: bool = True,
         update_tau: bool = True,
         update_invphi: bool = True,
+        share_dispersion: bool = False,
     ):
         self.assay_types = assay_types
         self.platform = platform
@@ -62,6 +63,7 @@ class Base_Model:
         self.update_pi = update_pi
         self.update_tau = update_tau
         self.update_invphi = update_invphi
+        self.share_dispersion = share_dispersion
 
         # global clone mixture; tau/inv_phi/lambda added at fit init
         self.model_params = {"pi": np.ones(self.num_clones) / self.num_clones}
@@ -84,12 +86,7 @@ class Base_Model:
 
         no_normal = self.no_normal
         mask_id = "IMBALANCED" if no_normal else "CLONAL_IMBALANCED"
-        logging.info(f"estimate reference cells via allele-only BB model ({mask_id})")
-        for assay in self.assay_types:
-            count_data = self.count_data[assay]
-            n_clonal = int(count_data.allele_mask["CLONAL_IMBALANCED"].sum())
-            n_all = int(count_data.allele_mask["IMBALANCED"].sum())
-            logging.info(f"  [{assay}] clonal imbalanced: {n_clonal}/{n_all}")
+        logging.info(f"estimate reference cells via allele-only Cell Model ({mask_id})")
         pure_model = Cell_Model(
             count_data=self.count_data,
             platform=self.platform,
@@ -103,6 +100,7 @@ class Base_Model:
             update_pi=self.update_pi,
             update_tau=self.update_tau,
             update_invphi=self.update_invphi,
+            share_dispersion=self.share_dispersion,
         )
         pure_model.fit("allele")
         allele_anns, _ = pure_model.predict("allele", label="allele_label")
@@ -229,6 +227,11 @@ class Base_Model:
         ll_trace, gamma_trace = [], []
         self.labeling_trace = [init_labeling]
 
+        # log the initial model state (iter 0) before any M-step update
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            gamma0 = self._e_step(fit_mode)
+            self._log_model_params(gamma0, self._one_hot(gamma0), t=0)
+
         prev_ll = -np.inf
         for t in range(1, max_iter):
             gamma = self._e_step(fit_mode, t)
@@ -248,6 +251,7 @@ class Base_Model:
                 lt["tumor_purity"] = np.where(lt["labels"] == "normal", 0.0, theta)
             self.labeling_trace.append(lt)
             logging.info(f"iter={t:03d} log-likelihood = {ll:.6f}")
+            self._log_model_params(gamma, z, t)
 
             if t > 1:
                 rel_change = np.abs(ll - prev_ll) / (np.abs(prev_ll) + eps)
@@ -305,3 +309,105 @@ class Base_Model:
                 f"max_post min={mp.min():.3f} mean={mp.mean():.3f} "
                 f"median={np.median(mp):.3f} max={mp.max():.3f}"
             )
+
+    def _log_model_params(self, gamma: np.ndarray, z: np.ndarray, t: int):
+        """DEBUG dump of current EM state for performance diagnostics.
+
+        Logs (all at DEBUG, 3 decimals):
+        - mixing weights pi per EM clone;
+        - state -> dispersion mappings per assay (BAF->tau, RDR->inv_phi, and
+          mean tumor purity theta for spatial);
+        - mean clone-assignment entropy over all cells (lower = more confident);
+        - per-clone sum log-lik broken down by CNA (A|B) state, over the cells
+          hard-assigned to each clone (only informative segments contribute).
+        """
+        if not logging.getLogger().isEnabledFor(logging.DEBUG):
+            return
+        params = self.model_params
+        num_em = z.shape[1]
+        # EM clone columns: full set (cell model) or tumor-only (spot model)
+        em_clones = self.clones if num_em == self.num_clones else self.tumor_clones
+        clone_offset = self.num_clones - num_em  # 0 (cell) or 1 (spot, normal dropped)
+        tag = "init" if t == 0 else f"iter {t:03d}"
+
+        # 1. mixing weights
+        pi_str = "  ".join(f"{c}={p:.3f}" for c, p in zip(em_clones, params["pi"]))
+        logging.debug(f"[{tag}] mixing weights: {pi_str}")
+
+        # 2. state -> dispersion mappings (per assay). In per-state mode the
+        # M-step stores {state: value} maps; log one line per CNA state.
+        for assay in self.assay_types:
+            tkey, ikey = f"{assay}-tau_states", f"{assay}-inv_phi_states"
+            tau_states = params[tkey] if tkey in params else None
+            invphi_states = params[ikey] if ikey in params else None
+            if tau_states or invphi_states:
+                tau_states = tau_states or {}
+                invphi_states = invphi_states or {}
+                states = sorted(
+                    set(tau_states) | set(invphi_states),
+                    key=lambda s: tuple(int(x) for x in s.split("|")),
+                )
+                logging.debug(f"[{tag}] dispersion [{assay}] (per CNA state):")
+                for st in states:
+                    bits = []
+                    if st in tau_states:
+                        bits.append(f"BAF.tau={tau_states[st]:.3f}")
+                    if st in invphi_states:
+                        bits.append(f"RDR.inv_phi={invphi_states[st]:.3f}")
+                    logging.debug(f"    {st:>5}: {'  '.join(bits)}")
+                continue
+            parts = []
+            if f"{assay}-tau" in params:
+                parts.append(f"BAF.tau={float(np.mean(params[f'{assay}-tau'])):.3f}")
+            if f"{assay}-inv_phi" in params:
+                parts.append(
+                    f"RDR.inv_phi={float(np.mean(params[f'{assay}-inv_phi'])):.3f}"
+                )
+            if f"{assay}-theta" in params:
+                parts.append(
+                    f"theta_mean={float(np.mean(params[f'{assay}-theta'])):.3f}"
+                )
+            logging.debug(f"[{tag}] dispersion [{assay}]: {'  '.join(parts)}")
+
+        # 3. mean clone-assignment entropy over all cells
+        entropy = -(gamma * np.log(np.clip(gamma, 1e-30, 1.0))).sum(axis=1)
+        logging.debug(
+            f"[{tag}] mean assignment entropy: {entropy.mean():.3f} "
+            f"(max={np.log(num_em):.3f})"
+        )
+
+        # 4. per-clone sum loglik by CNA state over assigned cells
+        assign = z.argmax(axis=1)  # (N,) em-clone index per cell
+        logging.debug(f"[{tag}] per-clone loglik by CNA state (assigned cells):")
+        for j, clone in enumerate(em_clones):
+            cells = np.where(assign == j)[0]
+            if cells.size == 0:
+                logging.debug(f"  {clone:8s} n=0")
+                continue
+            full_k = j + clone_offset
+            state_ll: dict[tuple[int, int], float] = {}
+            state_n: dict[tuple[int, int], int] = {}
+            for assay in self.assay_types:
+                count_data = self.count_data[assay]
+                ll_a = params[f"{assay}-ll_allele"][:, cells, j].sum(axis=1)
+                ll_t = params[f"{assay}-ll_total"][:, cells, j].sum(axis=1)
+                seg_ll = ll_a + ll_t  # (G,) summed over assigned cells
+                keep = seg_ll != 0.0  # informative segments only
+                if not keep.any():
+                    continue
+                pair = np.stack(
+                    [count_data.cn_A[keep, full_k], count_data.cn_B[keep, full_k]],
+                    axis=1,
+                )
+                uniq, inv = np.unique(pair, axis=0, return_inverse=True)
+                sums = np.bincount(inv, weights=seg_ll[keep], minlength=len(uniq))
+                cnts = np.bincount(inv, minlength=len(uniq))
+                for s in range(len(uniq)):
+                    key = (int(uniq[s, 0]), int(uniq[s, 1]))
+                    state_ll[key] = state_ll.get(key, 0.0) + float(sums[s])
+                    state_n[key] = state_n.get(key, 0) + int(cnts[s])
+            state_str = "  ".join(
+                f"{a}|{b}={state_ll[(a, b)]:.3f}(G={state_n[(a, b)]})"
+                for a, b in sorted(state_ll)
+            )
+            logging.debug(f"  {clone:8s} n={cells.size:<5d} {state_str}")

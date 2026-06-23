@@ -226,9 +226,9 @@ def prepare_baf(
     total_allele_counts: np.ndarray,
     row_groups: list[np.ndarray],
 ):
-    Y = _aggregate_columns(ballele_counts, row_groups)
-    D = _aggregate_columns(total_allele_counts, row_groups)
-    return empirical_baf_gn(Y, D).T
+    count_B = _aggregate_columns(ballele_counts, row_groups)
+    count_N = _aggregate_columns(total_allele_counts, row_groups)
+    return empirical_baf_gn(count_B, count_N).T
 
 
 def plot_label_strips(

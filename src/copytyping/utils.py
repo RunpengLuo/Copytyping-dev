@@ -146,6 +146,9 @@ def setup_logging(args: argparse.Namespace | dict):
         format="%(asctime)s %(levelname)s %(message)s",
         stream=sys.stdout,
     )
+    # silence noisy third-party DEBUG chatter (matplotlib findfont, PIL, etc.)
+    for noisy in ("matplotlib", "PIL", "fontTools", "numba", "h5py", "anndata"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def log_arguments(args: argparse.Namespace | dict):

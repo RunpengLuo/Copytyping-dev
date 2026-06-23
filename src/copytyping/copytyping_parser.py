@@ -225,6 +225,21 @@ def add_arguments_inference_parameters(
         help="update NB dispersion (inv_phi) in M-step (default: on)",
     )
     parser.add_argument(
+        "--share_dispersion",
+        required=False,
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="share one dispersion per modality instead of per-CNA-state MLE",
+    )
+    parser.add_argument(
+        "--agg_level",
+        required=False,
+        type=str,
+        default=argparse.SUPPRESS,
+        choices=["cnp_cluster", "cnp_segment"],
+        help="CNP aggregation level for the EM fit (default: cnp_cluster)",
+    )
+    parser.add_argument(
         "--n_neighs",
         required=False,
         type=int,

@@ -31,6 +31,7 @@ def model_kwargs_from_args(args: dict):
         "update_pi": args["update_pi"],
         "update_tau": args["update_tau"],
         "update_invphi": args["update_invphi"],
+        "share_dispersion": args["share_dispersion"],
     }
 
 
@@ -130,9 +131,12 @@ def clone_pi_gk(lambda_g: np.ndarray, C: np.ndarray):
 ##################################################
 
 
-def empirical_baf_gn(Y: np.ndarray, D: np.ndarray, norm: bool = False):
+def empirical_baf_gn(count_B: np.ndarray, count_N: np.ndarray, norm: bool = False):
     baf_matrix = np.divide(
-        Y, D, out=np.full_like(D, fill_value=np.nan, dtype=np.float32), where=D > 0
+        count_B,
+        count_N,
+        out=np.full_like(count_N, fill_value=np.nan, dtype=np.float32),
+        where=count_N > 0,
     )
     if norm:
         baf_matrix[~np.isnan(baf_matrix)] -= 0.5
@@ -215,8 +219,8 @@ def estimate_tumor_proportion(
         return theta_arr
 
     if use_a:
-        Y_am = count_data.count_B[am]
-        D_am = count_data.count_C[am]
+        count_B_am = count_data.count_B[am]
+        count_N_am = count_data.count_C[am]
         BAF_am = count_data.cn_BAF[am, 1:]
         rdrs_am = rdrs_tumor[am]
     if use_t:
@@ -231,8 +235,8 @@ def estimate_tumor_proportion(
             Q = 0.0
             if use_a:
                 ll = cond_betabin_logpmf_theta(
-                    Y_am[:, _n : _n + 1],
-                    D_am[:, _n : _n + 1],
+                    count_B_am[:, _n : _n + 1],
+                    count_N_am[:, _n : _n + 1],
                     tau,
                     BAF_am,
                     rdrs_am,
