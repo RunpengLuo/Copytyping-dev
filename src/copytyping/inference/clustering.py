@@ -26,12 +26,12 @@ def prepare_rdr_baf_features(
     baf_masks = count_data.allele_mask["IMBALANCED"]
     baf_matrix = baf_matrix[:, baf_masks]
 
-    X = np.asarray(count_data.count_X)
-    T = X.sum(axis=0)
+    count_X = np.asarray(count_data.count_X)
+    count_T = count_X.sum(axis=0)
     rdr_masks = count_data.total_mask["ANEUPLOID"]
-    rdr_denom = base_props[:, None] @ T[None, :]  # (G, N)
+    rdr_denom = base_props[:, None] @ count_T[None, :]  # (G, N)
     rdr_matrix = np.divide(
-        X,
+        count_X,
         rdr_denom,
         out=np.full_like(rdr_denom, fill_value=np.nan, dtype=np.float32),
         where=rdr_denom > 0,
@@ -74,8 +74,10 @@ def kmeans_copytyping(
 
     features = []
     for count_data in data_sources.values():
-        X = np.asarray(count_data.count_X)
-        base_props = compute_baseline_proportions(X, X.sum(axis=0), is_normal)
+        count_X = np.asarray(count_data.count_X)
+        base_props = compute_baseline_proportions(
+            count_X, count_X.sum(axis=0), is_normal
+        )
         features.append(prepare_rdr_baf_features(count_data, base_props, norm=False))
     data_matrix = np.concatenate(features, axis=1)
 

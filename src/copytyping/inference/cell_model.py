@@ -88,7 +88,7 @@ class Cell_Model(Base_Model):
                 inv_phi = inv_phi[total_mask] if np.ndim(inv_phi) == 2 else inv_phi
                 ll_t[total_mask] = cond_negbin_logpmf(
                     count_data.count_X[total_mask],
-                    self.T[assay_type],
+                    self.count_T[assay_type],
                     props_gk,
                     inv_phi,
                 )
@@ -137,14 +137,14 @@ class Cell_Model(Base_Model):
 
             if fit_mode in {"total", "allele_total"} and self.update_invphi:
                 lambda_g = params[f"{assay_type}-lambda"]
-                T = self.T[assay_type]
+                count_T = self.count_T[assay_type]
                 props_gk = clone_pi_gk(lambda_g, count_data.cn_C)
                 if self.share_dispersion:
                     # one inv_phi, pooled over the aneuploid bins only
                     tm = count_data.total_mask[self.total_mask_id] & (lambda_g > 0)
                     params[f"{assay_type}-inv_phi"] = mle_invphi(
                         count_data.count_X[tm][:, :, None],
-                        props_gk[tm][:, None, :] * T[None, :, None],
+                        props_gk[tm][:, None, :] * count_T[None, :, None],
                         gamma[None, :, :],
                         invphi_bounds=self.invphi_bounds,
                     )
@@ -155,7 +155,7 @@ class Cell_Model(Base_Model):
                     invphi_states = mle_invphi_per_state(
                         count_data.count_X[valid],
                         props_gk[valid],
-                        T,
+                        count_T,
                         gamma,
                         count_data.cn_A[valid],
                         count_data.cn_B[valid],

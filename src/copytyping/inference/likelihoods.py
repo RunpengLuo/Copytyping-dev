@@ -72,37 +72,37 @@ def cond_betabin_logpmf(
 
 
 def cond_negbin_logpmf(
-    X: np.ndarray,
-    T: np.ndarray,
+    count_X: np.ndarray,
+    count_T: np.ndarray,
     pi_gk: np.ndarray,
     inv_phi: np.ndarray,
     eps: float = 1e-12,
 ):
-    """Conditional NegBinomial log-PMF: nb_ll_{g,n,k} = logP(X_{g,n}|l_n=k;param).
+    """Conditional NegBinomial log-PMF: nb_ll_{g,n,k} = logP(count_X_{g,n}|l_n=k;param).
 
     Args:
-        X: (G, N) observed counts
-        T: (N,) library size
+        count_X: (G, N) observed read counts
+        count_T: (N,) library size
         pi_gk: (G, K)
         inv_phi: (G,)
 
     Returns:
         (G, N, K) log-likelihood array.
     """
-    (G, N) = X.shape
-    mu_gnk = pi_gk[:, None, :] * T[None, :, None]
+    (G, N) = count_X.shape
+    mu_gnk = pi_gk[:, None, :] * count_T[None, :, None]
     mu_gnk = np.clip(mu_gnk, eps, None)
-    X_gnk = X[:, :, None]
+    count_X_gnk = count_X[:, :, None]
 
     inv_phi = _broadcast_dispersion(inv_phi, G, N)
 
     # Single expression so result broadcasts to (G, N, K) regardless of inv_phi shape.
     ll = (
-        gammaln(X_gnk + inv_phi)
+        gammaln(count_X_gnk + inv_phi)
         - gammaln(inv_phi)
-        - gammaln(X_gnk + 1.0)
+        - gammaln(count_X_gnk + 1.0)
         + inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
-        + X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+        + count_X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
     )
     return ll
 
@@ -153,8 +153,8 @@ def cond_betabin_logpmf_theta(
 
 
 def cond_negbin_logpmf_theta(
-    X: np.ndarray,
-    T: np.ndarray,
+    count_X: np.ndarray,
+    count_T: np.ndarray,
     lam_g: np.ndarray,
     inv_phi: np.ndarray,
     rdrs_gk: np.ndarray,
@@ -166,25 +166,25 @@ def cond_negbin_logpmf_theta(
     Returns:
         (G, N, K) log-likelihood array.
     """
-    (G, N) = X.shape
+    (G, N) = count_X.shape
 
-    X_gnk = X[:, :, None]
-    T_gnk = T[None, :, None]
+    count_X_gnk = count_X[:, :, None]
+    count_T_gnk = count_T[None, :, None]
     lam_gnk = lam_g[:, None, None]
     rdrs_gnk = rdrs_gk[:, None, :]
     theta_gnk = theta[None, :, None]
     inv_phi = _broadcast_dispersion(inv_phi, G, N)
 
-    mu_gnk = T_gnk * lam_gnk * (theta_gnk * rdrs_gnk + (1.0 - theta_gnk))
+    mu_gnk = count_T_gnk * lam_gnk * (theta_gnk * rdrs_gnk + (1.0 - theta_gnk))
     mu_gnk = np.clip(mu_gnk, eps, None)
 
     # Single expression so result broadcasts to (G, N, K) regardless of inv_phi shape.
     ll = (
-        gammaln(X_gnk + inv_phi)
+        gammaln(count_X_gnk + inv_phi)
         - gammaln(inv_phi)
-        - gammaln(X_gnk + 1.0)
+        - gammaln(count_X_gnk + 1.0)
         + inv_phi * np.log(inv_phi / (inv_phi + mu_gnk))
-        + X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
+        + count_X_gnk * np.log(mu_gnk / (inv_phi + mu_gnk))
     )
     return ll
 
@@ -195,7 +195,7 @@ def cond_negbin_logpmf_theta(
 
 
 def mle_invphi(
-    X_gnk: np.ndarray,
+    count_X_gnk: np.ndarray,
     mu_gnk: np.ndarray,
     weights: np.ndarray,
     invphi_bounds: tuple[float, float] = (1.0, 1e6),
@@ -208,11 +208,11 @@ def mle_invphi(
         if invphi <= 0.0:
             return np.inf
         log_pmf = (
-            gammaln(X_gnk + invphi)
+            gammaln(count_X_gnk + invphi)
             - gammaln(invphi)
-            - gammaln(X_gnk + 1.0)
+            - gammaln(count_X_gnk + 1.0)
             + invphi * np.log(invphi / (invphi + mu_gnk))
-            + X_gnk * np.log(mu_gnk / (invphi + mu_gnk))
+            + count_X_gnk * np.log(mu_gnk / (invphi + mu_gnk))
         )
         return -np.sum(weights * log_pmf)
 
@@ -356,9 +356,9 @@ def mle_tau_per_state(
 
 
 def mle_invphi_per_state(
-    X: np.ndarray,
+    count_X: np.ndarray,
     props_gk: np.ndarray,
-    T: np.ndarray,
+    count_T: np.ndarray,
     gamma: np.ndarray,
     cn_A: np.ndarray,
     cn_B: np.ndarray,
@@ -372,9 +372,9 @@ def mle_invphi_per_state(
     ``expand_state_map`` to broadcast onto the likelihood bins.
 
     Args:
-        X: (G, N) observed read counts.
+        count_X: (G, N) observed read counts.
         props_gk: (G, K) per-clone expected read-depth proportion (lambda * RDR).
-        T: (N,) per-cell library size.
+        count_T: (N,) per-cell library size.
         gamma: (N, K) posterior responsibilities.
         cn_A, cn_B: (G, K) per-clone copy numbers (the CNA state).
         invphi_bounds: (lo, hi) bounds for inv_phi.
@@ -391,18 +391,20 @@ def mle_invphi_per_state(
         if w.sum() < eps:  # unassigned state -> leave at Poisson limit
             invphi_states[label] = float(invphi_bounds[1])
             continue
-        mu = np.clip(props_gk[g_idx, k_idx][:, None] * T[None, :], eps, None)  # (P, N)
-        Xp = X[g_idx]  # (P, N)
+        mu = np.clip(
+            props_gk[g_idx, k_idx][:, None] * count_T[None, :], eps, None
+        )  # (P, N)
+        count_X_p = count_X[g_idx]  # (P, N)
 
-        def neg_Q(invphi, mu=mu, Xp=Xp, w=w):
+        def neg_Q(invphi, mu=mu, count_X_p=count_X_p, w=w):
             if invphi <= 0.0:
                 return np.inf
             log_pmf = (
-                gammaln(Xp + invphi)
+                gammaln(count_X_p + invphi)
                 - gammaln(invphi)
-                - gammaln(Xp + 1.0)
+                - gammaln(count_X_p + 1.0)
                 + invphi * np.log(invphi / (invphi + mu))
-                + Xp * np.log(mu / (invphi + mu))
+                + count_X_p * np.log(mu / (invphi + mu))
             )
             return -np.sum(w * log_pmf)
 

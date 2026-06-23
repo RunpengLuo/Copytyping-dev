@@ -24,7 +24,6 @@ def model_kwargs_from_args(args: dict):
     flat ``args`` dict, so callers can ``Model(..., **model_kwargs_from_args(args))``."""
     return {
         "no_normal": args["no_normal"],
-        "pi_alpha": args["pi_alpha"],
         "tau_bounds": (args["min_tau"], args["max_tau"]),
         "invphi_bounds": (args["min_invphi"], args["max_invphi"]),
         "niters": args["niters"],
@@ -57,8 +56,8 @@ def save_model_params(
 
 
 def compute_baseline_proportions(
-    X: np.ndarray,
-    T: np.ndarray,
+    count_X: np.ndarray,
+    count_T: np.ndarray,
     ref_labels: np.ndarray,
     ref_cn: np.ndarray | None = None,
     eps: float = 1e-12,
@@ -66,15 +65,15 @@ def compute_baseline_proportions(
     """Per-bin read-depth baseline from the reference-cell pseudobulk.
 
     ref_cn=None assumes a diploid reference (normal cells): lambda_g =
-    sum_ref X_g / sum_ref T. When ref_cn (per-bin total CN of the reference
-    clone) is given, divide out that clone's copy ratio so a non-diploid major
-    clone yields the diploid baseline: lambda_g = (sum_ref X_g / (ref_cn_g/2)),
-    normalized to sum 1. The two are identical when ref_cn == 2 everywhere.
+    sum_ref count_X_g / sum_ref count_T. When ref_cn (per-bin total CN of the
+    reference clone) is given, divide out that clone's copy ratio so a non-diploid
+    major clone yields the diploid baseline: lambda_g = (sum_ref count_X_g /
+    (ref_cn_g/2)), normalized to sum 1. Identical when ref_cn == 2 everywhere.
     """
-    X_ref = np.sum(X[:, ref_labels], axis=1)
+    count_X_ref = np.sum(count_X[:, ref_labels], axis=1)
     if ref_cn is None:
-        return X_ref / np.sum(T[ref_labels])
-    base = X_ref / np.clip(ref_cn / 2.0, eps, None)
+        return count_X_ref / np.sum(count_T[ref_labels])
+    base = count_X_ref / np.clip(ref_cn / 2.0, eps, None)
     total = base.sum()
     return base / total if total > 0 else np.ones_like(base) / len(base)
 
@@ -93,8 +92,10 @@ def compute_rdr_baseline(
     if ref_cells is None or int(ref_cells.sum()) == 0:
         return None
     ref_cn = count_data.cn_C[:, ref_clone] if no_normal else None
-    T = np.asarray(count_data.count_X.sum(axis=0)).ravel()
-    return compute_baseline_proportions(count_data.count_X, T, ref_cells, ref_cn=ref_cn)
+    count_T = np.asarray(count_data.count_X.sum(axis=0)).ravel()
+    return compute_baseline_proportions(
+        count_data.count_X, count_T, ref_cells, ref_cn=ref_cn
+    )
 
 
 ##################################################
@@ -145,20 +146,20 @@ def empirical_baf_gn(count_B: np.ndarray, count_N: np.ndarray, norm: bool = Fals
 
 
 def empirical_rdr_gn(
-    X: np.ndarray,
-    T: np.ndarray,
+    count_X: np.ndarray,
+    count_T: np.ndarray,
     base_props: np.ndarray,
     log2: bool = False,
     norm: bool = False,
 ):
     """
-    X: (G, N) G bin by spot/cell N count matrix
-    T: (N,) total expression counts
-    T*lambda_g*[(1-rho_n) + rho_n*rdr_gk]
+    count_X: (G, N) G bin by spot/cell N count matrix
+    count_T: (N,) total expression counts
+    count_T*lambda_g*[(1-rho_n) + rho_n*rdr_gk]
     """
-    rdr_denom = base_props[:, None] @ T[None, :]  # (G, N)
+    rdr_denom = base_props[:, None] @ count_T[None, :]  # (G, N)
     rdr_matrix = np.divide(
-        X,
+        count_X,
         rdr_denom,
         out=np.full_like(rdr_denom, fill_value=np.nan, dtype=np.float32),
         where=rdr_denom > 0,
@@ -179,7 +180,7 @@ def empirical_rdr_gn(
 
 def estimate_tumor_proportion(
     count_data: "Count_Data",
-    T: np.ndarray,
+    count_T: np.ndarray,
     base_props: np.ndarray,
     tau: float,
     inv_phi: float,
@@ -193,7 +194,7 @@ def estimate_tumor_proportion(
 
     Args:
         count_data: Count_Data with count_X, count_B, count_C, cn_C, cn_BAF, allele_mask, total_mask.
-        T: (N,) per-spot library size.
+        count_T: (N,) per-spot library size.
         base_props: (G,) baseline lambda from normal cells.
         tau: BB concentration scalar.
         inv_phi: NB inv-phi scalar.
@@ -224,7 +225,7 @@ def estimate_tumor_proportion(
         BAF_am = count_data.cn_BAF[am, 1:]
         rdrs_am = rdrs_tumor[am]
     if use_t:
-        X_tm = count_data.count_X[tm]
+        count_X_tm = count_data.count_X[tm]
         lambda_tm = base_props[tm]
         rdrs_tm = rdrs_tumor[tm]
 
@@ -246,8 +247,8 @@ def estimate_tumor_proportion(
                 Q += float(ll[:, 0, 0].sum())
             if use_t:
                 ll = cond_negbin_logpmf_theta(
-                    X_tm[:, _n : _n + 1],
-                    np.array([T[_n]], dtype=float),
+                    count_X_tm[:, _n : _n + 1],
+                    np.array([count_T[_n]], dtype=float),
                     lambda_tm,
                     inv_phi,
                     rdrs_tm,

@@ -20,7 +20,6 @@ class Base_Model:
         total_mask_id: str = "ANEUPLOID",
         *,
         no_normal: bool = False,
-        pi_alpha: float = 1.0,
         tau_bounds: tuple[float, float] = (1.0, 1e6),
         invphi_bounds: tuple[float, float] = (1.0, 1e6),
         niters: int = 100,
@@ -37,7 +36,7 @@ class Base_Model:
         self.num_barcodes = len(self.barcodes)
 
         # per-cell library size per modality
-        self.T = {a: self.count_data[a].count_X.sum(axis=0) for a in assay_types}
+        self.count_T = {a: self.count_data[a].count_X.sum(axis=0) for a in assay_types}
         self.clones = self.count_data[assay_types[0]].clones
         self.num_clones = len(self.clones)
         self.tumor_clones = self.clones[1:]
@@ -48,7 +47,6 @@ class Base_Model:
 
         # model configuration (population-wide; no per-rep grouping)
         self.no_normal = no_normal
-        self.pi_alpha = pi_alpha
         self.tau_bounds = tau_bounds
         self.invphi_bounds = invphi_bounds
         self.niters = niters
@@ -93,7 +91,6 @@ class Base_Model:
             assay_types=self.assay_types,
             allele_mask_id=mask_id,
             no_normal=self.no_normal,
-            pi_alpha=self.pi_alpha,
             tau_bounds=self.tau_bounds,
             invphi_bounds=self.invphi_bounds,
             niters=self.niters,
@@ -145,7 +142,7 @@ class Base_Model:
             ref_cn = count_data.cn_C[:, ref_clone] if no_normal else None
             self.model_params[f"{assay_type}-lambda"] = compute_baseline_proportions(
                 count_data.count_X,
-                self.T[assay_type],
+                self.count_T[assay_type],
                 is_reference,
                 ref_cn=ref_cn,
             )
@@ -173,15 +170,12 @@ class Base_Model:
     # M-step helpers
     # ------------------------------------------------------------------
     def _update_pi(self, gamma: np.ndarray, N_eff: float, K_eff: int):
-        """Global MAP pi update with Dirichlet(alpha) prior. pi has shape (K_eff,)."""
+        """Global MLE pi update (no prior). pi has shape (K_eff,)."""
         if not self.update_pi:
             return
-        alpha = self.pi_alpha
         N_k = gamma.sum(axis=0)  # (K_eff,)
-        denom = max(N_eff + K_eff * (alpha - 1), 1e-10)
-        row = np.clip((N_k + alpha - 1) / denom, 0, None)
-        s = row.sum()
-        self.model_params["pi"] = row / s if s > 0 else np.ones(K_eff) / K_eff
+        s = N_k.sum()
+        self.model_params["pi"] = N_k / s if s > 0 else np.ones(K_eff) / K_eff
 
     # ------------------------------------------------------------------
     # Fit (common EM loop)

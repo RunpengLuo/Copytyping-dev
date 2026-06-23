@@ -196,14 +196,6 @@ def add_arguments_inference_parameters(
         "inv_phi is a concentration parameter: larger=less dispersed",
     )
     parser.add_argument(
-        "--pi_alpha",
-        required=False,
-        default=argparse.SUPPRESS,
-        type=float,
-        help="symmetric Dirichlet prior alpha for pi. "
-        "1: non-informative, <1: sparse, >1: smoothing",
-    )
-    parser.add_argument(
         "--update_pi",
         required=False,
         action=argparse.BooleanOptionalAction,

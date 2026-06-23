@@ -59,7 +59,12 @@ class Spot_Model(Base_Model):
                 params[f"{assay}-inv_phi"] = self.invphi_bounds[1]
                 invphi_init = float(self.invphi_bounds[1])
             params[f"{assay}-theta"] = estimate_tumor_proportion(
-                count_data, self.T[assay], lg, tau_init, invphi_init, fit_mode=fit_mode
+                count_data,
+                self.count_T[assay],
+                lg,
+                tau_init,
+                invphi_init,
+                fit_mode=fit_mode,
             )
             # Precompute: rdrs only for tumor clones (exclude normal column)
             rdrs_full = clone_rdr_gk(lg, count_data.cn_C)
@@ -106,7 +111,7 @@ class Spot_Model(Base_Model):
             if fit_mode in {"total", "allele_total"} and total_mask.any():
                 ll_t[total_mask] = cond_negbin_logpmf_theta(
                     count_data.count_X[total_mask],
-                    self.T[assay],
+                    self.count_T[assay],
                     params[f"{assay}-lambda"][total_mask],
                     params[f"{assay}-inv_phi"],
                     rdrs[total_mask],

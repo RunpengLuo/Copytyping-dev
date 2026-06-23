@@ -207,9 +207,9 @@ def prepare_rdr(
     log2: bool = True,
 ):
     library_size = read_counts.sum(axis=0)
-    X = _aggregate_columns(read_counts, row_groups)
-    T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
-    return empirical_rdr_gn(X, T, base_props, log2=log2).T
+    count_X = _aggregate_columns(read_counts, row_groups)
+    count_T = np.array([library_size[g].sum() for g in row_groups], dtype=np.int64)
+    return empirical_rdr_gn(count_X, count_T, base_props, log2=log2).T
 
 
 def prepare_pi_gk(read_counts: np.ndarray, row_groups: list[np.ndarray]):
