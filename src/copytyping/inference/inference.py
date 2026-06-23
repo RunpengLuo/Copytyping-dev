@@ -282,6 +282,10 @@ def run(args: dict | None = None):
             barcodes=anns,
             dpi=args["dpi"],
         )
+    
+    # ---- validate ----------------------------------------------------------
+    if cell_type_df is not None:
+        pass
 
     logging.info(f"inference complete. outputs in {out_dir}")
     logging.root.removeHandler(_file_handler)
