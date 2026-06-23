@@ -26,7 +26,7 @@ class Base_Model:
         update_pi: bool = True,
         update_tau: bool = True,
         update_invphi: bool = True,
-        share_dispersion: bool = False,
+        share_dispersion: bool = True,
     ):
         self.assay_types = assay_types
         self.platform = platform

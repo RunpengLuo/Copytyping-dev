@@ -26,8 +26,8 @@ update_pi: true
 update_tau: true
 # Update NB inv_phi in M-step?
 update_invphi: true
-# Share one dispersion per modality (true) vs per-CNA-state MLE (false).
-share_dispersion: false
+# Share one dispersion per modality (true, robust default) vs per-CNA-state MLE.
+share_dispersion: true
 # CNP aggregation level for the EM fit: cnp_cluster | cnp_segment
 agg_level: cnp_cluster
 
