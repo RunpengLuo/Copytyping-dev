@@ -346,7 +346,18 @@ def _draw_mirror_swatches(
     return leg_x + mirror_w
 
 
-def plot_cnv_legend(ax: plt.Axes):
+def cnp_has_mirror(cnprofile: pd.DataFrame) -> bool:
+    """True if any clone in any segment has a mirrored state (B copies > A copies),
+    i.e. the same event that draws a triangle overlay in plot_cnv_profile."""
+    for cnp in cnprofile["CNP"]:
+        for ab in str(cnp).split(";")[1:]:  # skip leading normal entry
+            cna, cnb = ab.split("|")
+            if int(cnb) > int(cna):
+                return True
+    return False
+
+
+def plot_cnv_legend(ax: plt.Axes, has_mirror: bool = True):
     state_style, tcn_states = get_cn_colors()
     ax.axis("off")
 
@@ -412,9 +423,10 @@ def plot_cnv_legend(ax: plt.Axes):
     )
     leg_x = group_x0 + pair_w + gap_groups
 
-    # --- mirrored CNA symbol on the right ------------------------------------
-    leg_x = _draw_mirror_swatches(ax, leg_x + mirror_gap, fontsize=10, alpha=1.0)
-    leg_x += mirror_gap
+    # --- mirrored CNA symbol on the right (only if mirror events present) ----
+    if has_mirror:
+        leg_x = _draw_mirror_swatches(ax, leg_x + mirror_gap, fontsize=10, alpha=1.0)
+        leg_x += mirror_gap
 
     # main title on the left
     ax.text(

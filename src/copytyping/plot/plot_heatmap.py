@@ -13,6 +13,7 @@ from matplotlib.patches import Patch, Rectangle
 from copytyping.utils import read_whitelist_segments
 from copytyping.inference.model_utils import empirical_baf_gn, empirical_rdr_gn
 from copytyping.plot.plot_copynumber import (
+    cnp_has_mirror,
     plot_ascn_legend,
     plot_ascn_profile,
     plot_cnv_legend,
@@ -464,7 +465,7 @@ def plot_cnv_heatmap(
         plot_ascn_legend(axes[2])
     else:
         plot_cnv_profile(axes[1], haplo_blocks, wl_fragments, plot_chrname=False)
-        plot_cnv_legend(axes[2])
+        plot_cnv_legend(axes[2], has_mirror=cnp_has_mirror(haplo_blocks))
 
     title = f"{sample} {rep_id} {assay_type} {val} Heatmap".replace("  ", " ")
     if agg_size > 1:

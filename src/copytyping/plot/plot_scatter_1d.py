@@ -8,6 +8,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
 from copytyping.plot.plot_copynumber import (
+    cnp_has_mirror,
     plot_ascn_legend,
     plot_ascn_profile,
     get_cn_colors,
@@ -467,7 +468,9 @@ def plot_rdr_baf_1d_pseudobulk(
     if ascn_profile:
         plot_ascn_legend(axes[-1])
     else:
-        plot_cnv_legend(axes[-1])
+        plot_cnv_legend(
+            axes[-1], has_mirror=has_cnp and cnp_has_mirror(haplo_blocks)
+        )
 
     title = f"sample={sample}  platform={kwargs.get('platform', '')}  assay_type={assay_type}"
     if kwargs.get("subtitle"):
