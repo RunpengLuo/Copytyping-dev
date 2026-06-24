@@ -66,7 +66,11 @@ min_snp_umi_per_spot: 0
 
 ##################################################
 # inference / validate — plot parameters
-dpi: 200
+dpi: 300
+# Figure format: pdf (multi-page) | png | svg (one file per page).
+img_type: pdf
+# Transparent figure background.
+transparent: false
 # Aggregate observations in heatmap (cells per row in agg10 view).
 heatmap_agg: 10
 # Min SNP count per adaptive BBC bin for 1d scatter.

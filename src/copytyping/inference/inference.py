@@ -2,7 +2,6 @@ import logging
 import os
 
 import numpy as np
-from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.copytyping_parser import check_arguments_inference
 from copytyping.inference.cell_model import Cell_Model
@@ -28,6 +27,7 @@ from copytyping.io_utils import (
     read_bbc_phases,
     build_spatial_graphs,
 )
+from copytyping.plot.plot_common import FigureSaver, build_label_color_maps
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_scatter_2d import plot_scatter_2d_per_cell
@@ -141,6 +141,9 @@ def run(args: dict | None = None):
     # ---- plots ----------------------------------------------------------
     plot_dir = os.path.join(out_dir, "plots")
     os.makedirs(plot_dir, exist_ok=True)
+    dpi = args["dpi"]
+    img_type = args["img_type"]
+    transparent = args["transparent"]
     # RDR baseline from model reference cells; fall back to normal labels
     is_reference = model.is_reference
     ref_clone = model.ref_clone
@@ -152,6 +155,11 @@ def run(args: dict | None = None):
     plot_labels = [label]
     if args["ref_label"] in anns.columns:
         plot_labels.append(args["ref_label"])
+    # one shared color map across all plots (clone label primary, then cell type),
+    # so a value (e.g. a cell type) keeps the same color in every figure
+    plot_color_maps = build_label_color_maps(
+        {lab: anns[lab].to_numpy() for lab in plot_labels}, primary_label=label
+    )
 
     for assay_type in assay_types:
         cluster_count_data = cluster_count_datas[assay_type]
@@ -175,7 +183,8 @@ def run(args: dict | None = None):
         theta = model_params.get(f"{assay_type}-theta")
         rep_ids = sorted(seg_count_data.barcodes["REP_ID"].unique())
 
-        # 2D BAF-vs-log2RDR scatter per CNP cluster (all cells)
+        # 2D BAF-vs-log2RDR cross-tab grid per CNP cluster: rows = cell type,
+        # cols = inferred clone (cells colored by clone). One PDF per assay.
         plot_scatter_2d_per_cell(
             cluster_count_data.count_X,
             cluster_count_data.count_B,
@@ -189,18 +198,22 @@ def run(args: dict | None = None):
             cluster_profile,
             anns,
             sample_id,
-            os.path.join(plot_dir, f"{out_prefix}.{assay_type}.cluster_2d.pdf"),
-            label,
+            os.path.join(plot_dir, f"{out_prefix}.{assay_type}.cluster_2d"),
+            col_label=label,
+            row_label=(
+                args["ref_label"] if args["ref_label"] in anns.columns else None
+            ),
             base_props=cluster_baseline,
-            dpi=args["dpi"],
+            dpi=dpi,
+            img_type=img_type,
+            transparent=transparent,
+            color_map=plot_color_maps[label],
         )
 
-        # CNV heatmaps: one PDF per agg level; pages = rep_id x [BAF, log2RDR]
+        # CNV heatmaps: one file set per agg level; pages = rep_id x [BAF, log2RDR]
         for agg in [1, args["heatmap_agg"]]:
-            fname = os.path.join(
-                plot_dir, f"{out_prefix}.{assay_type}.heatmap.agg{agg}.pdf"
-            )
-            with PdfPages(fname) as pdf:
+            base = os.path.join(plot_dir, f"{out_prefix}.{assay_type}.heatmap.agg{agg}")
+            with FigureSaver(base, img_type, dpi, transparent) as pdf:
                 for rep_id in rep_ids:
                     seg_rep_data, rep_mask = seg_count_data.subset_by_rep(rep_id)
                     anns_rep = anns.iloc[rep_mask].reset_index(drop=True)
@@ -228,14 +241,15 @@ def run(args: dict | None = None):
                             figsize=(20, 6 if agg > 1 else 15),
                             rep_id=rep_id,
                             ascn_profile=args["ascn_profile"],
+                            color_maps=plot_color_maps,
                         )
 
         # 1D pseudobulk RDR + BAF along the genome, per rep, per label
         for my_label in plot_labels:
-            fname = os.path.join(
-                plot_dir, f"{out_prefix}.{assay_type}.1d_scatter.{my_label}.pdf"
+            base = os.path.join(
+                plot_dir, f"{out_prefix}.{assay_type}.1d_scatter.{my_label}"
             )
-            with PdfPages(fname) as pdf:
+            with FigureSaver(base, img_type, dpi, transparent) as pdf:
                 for rep_id in rep_ids:
                     bin_rep_data, rep_mask = bin_count_data.subset_by_rep(rep_id)
                     anns_rep = anns.iloc[rep_mask].reset_index(drop=True)
@@ -281,7 +295,9 @@ def run(args: dict | None = None):
             ref_label=args["ref_label"],
             labeling_trace=getattr(model, "labeling_trace", None) or None,
             barcodes=anns,
-            dpi=args["dpi"],
+            dpi=dpi,
+            img_type=img_type,
+            transparent=transparent,
         )
 
     # ---- validate ----------------------------------------------------------

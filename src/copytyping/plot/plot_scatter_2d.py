@@ -1,13 +1,16 @@
 import logging
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.plot.plot_common import _clone_order_key, build_label_colors
+from copytyping.plot.plot_common import (
+    FigureSaver,
+    NA_COLOR,
+    _clone_order_key,
+    build_label_colors,
+)
+from copytyping.utils import NA_CELLTYPE, is_tumor_label
 
 
 def plot_scatter_2d_per_cell(
@@ -24,13 +27,23 @@ def plot_scatter_2d_per_cell(
     anns: pd.DataFrame,
     sample: str,
     outfile: str,
-    label_col: str,
+    col_label: str,
+    row_label: str | None = None,
     base_props: np.ndarray | None = None,
     markersize: int = 4,
     rasterized: bool = True,
     dpi: int = 100,
+    img_type: str = "pdf",
+    transparent: bool = False,
+    color_map: dict[str, str] | None = None,
 ):
-    """Per-cluster 2D scatter (BAF vs log2RDR) with marginal KDEs, one page per cluster.
+    """Per-cluster 2D BAF-vs-log2RDR cross-tab grid, one page per cluster.
+
+    Each page is a grid with ``row_label`` (e.g. cell type) as rows and
+    ``col_label`` (e.g. inferred clone) as columns; each ax shows the cells in
+    that (row, col) intersection, colored by the column (``color_map``). Only the
+    column's own clone CN-state landmark (expected BAF/log2RDR) is drawn. All axes
+    share the same scale.
 
     Args:
         read_counts: (G, N) read depth / feature counts.
@@ -41,18 +54,25 @@ def plot_scatter_2d_per_cell(
         imbalanced/aneuploid: (G,) boolean masks selecting informative rows
             (from Count_Data.allele_mask["IMBALANCED"] / total_mask["ANEUPLOID"]).
         cnprofile: per-row CNP table (CNP/LENGTH columns for titles).
-        anns: per-cell annotations (one row per column N), holds ``label_col``.
+        anns: per-cell annotations; holds ``col_label`` and (optional) ``row_label``.
+        col_label: column label column (clone); also selects each cell's color.
+        row_label: row label column (cell type); None -> single row.
+        color_map: {value: color} for ``col_label`` (shared across plots).
         base_props: (G,) RDR baseline; defaults to the global read-count fraction.
     """
     cluster_indices = np.where(imbalanced | aneuploid)[0]
-    labels = anns[label_col].values
+    col_labels_all = anns[col_label].to_numpy()
+    row_labels_all = anns[row_label].to_numpy() if row_label is not None else None
 
     num_clones = cn_A.shape[1]
     library_size = read_counts.sum(axis=0).astype(float)
     if base_props is None:
         base_props = read_counts.sum(axis=1) / max(library_size.sum(), 1)
 
-    with PdfPages(outfile) as pdf:
+    out_base = (
+        outfile[:-4] if outfile.lower().endswith((".pdf", ".png", ".svg")) else outfile
+    )
+    with FigureSaver(out_base, img_type, dpi, transparent) as pdf:
         for g in cluster_indices:
             row = cnprofile.iloc[g]
             length_mb = row["LENGTH"] / 1e6 if "LENGTH" in row.index else np.nan
@@ -81,107 +101,135 @@ def plot_scatter_2d_per_cell(
             baf = ballele_g[valid] / total_allele_g[valid]
             rdr = read_g[valid] / (library_size[valid] * lam_g)
             log2rdr = np.log2(np.clip(rdr, 1e-6, None))
-            hue = labels[valid]
+            col_cells = col_labels_all[valid]
+            row_cells = row_labels_all[valid] if row_labels_all is not None else None
 
-            uniq = sorted(set(hue), key=_clone_order_key)
-            palette = dict(zip(uniq, build_label_colors(uniq, clone_indexed=True)))
+            col_vals = sorted(set(col_cells), key=_clone_order_key)
+            row_vals = (
+                sorted(set(row_cells), key=_clone_order_key)
+                if row_cells is not None
+                else [None]
+            )
+            # marginal cell counts (column-sum per clone, row-sum per cell type)
+            col_total = {cv: int((col_cells == cv).sum()) for cv in col_vals}
+            row_total = (
+                {rv: int((row_cells == rv).sum()) for rv in row_vals}
+                if row_cells is not None
+                else {}
+            )
 
-            df = pd.DataFrame({"BAF": baf, "log2RDR": log2rdr, label_col: hue})
+            def col_color(cv):
+                if color_map is not None:
+                    return color_map.get(str(cv), NA_COLOR)
+                return build_label_colors([cv], clone_indexed=True)[0]
 
-            # Pre-compute expected (BAF, log2RDR) per clone (used for ylim + markers below).
-            # BAF: B/(A+B). log2RDR: log2(C_{g,k} / sum_g(lambda_g * C_{g,k})).
-            exp_points = defaultdict(list)
+            # Expected (BAF, log2RDR) landmark per clone: BAF=B/(A+B),
+            # log2RDR=log2(C_{g,k} / sum_g(lambda_g * C_{g,k})).
+            exp_by_clone = {}
             for k in range(num_clones):
                 C_k = cn_C[g, k]
                 exp_baf_k = cn_B[g, k] / C_k if C_k > 0 else 0.5
                 denom_k = float(np.sum(base_props * cn_C[:, k]))
-                if denom_k > 0 and C_k > 0:
-                    exp_log2rdr_k = np.log2(C_k / denom_k)
-                else:
-                    exp_log2rdr_k = 0.0
-                key = (round(exp_baf_k, 4), round(exp_log2rdr_k, 4))
-                exp_points[key].append(clones[k])
+                exp_log2rdr_k = (
+                    np.log2(C_k / denom_k) if (denom_k > 0 and C_k > 0) else 0.0
+                )
+                exp_by_clone[clones[k]] = (exp_baf_k, exp_log2rdr_k)
 
             xlim = (-0.05, 1.05)
             # Adaptive ylim: tighten to (-2, 2) if all obs + expected fit, else (-5, 5)
             obs_finite = log2rdr[np.isfinite(log2rdr)]
-            exp_finite = np.array([y for _, y in exp_points.keys()], dtype=float)
+            exp_finite = np.array([y for _, y in exp_by_clone.values()], dtype=float)
             all_y = np.concatenate([obs_finite, exp_finite])
             if all_y.size > 0 and all_y.min() >= -2 and all_y.max() <= 2:
                 ylim = (-2, 2)
             else:
                 ylim = (-5, 5)
 
-            g0 = sns.JointGrid(
-                data=df,
-                x="BAF",
-                y="log2RDR",
-                hue=label_col,
-                hue_order=uniq,
-                palette=palette,
-                xlim=xlim,
-                ylim=ylim,
+            # Grid: rows = row_label (cell type), cols = col_label (clone). Each ax
+            # holds the coinciding cells, colored by the column (clone).
+            nrows, ncols = len(row_vals), len(col_vals)
+            fig, axes = plt.subplots(
+                nrows,
+                ncols,
+                figsize=(3.0 * ncols, 3.0 * nrows),
+                sharex=True,
+                sharey=True,
+                squeeze=False,
             )
-            g0.refline(x=0.50, y=0.0)
-            g0.plot_joint(
-                sns.scatterplot,
-                s=markersize,
-                edgecolors="none",
-            )
-            g0.plot_marginals(
-                sns.kdeplot,
-                common_norm=False,
-                linewidth=0.8,
-                fill=False,
-            )
-            scatter = g0.ax_joint.collections[0]
-            scatter.set_rasterized(rasterized)
-            scatter.set_antialiased(False)
+            for r, row_v in enumerate(row_vals):
+                for c, col_v in enumerate(col_vals):
+                    ax = axes[r][c]
+                    m = col_cells == col_v
+                    if row_v is not None:
+                        m = m & (row_cells == row_v)
+                    n_cells = int(m.sum())
+                    if n_cells == 0:
+                        ax.text(
+                            0.5,
+                            0.5,
+                            "N/A",
+                            transform=ax.transAxes,
+                            ha="center",
+                            va="center",
+                            fontsize=24,
+                            fontweight="bold",
+                            color="lightgray",
+                        )
+                    else:
+                        ax.scatter(
+                            baf[m],
+                            log2rdr[m],
+                            s=markersize * 2,
+                            c=col_color(col_v),
+                            edgecolors="none",
+                            rasterized=rasterized,
+                            antialiased=False,
+                        )
+                        ax.axvline(0.5, color="grey", linewidth=0.5)
+                        ax.axhline(0.0, color="grey", linewidth=0.5)
+                        if col_v in exp_by_clone:  # only this column's clone landmark
+                            ax.plot(
+                                *exp_by_clone[col_v],
+                                marker="x",
+                                color="black",
+                                markersize=8,
+                                markeredgewidth=2.0,
+                                alpha=0.8,
+                                zorder=10,
+                            )
+                    ax.set_xlim(xlim)
+                    ax.set_ylim(ylim)
+                    ax.set_title(f"n={n_cells}", fontsize=9)
+                    # FP/FN intersection (tumor cell <-> normal clone, or
+                    # non-tumor cell <-> tumor clone) with cells -> dark-red border
+                    row_known = row_v is not None and str(row_v) not in NA_CELLTYPE
+                    if (
+                        n_cells > 0
+                        and row_known
+                        and is_tumor_label(row_v) != is_tumor_label(col_v)
+                    ):
+                        for spine in ax.spines.values():
+                            spine.set_edgecolor("darkred")
+                            spine.set_linewidth(2.0)
+                    if c == 0 and row_v is not None:
+                        ax.set_ylabel(
+                            f"{row_v} (n={row_total[row_v]})",
+                            fontsize=11,
+                            fontweight="bold",
+                        )
+                    if r == nrows - 1:
+                        ax.set_xlabel(
+                            f"{col_v} (n={col_total[col_v]})",
+                            fontsize=11,
+                            fontweight="bold",
+                        )
 
-            for (exp_baf, exp_log2rdr), clone_names in exp_points.items():
-                g0.ax_joint.plot(
-                    exp_baf,
-                    exp_log2rdr,
-                    marker="x",
-                    color="black",
-                    markersize=10,
-                    markeredgewidth=2.5,
-                    zorder=10,
-                )
-                label_text = ", ".join(clone_names)
-                if len(clone_names) > 1:
-                    label_text = f"({label_text})"
-                g0.ax_joint.annotate(
-                    label_text,
-                    (exp_baf, exp_log2rdr),
-                    textcoords="offset points",
-                    xytext=(6, 4),
-                    fontsize=7,
-                    fontweight="bold",
-                )
-
-            # Move legend outside, enlarge markers
-            leg = g0.ax_joint.get_legend()
-            if leg is not None:
-                leg.remove()
-            handles, labels_leg = g0.ax_joint.get_legend_handles_labels()
-            g0.ax_marg_y.legend(
-                handles,
-                labels_leg,
-                loc="upper left",
-                fontsize=8,
-                framealpha=0.8,
-                borderaxespad=0.5,
-                markerscale=5,
-            )
-
-            g0.figure.suptitle(
+            fig.suptitle(
                 f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
-                f"{'/'.join(tag)}\nCN: {cn_str}",
-                fontsize=10,
+                f"{'/'.join(tag)}\nCN: {cn_str}  (x=BAF, y=log2RDR)",
+                fontsize=11,
                 fontweight="bold",
-                y=1.02,
             )
-            g0.figure.tight_layout()
-            pdf.savefig(g0.figure, dpi=dpi, bbox_inches="tight")
-            plt.close(g0.figure)
+            fig.tight_layout()
+            pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)

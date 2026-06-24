@@ -4,8 +4,58 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.backends.backend_pdf import PdfPages
 
 from copytyping.utils import INVALID_LABELS, NA_CELLTYPE
+
+
+class FigureSaver:
+    """Multi-figure writer that is a drop-in for ``PdfPages``.
+
+    With ``img_type='pdf'`` it writes a single multi-page PDF at
+    ``{out_base}.pdf``. With ``img_type in {'png','svg'}`` each page is written
+    as its own file ``{out_base}.p{i}.{img_type}``. ``savefig`` mirrors the
+    ``PdfPages.savefig`` signature (extra kwargs are ignored — dpi/transparent
+    come from the saver) so callers need no changes. Use as a context manager.
+    """
+
+    def __init__(
+        self,
+        out_base: str,
+        img_type: str = "pdf",
+        dpi: int = 300,
+        transparent: bool = False,
+    ):
+        self.out_base = out_base
+        self.img_type = img_type
+        self.dpi = dpi
+        self.transparent = transparent
+        self._page = 0
+        self._pdf = PdfPages(f"{out_base}.pdf") if img_type == "pdf" else None
+
+    def savefig(self, fig: plt.Figure, *args, **kwargs):
+        if self._pdf is not None:
+            self._pdf.savefig(
+                fig, dpi=self.dpi, bbox_inches="tight", transparent=self.transparent
+            )
+        else:
+            fig.savefig(
+                f"{self.out_base}.p{self._page}.{self.img_type}",
+                dpi=self.dpi,
+                bbox_inches="tight",
+                transparent=self.transparent,
+            )
+        self._page += 1
+
+    def close(self):
+        if self._pdf is not None:
+            self._pdf.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
 
 
 # ── Unified label color palette (shared by heatmap + visium) ──

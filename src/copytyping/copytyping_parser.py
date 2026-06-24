@@ -265,7 +265,22 @@ def add_arguments_inference_parameters(
         required=False,
         type=int,
         default=argparse.SUPPRESS,
-        help="DPI for plots",
+        help="image resolution (default: 300)",
+    )
+    parser.add_argument(
+        "--img_type",
+        required=False,
+        type=str,
+        choices=["pdf", "png", "svg"],
+        default=argparse.SUPPRESS,
+        help="figure format; pdf=multi-page, png/svg=one file per page (default: pdf)",
+    )
+    parser.add_argument(
+        "--transparent",
+        required=False,
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="transparent figure background (default: False)",
     )
     parser.add_argument(
         "--heatmap_agg",

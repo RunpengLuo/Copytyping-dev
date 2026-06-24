@@ -346,6 +346,7 @@ def plot_cnv_heatmap(
     transparent: bool = False,
     rep_id: str = "",
     ascn_profile: bool = False,
+    color_maps: dict | None = None,
 ):
     assert val in ["BAF", "RDR", "log2RDR", "COUNT", "pi_gk"]
     wl_fragments = read_whitelist_segments(region_bed)
@@ -441,7 +442,10 @@ def plot_cnv_heatmap(
                 continue
             col_vals = anns[col].to_numpy()
             row_label_map[col] = np.array([_mode(col_vals[g]) for g in row_groups])
-    color_maps = build_label_color_maps(row_label_map, primary_label)
+    # use the shared palette if provided (consistent across all plots), else
+    # build one from this heatmap's own (aggregated) label values
+    if color_maps is None:
+        color_maps = build_label_color_maps(row_label_map, primary_label)
 
     fig, axes = plt.subplots(
         nrows=3, ncols=1, figsize=figsize, gridspec_kw={"height_ratios": hratios}

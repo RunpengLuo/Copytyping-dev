@@ -9,12 +9,12 @@ import squidpy as sq
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
-from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.collections import PatchCollection
 
 from sklearn.metrics import roc_auc_score
 
 from copytyping.plot.plot_common import (
+    FigureSaver,
     NORMAL_COLOR,
     PURITY_CMAP,
     build_label_color_maps,
@@ -110,6 +110,8 @@ def plot_visium_all(
     labeling_trace: list | None = None,
     barcodes: pd.DataFrame | None = None,
     dpi: int = 200,
+    img_type: str = "pdf",
+    transparent: bool = False,
 ):
     """Sample-level visium orchestrator (panel + LOH BAF + iters).
 
@@ -137,6 +139,8 @@ def plot_visium_all(
         best_cutoff_label=best_cutoff_label,
         best_cutoff_metrics=best_cutoff_metrics,
         dpi=dpi,
+        img_type=img_type,
+        transparent=transparent,
     )
     try:
         loh_baf, loh_info = compute_loh_baf(
@@ -153,8 +157,10 @@ def plot_visium_all(
             clones,
             loh_baf,
             loh_info,
-            os.path.join(plot_dir, f"{sample}.visium_loh_baf.pdf"),
+            os.path.join(plot_dir, f"{sample}.visium_loh_baf"),
             dpi=dpi,
+            img_type=img_type,
+            transparent=transparent,
         )
     except Exception as e:
         logging.warning(f"visium_loh_baf failed: {e}")
@@ -168,6 +174,8 @@ def plot_visium_all(
             clones=clones,
             ref_label=ref_label,
             dpi=dpi,
+            img_type=img_type,
+            transparent=transparent,
         )
 
 
@@ -269,8 +277,10 @@ def plot_visium_panel(
     size: float = 1.5,
     alpha: float = 0.8,
     title_info: str = "",
+    img_type: str = "pdf",
+    transparent: bool = False,
 ):
-    """Single-page PDF visium panel per slice.
+    """Single-page visium panel per slice.
 
     Rows: H&E, path_label, ref purity, inferred purity, clone x purity,
           [best cutoff clone x purity].
@@ -473,8 +483,8 @@ def plot_visium_panel(
         axes[ri, 0].set_ylabel(rlabel, fontsize=13, fontweight="bold")
 
     fig.tight_layout()
-    out_file = os.path.join(out_dir, f"{sample}.visium.pdf")
-    fig.savefig(out_file, dpi=dpi, bbox_inches="tight")
+    out_file = os.path.join(out_dir, f"{sample}.visium.{img_type}")
+    fig.savefig(out_file, dpi=dpi, bbox_inches="tight", transparent=transparent)
     plt.close(fig)
     logging.info(f"saved visium panel to {out_file}")
 
@@ -494,8 +504,10 @@ def plot_visium_loh_baf(
     dpi: int = 200,
     size: float = 1.5,
     alpha: float = 0.8,
+    img_type: str = "pdf",
+    transparent: bool = False,
 ):
-    """PDF with visium LOH BAF spatial plots.
+    """Visium LOH BAF spatial plots.
 
     Args:
         cluster_barcodes: cluster-level gex barcodes DataFrame (BARCODE column).
@@ -565,7 +577,7 @@ def plot_visium_loh_baf(
         pdf.savefig(fig, dpi=dpi)
         plt.close(fig)
 
-    with PdfPages(out_file) as pdf:
+    with FigureSaver(out_file, img_type, dpi, transparent) as pdf:
         # Per-cluster pages
         for gi in loh_clusters:
             cn_parts = [
@@ -599,8 +611,10 @@ def plot_visium_iters(
     ref_label: str | None = None,
     dpi: int = 100,
     size: float = 1.5,
+    img_type: str = "pdf",
+    transparent: bool = False,
 ):
-    """Two PDFs: spatial (H&E + labels) and histograms (posterior + purity)."""
+    """Two figure sets: spatial (H&E + labels) and histograms (posterior + purity)."""
     _set_pdf_fonts()
 
     niters = len(labeling_trace)
@@ -650,8 +664,8 @@ def plot_visium_iters(
 
     col_w, row_h = 6, 5
     label_col = "_iter_clone"
-    spatial_file = os.path.join(out_dir, f"{sample}.visium_iters.pdf")
-    hist_file = os.path.join(out_dir, f"{sample}.iter_histograms.pdf")
+    spatial_file = os.path.join(out_dir, f"{sample}.visium_iters")
+    hist_file = os.path.join(out_dir, f"{sample}.iter_histograms")
 
     # shared clone palette across all iterations
     all_iter_labels = sorted({str(x) for lt in labeling_trace for x in lt["labels"]})
@@ -659,8 +673,8 @@ def plot_visium_iters(
         {label_col: all_iter_labels}, primary_label=label_col
     )[label_col]
 
-    # --- Spatial PDF ---
-    with PdfPages(spatial_file) as pdf:
+    # --- Spatial figures ---
+    with FigureSaver(spatial_file, img_type, dpi, transparent) as pdf:
         for ri, lt in enumerate(labeling_trace):
             labels = lt["labels"]
             max_post = lt["max_posterior"]
@@ -749,8 +763,8 @@ def plot_visium_iters(
             plt.close(fig)
     logging.info(f"saved visium iterations to {spatial_file}")
 
-    # --- Histogram PDF ---
-    with PdfPages(hist_file) as pdf:
+    # --- Histogram figures ---
+    with FigureSaver(hist_file, img_type, dpi, transparent) as pdf:
         for ri, lt in enumerate(labeling_trace):
             labels = lt["labels"]
             max_post = lt["max_posterior"]
