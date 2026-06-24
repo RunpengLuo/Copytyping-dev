@@ -135,7 +135,20 @@ class Count_Data:
 
         # map each row's midpoint to its bulk (HATCHet) segment; that index is the
         # gold-truth seg_id used by segment_count_data, and indexes the CN arrays.
+        # Drop bins whose midpoint falls outside every bulk segment (gap bins).
         idx = _map_bulk_seg_index(coords, seg_df)
+        keep = idx >= 0
+        if not keep.all():
+            logging.info(
+                f"dropping {int((~keep).sum())}/{len(keep)} bins whose midpoint "
+                "falls outside the bulk segments"
+            )
+            self.count_X = self.count_X[keep]
+            self.count_A = self.count_A[keep]
+            self.count_B = self.count_B[keep]
+            self.coordinates = self.coordinates[keep].reset_index(drop=True)
+            self.num_segment = self.count_X.shape[0]
+            idx = idx[keep]
         self.coordinates["seg_id"] = idx
         self.clones = clones
         self.cn_A, self.cn_B, self.cn_C, self.cn_BAF = (
@@ -152,7 +165,11 @@ class Count_Data:
 
 
 def _map_bulk_seg_index(coordinates: pd.DataFrame, bulk_profiles: pd.DataFrame):
-    """Map each row's midpoint to the containing ``bulk_profiles`` row index."""
+    """Map each row's midpoint to the containing ``bulk_profiles`` row index.
+
+    Returns -1 for rows whose midpoint falls outside every segment (e.g. in an
+    inter-segment gap); ``annotate_cnps`` drops those rows.
+    """
     mid = (
         (coordinates["START"].to_numpy() + coordinates["END"].to_numpy()) / 2
     ).astype(np.int64)
@@ -164,6 +181,8 @@ def _map_bulk_seg_index(coordinates: pd.DataFrame, bulk_profiles: pd.DataFrame):
     for c in pd.unique(chrom):
         m = chrom == c
         sub = bulk[bulk_chr == c].sort_values("START")
+        if len(sub) == 0:
+            continue
         starts, ends = sub["START"].to_numpy(), sub["END"].to_numpy()
         bulk_idx = sub.index.to_numpy()
         idx = np.searchsorted(starts, mid[m], side="right") - 1
@@ -171,8 +190,6 @@ def _map_bulk_seg_index(coordinates: pd.DataFrame, bulk_profiles: pd.DataFrame):
         valid = (idx >= 0) & (mid[m] < ends[safe])
         rows = np.where(m)[0]
         out[rows[valid]] = bulk_idx[idx[valid]]
-
-    assert (out >= 0).all(), "some rows fall outside bulk_profiles"
     return out
 
 

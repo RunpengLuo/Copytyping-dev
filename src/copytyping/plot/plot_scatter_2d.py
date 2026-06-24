@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 
 from copytyping.plot.plot_common import (
     FigureSaver,
@@ -11,6 +13,9 @@ from copytyping.plot.plot_common import (
     build_label_colors,
 )
 from copytyping.utils import NA_CELLTYPE, is_tumor_label
+
+# perceptually-uniform sequential cmap for the [0,1] posterior probability
+POSTERIOR_CMAP = "viridis"
 
 
 def plot_scatter_2d_per_cell(
@@ -63,6 +68,10 @@ def plot_scatter_2d_per_cell(
     cluster_indices = np.where(imbalanced | aneuploid)[0]
     col_labels_all = anns[col_label].to_numpy()
     row_labels_all = anns[row_label].to_numpy() if row_label is not None else None
+    # per-cell assignment confidence (colors the points); None -> clone color
+    post_all = (
+        anns["max_posterior"].to_numpy() if "max_posterior" in anns.columns else None
+    )
 
     num_clones = cn_A.shape[1]
     library_size = read_counts.sum(axis=0).astype(float)
@@ -77,11 +86,6 @@ def plot_scatter_2d_per_cell(
             row = cnprofile.iloc[g]
             length_mb = row["LENGTH"] / 1e6 if "LENGTH" in row.index else np.nan
             n_bbc = int(row["#BBC"]) if "#BBC" in row.index else 0
-
-            cn_parts = []
-            for k in range(1, num_clones):
-                cn_parts.append(f"{clones[k]}={cn_A[g, k]}|{cn_B[g, k]}")
-            cn_str = ", ".join(cn_parts)
 
             tag = []
             if imbalanced[g]:
@@ -103,6 +107,7 @@ def plot_scatter_2d_per_cell(
             log2rdr = np.log2(np.clip(rdr, 1e-6, None))
             col_cells = col_labels_all[valid]
             row_cells = row_labels_all[valid] if row_labels_all is not None else None
+            post_cells = post_all[valid] if post_all is not None else None
 
             col_vals = sorted(set(col_cells), key=_clone_order_key)
             row_vals = (
@@ -148,10 +153,11 @@ def plot_scatter_2d_per_cell(
             # Grid: rows = row_label (cell type), cols = col_label (clone). Each ax
             # holds the coinciding cells, colored by the column (clone).
             nrows, ncols = len(row_vals), len(col_vals)
+            fig_h = 3.0 * nrows
             fig, axes = plt.subplots(
                 nrows,
                 ncols,
-                figsize=(3.0 * ncols, 3.0 * nrows),
+                figsize=(3.0 * ncols, fig_h),
                 sharex=True,
                 sharey=True,
                 squeeze=False,
@@ -176,15 +182,29 @@ def plot_scatter_2d_per_cell(
                             color="lightgray",
                         )
                     else:
-                        ax.scatter(
-                            baf[m],
-                            log2rdr[m],
-                            s=markersize * 2,
-                            c=col_color(col_v),
-                            edgecolors="none",
-                            rasterized=rasterized,
-                            antialiased=False,
-                        )
+                        if post_cells is not None:
+                            ax.scatter(
+                                baf[m],
+                                log2rdr[m],
+                                s=markersize * 2,
+                                c=post_cells[m],
+                                cmap=POSTERIOR_CMAP,
+                                vmin=0.0,
+                                vmax=1.0,
+                                edgecolors="none",
+                                rasterized=rasterized,
+                                antialiased=False,
+                            )
+                        else:
+                            ax.scatter(
+                                baf[m],
+                                log2rdr[m],
+                                s=markersize * 2,
+                                c=col_color(col_v),
+                                edgecolors="none",
+                                rasterized=rasterized,
+                                antialiased=False,
+                            )
                         ax.axvline(0.5, color="grey", linewidth=0.5)
                         ax.axhline(0.0, color="grey", linewidth=0.5)
                         if col_v in exp_by_clone:  # only this column's clone landmark
@@ -218,18 +238,39 @@ def plot_scatter_2d_per_cell(
                             fontweight="bold",
                         )
                     if r == nrows - 1:
+                        k = clones.index(col_v) if col_v in clones else None
+                        cn_txt = (
+                            f"\nCN={cn_A[g, k]}|{cn_B[g, k]}" if k is not None else ""
+                        )
                         ax.set_xlabel(
-                            f"{col_v} (n={col_total[col_v]})",
+                            f"{col_v} (n={col_total[col_v]}){cn_txt}",
                             fontsize=11,
                             fontweight="bold",
                         )
 
             fig.suptitle(
                 f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
-                f"{'/'.join(tag)}\nCN: {cn_str}  (x=BAF, y=log2RDR)",
+                f"{'/'.join(tag)}  (x=BAF, y=log2RDR)",
                 fontsize=11,
                 fontweight="bold",
+                x=0.01,
+                y=1 - 0.03 / fig_h,
+                ha="left",
+                va="top",
             )
-            fig.tight_layout()
+            # fixed-inch top (title) / bottom (colorbar) reservations so the gaps
+            # stay tight regardless of how tall the grid is
+            bottom = 0.55 / fig_h if post_all is not None else 0.0
+            fig.tight_layout(rect=[0, bottom, 1, 1 - 0.28 / fig_h])
+            if post_all is not None:
+                # shared horizontal posterior colorbar, centered below the last row
+                cax = fig.add_axes([0.35, 0.26 / fig_h, 0.30, 0.10 / fig_h])
+                cb = fig.colorbar(
+                    ScalarMappable(Normalize(0.0, 1.0), cmap=POSTERIOR_CMAP),
+                    cax=cax,
+                    orientation="horizontal",
+                )
+                cb.set_label("max posterior", fontsize=8)
+                cax.tick_params(labelsize=7)
             pdf.savefig(fig, dpi=dpi, bbox_inches="tight")
             plt.close(fig)
