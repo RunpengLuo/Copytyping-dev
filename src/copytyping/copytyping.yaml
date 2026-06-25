@@ -35,7 +35,6 @@ agg_level: cnp_cluster
 # inference — segment filtering & data control
 # method: copytyping (bulk-CNP-fixed EM)
 #       | bulk_anchored_copytyping (divisive clone-adding outer loop)
-#       | kmeans (feature-based clustering)
 method: copytyping
 
 ##################################################

@@ -18,12 +18,22 @@ from copytyping.inference.likelihoods import (
 
 class Cell_Model(Base_Model):
     """Single-cell EM model. Assumes tumor purity=1 for each cell.
-    Posteriors over all K clones (including normal).
+
+    Posteriors over the EM clone set: all K clones (including normal) by default,
+    or the tumor clones only under ``--no_normal`` (normal is never assigned).
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         logging.info("=" * 20 + " Start Cell_Model " + "=" * 20)
+
+    def _em_cn(self, arr: np.ndarray) -> np.ndarray:
+        """Restrict a (G, K) per-clone array to the EM clone set.
+
+        Drops the normal column (k=0) under ``--no_normal`` so likelihoods, the
+        mixture pi, and dispersion MLEs range over tumor clones only.
+        """
+        return arr[:, 1:] if self.no_normal else arr
 
     def _init_params(self, fit_mode: str) -> dict:
         # global clone mixture self.model_params["pi"] (shape (K,)) set in __init__
@@ -76,14 +86,16 @@ class Cell_Model(Base_Model):
                     count_data.count_B[allele_mask],
                     count_data.count_C[allele_mask],
                     tau,
-                    count_data.cn_BAF[allele_mask],
+                    self._em_cn(count_data.cn_BAF)[allele_mask],
                 )
                 global_lls += ll_a.sum(axis=0)
 
             if fit_mode in {"total", "allele_total"}:
                 lambda_g = params[f"{assay_type}-lambda"]
                 total_mask = count_data.total_mask[self.total_mask_id] & (lambda_g > 0)
-                props_gk = clone_pi_gk(lambda_g, count_data.cn_C)[total_mask, :]
+                props_gk = clone_pi_gk(lambda_g, self._em_cn(count_data.cn_C))[
+                    total_mask, :
+                ]
                 inv_phi = params[f"{assay_type}-inv_phi"]
                 inv_phi = inv_phi[total_mask] if np.ndim(inv_phi) == 2 else inv_phi
                 ll_t[total_mask] = cond_negbin_logpmf(
@@ -101,19 +113,22 @@ class Cell_Model(Base_Model):
 
     def _m_step(self, fit_mode: str, gamma: np.ndarray, t: int = 0):
         params = self.model_params
-        self._update_pi(gamma, self.num_barcodes, self.num_clones)
+        self._update_pi(gamma, self.num_barcodes, self.num_em_clones)
 
         for assay_type in self.assay_types:
             count_data = self.count_data[assay_type]
 
             if fit_mode in {"allele", "allele_total"} and self.update_tau:
+                cn_A = self._em_cn(count_data.cn_A)
+                cn_B = self._em_cn(count_data.cn_B)
+                cn_BAF = self._em_cn(count_data.cn_BAF)
                 if self.share_dispersion:
                     # one tau, pooled over the imbalanced bins only
                     am = count_data.allele_mask[self.allele_mask_id]
                     params[f"{assay_type}-tau"] = mle_tau(
                         count_data.count_B[am][:, :, None],
                         count_data.count_C[am][:, :, None],
-                        count_data.cn_BAF[am][:, None, :],
+                        cn_BAF[am][:, None, :],
                         gamma[None, :, :],
                         tau_bounds=self.tau_bounds,
                     )
@@ -124,21 +139,23 @@ class Cell_Model(Base_Model):
                     tau_states = mle_tau_per_state(
                         count_data.count_B,
                         count_data.count_C,
-                        count_data.cn_BAF,
+                        cn_BAF,
                         gamma,
-                        count_data.cn_A,
-                        count_data.cn_B,
+                        cn_A,
+                        cn_B,
                         tau_bounds=self.tau_bounds,
                     )
                     params[f"{assay_type}-tau"] = expand_state_map(
-                        count_data.cn_A, count_data.cn_B, tau_states, self.tau_bounds[1]
+                        cn_A, cn_B, tau_states, self.tau_bounds[1]
                     )
                     params[f"{assay_type}-tau_states"] = tau_states
 
             if fit_mode in {"total", "allele_total"} and self.update_invphi:
                 lambda_g = params[f"{assay_type}-lambda"]
                 count_T = self.count_T[assay_type]
-                props_gk = clone_pi_gk(lambda_g, count_data.cn_C)
+                cn_A = self._em_cn(count_data.cn_A)
+                cn_B = self._em_cn(count_data.cn_B)
+                props_gk = clone_pi_gk(lambda_g, self._em_cn(count_data.cn_C))
                 if self.share_dispersion:
                     # one inv_phi, pooled over the aneuploid bins only
                     tm = count_data.total_mask[self.total_mask_id] & (lambda_g > 0)
@@ -157,13 +174,13 @@ class Cell_Model(Base_Model):
                         props_gk[valid],
                         count_T,
                         gamma,
-                        count_data.cn_A[valid],
-                        count_data.cn_B[valid],
+                        cn_A[valid],
+                        cn_B[valid],
                         invphi_bounds=self.invphi_bounds,
                     )
                     params[f"{assay_type}-inv_phi"] = expand_state_map(
-                        count_data.cn_A,
-                        count_data.cn_B,
+                        cn_A,
+                        cn_B,
                         invphi_states,
                         self.invphi_bounds[1],
                     )

@@ -11,7 +11,6 @@ from copytyping.inference.count_data import (
     count_data_cnprofile,
     initialize_count_data,
     restrict_masks_to_cnp,
-    save_count_data,
     segment_count_data,
     smooth_spatial_neighbors,
 )
@@ -36,6 +35,7 @@ from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
     log_arguments,
+    log_step_start,
     normalize_args,
 )
 
@@ -58,7 +58,8 @@ def run(args: dict | None = None):
     proc_dir = os.path.join(out_dir, "processed_data")
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(proc_dir, exist_ok=True)
-    _file_handler = add_file_logging(out_dir)
+    _file_handler = add_file_logging(out_dir, sample=sample_id)
+    finish = log_step_start()
 
     log_arguments(args)
 
@@ -113,13 +114,34 @@ def run(args: dict | None = None):
         os.path.join(out_dir, f"{out_prefix}.annotations.tsv"), sep="\t", index=False
     )
 
+    # RDR baseline reference cells (None in allele-only mode: no RDR baseline)
+    is_reference = model.is_reference
+    ref_clone = model.ref_clone
+    no_normal = args["no_normal"]
+    if is_reference is None:
+        logging.warning(
+            "model.is_reference is None (no RDR baseline, e.g. --fit_mode allele): "
+            "skipping baseline/RDR save and RDR-based plots; emitting BAF-only outputs"
+        )
+
     bin_count_datas = segment_count_data(
         bbc_count_datas, "cnp_bin", args["min_snp_count"], args["max_bin_length"]
     )
     seg_count_datas = segment_count_data(bbc_count_datas, "cnp_segment")
-    if args["save_processed_data"]:
-        save_count_data(bbc_count_datas, os.path.join(proc_dir, f"{out_prefix}.bbc"))
-        save_count_data(seg_count_datas, os.path.join(proc_dir, f"{out_prefix}.seg"))
+    if args["save_processed_data"] and is_reference is not None:
+        # store only the per-assay bbc RDR baselines (lambda_g); the count
+        # matrices and RDR are re-derivable from the input + these baselines
+        bbc_baselines = {
+            a: np.asarray(
+                compute_rdr_baseline(
+                    bbc_count_datas[a], is_reference, ref_clone, no_normal
+                )
+            ).ravel()
+            for a in assay_types
+        }
+        np.savez(
+            os.path.join(proc_dir, f"{out_prefix}.bbc_baselines.npz"), **bbc_baselines
+        )
 
     cluster_count_datas = segment_count_data(bbc_count_datas, "cnp_cluster")
 
@@ -144,14 +166,6 @@ def run(args: dict | None = None):
     dpi = args["dpi"]
     img_type = args["img_type"]
     transparent = args["transparent"]
-    # RDR baseline from model reference cells; fall back to normal labels
-    is_reference = model.is_reference
-    ref_clone = model.ref_clone
-    no_normal = args["no_normal"]
-    if is_reference is None:
-        is_reference = (anns[label] == "normal").to_numpy()
-        ref_clone = 0
-        no_normal = False
     plot_labels = [label]
     if args["ref_label"] in anns.columns:
         plot_labels.append(args["ref_label"])
@@ -183,8 +197,6 @@ def run(args: dict | None = None):
         theta = model_params.get(f"{assay_type}-theta")
         rep_ids = sorted(seg_count_data.barcodes["REP_ID"].unique())
 
-        # 2D BAF-vs-log2RDR cross-tab grid per CNP cluster: rows = cell type,
-        # cols = inferred clone (cells colored by clone). One PDF per assay.
         plot_scatter_2d_per_cell(
             cluster_count_data.count_X,
             cluster_count_data.count_B,
@@ -210,7 +222,6 @@ def run(args: dict | None = None):
             color_map=plot_color_maps[label],
         )
 
-        # CNV heatmaps: one file set per agg level; pages = rep_id x [BAF, log2RDR]
         for agg in [1, args["heatmap_agg"]]:
             base = os.path.join(plot_dir, f"{out_prefix}.{assay_type}.heatmap.agg{agg}")
             with FigureSaver(base, img_type, dpi, transparent) as pdf:
@@ -218,7 +229,10 @@ def run(args: dict | None = None):
                     seg_rep_data, rep_mask = seg_count_data.subset_by_rep(rep_id)
                     anns_rep = anns.iloc[rep_mask].reset_index(drop=True)
                     theta_rep = theta[rep_mask] if theta is not None else None
-                    for val in ["BAF", "log2RDR"]:
+                    val_types = (
+                        ["BAF", "log2RDR"] if seg_baseline is not None else ["BAF"]
+                    )
+                    for val in val_types:
                         plot_cnv_heatmap(
                             sample_id,
                             assay_type,
@@ -244,7 +258,6 @@ def run(args: dict | None = None):
                             color_maps=plot_color_maps,
                         )
 
-        # 1D pseudobulk RDR + BAF along the genome, per rep, per label
         for my_label in plot_labels:
             base = os.path.join(
                 plot_dir, f"{out_prefix}.{assay_type}.1d_scatter.{my_label}"
@@ -311,6 +324,7 @@ def run(args: dict | None = None):
         )
 
     logging.info(f"inference complete. outputs in {out_dir}")
+    finish("copytyping inference")
     logging.root.removeHandler(_file_handler)
     _file_handler.close()
 
@@ -382,19 +396,3 @@ def run_copytyping(
         )
 
     return model, anns, model_params
-
-
-def run_kmeans():
-    # ---- kmeans baseline (disabled for now) -----------------------------
-    # if args["method"] == "kmeans":
-    #     barcodes, _ = union_align_barcodes(unsmoothed_data_sources, assay_types)
-    #     anns, clone_props = kmeans_copytyping(
-    #         unsmoothed_data_sources, barcodes, args["ref_label"],
-    #         model.num_clones, label,
-    #     )
-    #     logging.info(
-    #         "clone fractions: "
-    #         + ", ".join(f"{k}={v:.3f}" for k, v in clone_props.items())
-    #     )
-
-    return

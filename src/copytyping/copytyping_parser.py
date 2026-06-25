@@ -79,10 +79,9 @@ def add_arguments_inference_inputs(
         required=False,
         type=str,
         default=argparse.SUPPRESS,
-        choices=["copytyping", "bulk_anchored_copytyping", "kmeans"],
-        help="copytyping (bulk-CNP-fixed EM), bulk_anchored_copytyping "
-        "(divisive clone-adding outer loop on top of the EM), or kmeans "
-        "(feature-based clustering)",
+        choices=["copytyping", "bulk_anchored_copytyping"],
+        help="copytyping (bulk-CNP-fixed EM) or bulk_anchored_copytyping "
+        "(divisive clone-adding outer loop on top of the EM)",
     )
     parser.add_argument("-o", "--out_dir", required=True, type=str)
     parser.add_argument(

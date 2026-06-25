@@ -50,6 +50,10 @@ def plot_scatter_2d_per_cell(
     column's own clone CN-state landmark (expected BAF/log2RDR) is drawn. All axes
     share the same scale.
 
+    When ``base_props is None`` (allele-only mode, no RDR baseline) each ax falls
+    back to a 1D BAF histogram (count on y) in the column's clone color, with the
+    column clone's expected BAF as a vertical line; the same grid/headers apply.
+
     Args:
         read_counts: (G, N) read depth / feature counts.
         ballele_counts: (G, N) B-allele counts.
@@ -63,7 +67,7 @@ def plot_scatter_2d_per_cell(
         col_label: column label column (clone); also selects each cell's color.
         row_label: row label column (cell type); None -> single row.
         color_map: {value: color} for ``col_label`` (shared across plots).
-        base_props: (G,) RDR baseline; defaults to the global read-count fraction.
+        base_props: (G,) RDR baseline; None -> 1D BAF histogram fallback (no RDR).
     """
     cluster_indices = np.where(imbalanced | aneuploid)[0]
     col_labels_all = anns[col_label].to_numpy()
@@ -75,8 +79,8 @@ def plot_scatter_2d_per_cell(
 
     num_clones = cn_A.shape[1]
     library_size = read_counts.sum(axis=0).astype(float)
-    if base_props is None:
-        base_props = read_counts.sum(axis=1) / max(library_size.sum(), 1)
+    # no RDR baseline (allele-only mode) -> fall back to a 1D BAF histogram grid
+    hist_mode = base_props is None
 
     out_base = (
         outfile[:-4] if outfile.lower().endswith((".pdf", ".png", ".svg")) else outfile
@@ -96,15 +100,19 @@ def plot_scatter_2d_per_cell(
             total_allele_g = total_allele_counts[g].astype(float)
             ballele_g = ballele_counts[g].astype(float)
             read_g = read_counts[g].astype(float)
-            lam_g = base_props[g]
 
-            valid = (total_allele_g > 0) & (library_size * lam_g > 0)
+            if hist_mode:
+                valid = total_allele_g > 0
+            else:
+                lam_g = base_props[g]
+                valid = (total_allele_g > 0) & (library_size * lam_g > 0)
             if valid.sum() < 10:
                 continue
 
             baf = ballele_g[valid] / total_allele_g[valid]
-            rdr = read_g[valid] / (library_size[valid] * lam_g)
-            log2rdr = np.log2(np.clip(rdr, 1e-6, None))
+            if not hist_mode:
+                rdr = read_g[valid] / (library_size[valid] * lam_g)
+                log2rdr = np.log2(np.clip(rdr, 1e-6, None))
             col_cells = col_labels_all[valid]
             row_cells = row_labels_all[valid] if row_labels_all is not None else None
             post_cells = post_all[valid] if post_all is not None else None
@@ -134,32 +142,43 @@ def plot_scatter_2d_per_cell(
             for k in range(num_clones):
                 C_k = cn_C[g, k]
                 exp_baf_k = cn_B[g, k] / C_k if C_k > 0 else 0.5
-                denom_k = float(np.sum(base_props * cn_C[:, k]))
-                exp_log2rdr_k = (
-                    np.log2(C_k / denom_k) if (denom_k > 0 and C_k > 0) else 0.0
-                )
+                if hist_mode:
+                    exp_log2rdr_k = 0.0
+                else:
+                    denom_k = float(np.sum(base_props * cn_C[:, k]))
+                    exp_log2rdr_k = (
+                        np.log2(C_k / denom_k) if (denom_k > 0 and C_k > 0) else 0.0
+                    )
                 exp_by_clone[clones[k]] = (exp_baf_k, exp_log2rdr_k)
 
             xlim = (-0.05, 1.05)
-            # Adaptive ylim: tighten to (-2, 2) if all obs + expected fit, else (-5, 5)
-            obs_finite = log2rdr[np.isfinite(log2rdr)]
-            exp_finite = np.array([y for _, y in exp_by_clone.values()], dtype=float)
-            all_y = np.concatenate([obs_finite, exp_finite])
-            if all_y.size > 0 and all_y.min() >= -2 and all_y.max() <= 2:
-                ylim = (-2, 2)
+            if hist_mode:
+                hist_bins = np.linspace(0.0, 1.0, 31)  # shared BAF bin edges
+                ylim = None  # count axis: shared autoscale via sharey
             else:
-                ylim = (-5, 5)
+                # Adaptive ylim: tighten to (-2, 2) if all obs + expected fit, else (-5, 5)
+                obs_finite = log2rdr[np.isfinite(log2rdr)]
+                exp_finite = np.array(
+                    [y for _, y in exp_by_clone.values()], dtype=float
+                )
+                all_y = np.concatenate([obs_finite, exp_finite])
+                if all_y.size > 0 and all_y.min() >= -2 and all_y.max() <= 2:
+                    ylim = (-2, 2)
+                else:
+                    ylim = (-5, 5)
 
             # Grid: rows = row_label (cell type), cols = col_label (clone). Each ax
             # holds the coinciding cells, colored by the column (clone).
             nrows, ncols = len(row_vals), len(col_vals)
             fig_h = 3.0 * nrows
+            # hist mode: per-ax count autoscale (counts vary with the marginal n);
+            # scatter mode: shared log2RDR scale across axes
             fig, axes = plt.subplots(
                 nrows,
                 ncols,
                 figsize=(3.0 * ncols, fig_h),
                 sharex=True,
-                sharey=True,
+                sharey=not hist_mode,
                 squeeze=False,
             )
             for r, row_v in enumerate(row_vals):
@@ -181,6 +200,25 @@ def plot_scatter_2d_per_cell(
                             fontweight="bold",
                             color="lightgray",
                         )
+                    elif hist_mode:
+                        # 1D BAF histogram in the column (clone) color, with the
+                        # column clone's expected BAF marked
+                        ax.hist(
+                            baf[m],
+                            bins=hist_bins,
+                            color=col_color(col_v),
+                            alpha=0.8,
+                            rasterized=rasterized,
+                        )
+                        ax.axvline(0.5, color="grey", linewidth=0.5)
+                        if col_v in exp_by_clone:
+                            ax.axvline(
+                                exp_by_clone[col_v][0],
+                                color="black",
+                                linewidth=2.0,
+                                alpha=0.8,
+                                zorder=10,
+                            )
                     else:
                         if post_cells is not None:
                             ax.scatter(
@@ -218,7 +256,9 @@ def plot_scatter_2d_per_cell(
                                 zorder=10,
                             )
                     ax.set_xlim(xlim)
-                    ax.set_ylim(ylim)
+                    if ylim is not None:
+                        ax.set_ylim(ylim)
+                    ax.set_box_aspect(1)  # square axes box per cell
                     ax.set_title(f"n={n_cells}", fontsize=9)
                     # FP/FN intersection (tumor cell <-> normal clone, or
                     # non-tumor cell <-> tumor clone) with cells -> dark-red border
@@ -248,9 +288,10 @@ def plot_scatter_2d_per_cell(
                             fontweight="bold",
                         )
 
+            y_note = "(x=BAF, y=count)" if hist_mode else "(x=BAF, y=log2RDR)"
             fig.suptitle(
                 f"{sample} — cluster {g} ({length_mb:.1f}Mb, {n_bbc} BBCs) — "
-                f"{'/'.join(tag)}  (x=BAF, y=log2RDR)",
+                f"{'/'.join(tag)}  {y_note}",
                 fontsize=11,
                 fontweight="bold",
                 x=0.01,
@@ -260,9 +301,10 @@ def plot_scatter_2d_per_cell(
             )
             # fixed-inch top (title) / bottom (colorbar) reservations so the gaps
             # stay tight regardless of how tall the grid is
-            bottom = 0.55 / fig_h if post_all is not None else 0.0
+            show_cbar = (not hist_mode) and (post_all is not None)
+            bottom = 0.55 / fig_h if show_cbar else 0.0
             fig.tight_layout(rect=[0, bottom, 1, 1 - 0.28 / fig_h])
-            if post_all is not None:
+            if show_cbar:
                 # shared horizontal posterior colorbar, centered below the last row
                 cax = fig.add_axes([0.35, 0.26 / fig_h, 0.30, 0.10 / fig_h])
                 cb = fig.colorbar(

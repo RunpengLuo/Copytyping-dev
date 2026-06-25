@@ -1,8 +1,11 @@
 import argparse
 import logging
 import os
+import resource
 import sys
+import time
 from collections import OrderedDict
+from collections.abc import Callable
 from importlib.resources import files
 
 import pandas as pd
@@ -157,13 +160,37 @@ def log_arguments(args: argparse.Namespace | dict):
     logging.info(f"parsed arguments:\n{lines}")
 
 
-def add_file_logging(out_dir: str, command: str = "copytyping"):
+def log_step_start() -> Callable[[str], None]:
+    """Start a profiling step; returns finish(name) that logs wall/cpu/peak_rss.
+
+    Single-process pure-Python tool, so peak RSS is taken from
+    ``resource.getrusage(RUSAGE_SELF).ru_maxrss`` (bytes on macOS, KiB on Linux).
+    """
+    t_wall = time.perf_counter()
+    t_cpu = time.process_time()
+    _rss_to_gb = (1 / 1e9) if sys.platform == "darwin" else (1024 / 1e9)
+
+    def finish(name: str) -> None:
+        wall = time.perf_counter() - t_wall
+        cpu = time.process_time() - t_cpu
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _rss_to_gb
+        logging.info(
+            f"{name} done: wall={wall:.1f}s, cpu={cpu:.1f}s, peak_rss={peak:.2f} GB"
+        )
+
+    return finish
+
+
+def add_file_logging(
+    out_dir: str, command: str = "copytyping", sample: str | None = None
+):
     """Attach a FileHandler to the root logger. Returns the handler for later removal."""
     os.makedirs(out_dir, exist_ok=True)
     level = (
         logging.root.level if logging.root.level != logging.WARNING else logging.INFO
     )
-    fh = logging.FileHandler(os.path.join(out_dir, f"{command}.log"), mode="w")
+    name = f"{command}.{sample}.log" if sample else f"{command}.log"
+    fh = logging.FileHandler(os.path.join(out_dir, name), mode="w")
     fh.setLevel(level)
     fh.setFormatter(
         logging.Formatter(

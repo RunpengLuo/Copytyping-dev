@@ -532,21 +532,6 @@ def count_data_cnprofile(cd: Count_Data):
     return df
 
 
-def save_count_data(count_data: dict[str, Count_Data], prefix: str):
-    """Save each assay's Count_Data (coordinates + count matrices) to disk.
-
-    For every ``assay`` writes ``{prefix}.{assay}.tsv.gz`` (coordinates) and
-    ``{prefix}.{assay}.{X,B,C}.npz`` where X = read depth, B = B-allele,
-    C = total allele (A + B).
-    """
-    for assay, cd in count_data.items():
-        p = f"{prefix}.{assay}"
-        cd.coordinates.to_csv(f"{p}.tsv.gz", sep="\t", index=False, compression="gzip")
-        sparse.save_npz(f"{p}.X.npz", sparse.csr_matrix(cd.count_X))
-        sparse.save_npz(f"{p}.B.npz", sparse.csr_matrix(cd.count_B))
-        sparse.save_npz(f"{p}.C.npz", sparse.csr_matrix(cd.count_C))
-
-
 ##################################################
 # informative-bin masks
 ##################################################

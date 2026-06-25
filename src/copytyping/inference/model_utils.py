@@ -46,7 +46,7 @@ def save_model_params(
         for key in ["lambda", "theta", "tau", "inv_phi"]:
             pk = f"{assay_type}-{key}"
             if pk in model_params:
-                param_dict[pk.replace("-", "_")] = np.atleast_1d(model_params[pk])
+                param_dict[pk] = np.atleast_1d(model_params[pk])
     np.savez(path, **param_dict)
 
 

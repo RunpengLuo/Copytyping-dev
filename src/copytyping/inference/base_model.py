@@ -40,6 +40,9 @@ class Base_Model:
         self.clones = self.count_data[assay_types[0]].clones
         self.num_clones = len(self.clones)
         self.tumor_clones = self.clones[1:]
+        # clones the EM ranges over: drop normal under --no_normal (single-cell);
+        # Spot_Model overrides this to the tumor set (normal handled via purity)
+        self.num_em_clones = len(self.tumor_clones) if no_normal else self.num_clones
 
         self.prefix = prefix
         self.allele_mask_id = allele_mask_id
@@ -63,8 +66,15 @@ class Base_Model:
         self.update_invphi = update_invphi
         self.share_dispersion = share_dispersion
 
-        # global clone mixture; tau/inv_phi/lambda added at fit init
-        self.model_params = {"pi": np.ones(self.num_clones) / self.num_clones}
+        # global clone mixture (over the EM clone set); tau/inv_phi/lambda at fit init
+        self.model_params = {"pi": np.ones(self.num_em_clones) / self.num_em_clones}
+
+    @property
+    def em_clones(self) -> list[str]:
+        """Clones the EM ranges over (normal dropped when num_em_clones < num_clones)."""
+        return (
+            self.tumor_clones if self.num_em_clones < self.num_clones else self.clones
+        )
 
     # ------------------------------------------------------------------
     # Initialization helpers
@@ -205,7 +215,7 @@ class Base_Model:
         params = self.model_params
 
         # pre-allocate LL matrices — updated in-place by compute_log_likelihood
-        num_em_clones = getattr(self, "num_em_clones", self.num_clones)
+        num_em_clones = self.num_em_clones
         for assay in self.assay_types:
             G = self.count_data[assay].num_segment
             params[f"{assay}-ll_allele"] = np.zeros(
@@ -262,9 +272,14 @@ class Base_Model:
     def _map_estimation(
         self, gamma: np.ndarray, label: str, as_df: bool = True
     ) -> pd.DataFrame | dict:
-        r"""Flat MAP estimation: z_n = argmax_k γ_nk (k=0 is normal)."""
+        r"""Flat MAP estimation: z_n = argmax_k γ_nk over the EM clone set.
+
+        Under ``--no_normal`` the EM set excludes normal, so labels are always a
+        tumor clone; otherwise k=0 is normal.
+        """
         N = len(gamma)
-        clone_names = np.array(self.clones)  # ["normal", "clone1", ...]
+        em_clones = self.em_clones
+        clone_names = np.array(em_clones)
         map_k = gamma.argmax(axis=1)
         labels = clone_names[map_k]
         max_post = gamma[np.arange(N), map_k]
@@ -273,7 +288,7 @@ class Base_Model:
             return {"labels": labels, "max_posterior": max_post}
 
         anns = self.barcodes.copy(deep=True)
-        anns.loc[:, self.clones] = gamma
+        anns.loc[:, em_clones] = gamma
         anns["max_posterior"] = max_post
         anns[label] = labels
         return anns
@@ -289,7 +304,7 @@ class Base_Model:
         """
         gamma = self._e_step(fit_mode)
         anns = self._map_estimation(gamma, label)
-        clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.clones}
+        clone_props = {c: np.mean(anns[label].to_numpy() == c) for c in self.em_clones}
         self._log_posterior_stats(anns, label)
         return anns, clone_props
 
