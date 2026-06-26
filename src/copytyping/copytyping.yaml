@@ -20,8 +20,9 @@ baf_clip: 0.001
 tau_bounds: "1e-6,1e6"
 # Negative-Binomial inv-phi bounds (comma-separated lo,hi). Larger = less dispersed.
 invphi_bounds: "1e-6,1e6"
-# Update pi (clone mixing proportions) during EM?
-update_pi: true
+# Update pi (clone mixing proportions) during EM? Off by default: fixing pi
+# avoids a winner-take-all collapse when per-cell signal is weak (e.g. scRNA).
+update_pi: false
 # Update BB tau in M-step?
 update_tau: true
 # Update NB inv_phi in M-step?

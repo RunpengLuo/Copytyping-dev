@@ -18,6 +18,9 @@ from copytyping.inference.inference_utils import evaluate_malignant_accuracy
 from copytyping.inference.model_utils import (
     compute_rdr_baseline,
     model_kwargs_from_args,
+    order_pseudobulk_groups,
+    pseudobulk_baf_matrix,
+    pseudobulk_rdr_matrix,
     save_model_params,
 )
 from copytyping.io_utils import (
@@ -129,18 +132,25 @@ def run(args: dict | None = None):
     )
     seg_count_datas = segment_count_data(bbc_count_datas, "cnp_segment")
     if args["save_processed_data"] and is_reference is not None:
-        # store only the per-assay bbc RDR baselines (lambda_g); the count
-        # matrices and RDR are re-derivable from the input + these baselines
-        bbc_baselines = {
-            a: np.asarray(
+        baseline_df = None
+        for a in assay_types:
+            base = np.asarray(
                 compute_rdr_baseline(
                     bbc_count_datas[a], is_reference, ref_clone, no_normal
                 )
             ).ravel()
-            for a in assay_types
-        }
-        np.savez(
-            os.path.join(proc_dir, f"{out_prefix}.bbc_baselines.npz"), **bbc_baselines
+            df_a = bbc_count_datas[a].coordinates[["#CHR", "START", "END"]].copy()
+            df_a[f"{a}_baseline"] = base
+            baseline_df = (
+                df_a
+                if baseline_df is None
+                else baseline_df.merge(df_a, on=["#CHR", "START", "END"], how="outer")
+            )
+        baseline_df.to_csv(
+            os.path.join(proc_dir, f"{out_prefix}.bbc_baselines.tsv.gz"),
+            sep="\t",
+            index=False,
+            compression="gzip",
         )
 
     cluster_count_datas = segment_count_data(bbc_count_datas, "cnp_cluster")
@@ -263,12 +273,25 @@ def run(args: dict | None = None):
                 plot_dir, f"{out_prefix}.{assay_type}.1d_scatter.{my_label}"
             )
             with FigureSaver(base, img_type, dpi, transparent) as pdf:
+                is_inferred = my_label == label
                 for rep_id in rep_ids:
                     bin_rep_data, rep_mask = bin_count_data.subset_by_rep(rep_id)
                     anns_rep = anns.iloc[rep_mask].reset_index(drop=True)
+                    labels = anns_rep[my_label].to_numpy()
+                    group_order = order_pseudobulk_groups(
+                        anns_rep[my_label].unique(), is_inferred
+                    )
+                    rdr_matrix, group_order = pseudobulk_rdr_matrix(
+                        bin_rep_data, bin_baseline, labels, group_order, log2=True
+                    )
+                    baf_matrix, _ = pseudobulk_baf_matrix(
+                        bin_rep_data, labels, group_order
+                    )
                     plot_rdr_baf_1d_pseudobulk(
+                        rdr_matrix,
+                        baf_matrix,
+                        group_order,
                         bin_rep_data.count_X,
-                        bin_rep_data.count_B,
                         bin_rep_data.count_C,
                         bin_rep_data.cn_A,
                         bin_rep_data.cn_B,
@@ -284,7 +307,7 @@ def run(args: dict | None = None):
                         args["region_bed"],
                         haplo_blocks=seg_profile,
                         lab_type=my_label,
-                        is_inferred=(my_label == label),
+                        is_inferred=is_inferred,
                         pdf_pages=pdf,
                         platform=platform,
                         subtitle=f"rep={rep_id}",

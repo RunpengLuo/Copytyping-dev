@@ -185,8 +185,10 @@ def plot_scatter_1d_pseudobulk(
 
 
 def plot_rdr_baf_1d_pseudobulk(
+    rdr_matrix: np.ndarray,
+    baf_matrix: np.ndarray,
+    group_order: list[str],
     read_counts: np.ndarray,
-    ballele_counts: np.ndarray,
     total_allele_counts: np.ndarray,
     cn_A: np.ndarray,
     cn_B: np.ndarray,
@@ -212,18 +214,22 @@ def plot_rdr_baf_1d_pseudobulk(
     ascn_profile: bool = False,
     **kwargs,
 ):
-    """Per-clone log2RDR + BAF scatter plot along the genome, single page.
+    """Per-group log2RDR + BAF scatter plot along the genome, single page.
 
-    Observed RDR = read_count_{g,n} / (library_size_n * lambda_g)
-    Observed BAF = ballele_{g,n} / total_allele_{g,n}
+    The observed pseudobulk statistics are precomputed (one row per group, one
+    column per genome bin) via ``pseudobulk_rdr_matrix`` / ``pseudobulk_baf_matrix``
+    and passed in; this function only renders them.
 
     Args:
-        read_counts: (G, N) read depth / feature counts.
-        ballele_counts: (G, N) B-allele counts.
-        total_allele_counts: (G, N) total-allele counts (A + B).
-        cn_A/cn_B/cn_C: (G, K) per-clone copy numbers.
-        cn_BAF: (G, K) per-clone expected B-allele frequency.
+        rdr_matrix: (num_groups, G) pseudobulk (log2)RDR, rows = ``group_order``.
+        baf_matrix: (num_groups, G) pseudobulk BAF, rows = ``group_order``.
+        group_order: row order of the matrices (clone/cluster labels), one ax pair each.
+        read_counts: (G, N) read counts — used only for per-group title totals.
+        total_allele_counts: (G, N) total-allele counts — per-group SNP totals.
+        cn_A/cn_B/cn_C: (G, K) per-clone copy numbers (bin colors + expected RDR).
+        cn_BAF: (G, K) per-clone expected B-allele frequency (expected BAF line).
         clones: clone names, length K.
+        base_props: (G,) RDR baseline — for the expected RDR line only.
         cnprofile: per-row genomic coordinates (#CHR/START/END).
         haplo_blocks: CN profile drawn as the bottom strip (or None).
     """
@@ -231,12 +237,9 @@ def plot_rdr_baf_1d_pseudobulk(
     cnprofile = cnprofile[["#CHR", "START", "END"]].copy(deep=True)
     total_cells = len(anns)
 
-    library_size = read_counts.sum(axis=0).astype(np.float64)
-
-    cell_labels = anns[lab_type].tolist()
-    uniq_cell_labels = anns[lab_type].unique()
-    assert ballele_counts.shape[0] == len(cnprofile)
-    assert ballele_counts.shape[1] == len(cell_labels)
+    assert baf_matrix.shape[1] == len(cnprofile)
+    assert rdr_matrix.shape[1] == len(cnprofile)
+    assert baf_matrix.shape[0] == rdr_matrix.shape[0] == len(group_order)
 
     # genome coordinates
     wl_segments = read_whitelist_segments(region_bed)
@@ -267,22 +270,8 @@ def plot_rdr_baf_1d_pseudobulk(
             func=lambda r: chr_offsets[r["#CHR"]] + r.END, axis=1
         ).to_numpy()
 
-    if is_inferred:
-        # Order: normal, clone1, clone2, ..., then other non-NA labels
-        ordered_labels = (
-            [x for x in ["normal"] if x in uniq_cell_labels]
-            + sorted([x for x in uniq_cell_labels if x.startswith("clone")])
-            + sorted(
-                [
-                    x
-                    for x in uniq_cell_labels
-                    if x != "normal" and not x.startswith("clone") and x != "NA"
-                ]
-            )
-        )
-    else:
-        # External label: keep original order, skip NA
-        ordered_labels = [x for x in uniq_cell_labels if x != "NA"]
+    # rows are precomputed in the caller-supplied order (one ax pair per group)
+    ordered_labels = list(group_order)
     rdr_label = "log2RDR" if log2 else "RDR"
     default_color = "grey"
 
@@ -350,52 +339,38 @@ def plot_rdr_baf_1d_pseudobulk(
                 for a, b in zip(clone_A, clone_B)
             ]
 
-        # ── RDR panel ──
+        # ── RDR panel (obs precomputed; expected line from CN + baseline) ──
+        obs_rdr = np.asarray(rdr_matrix[ci], dtype=np.float64)
         rdr_exp_lines = None
         rdr_ylim_eff = rdr_ylim
-        if base_props is not None:
-            agg_x = np.sum(read_counts[:, barcode_idxs], axis=1).astype(np.float64)
-            agg_T = np.sum(library_size[barcode_idxs]).astype(np.float64)
-            rdr_valid = base_props > 0
-            obs_rdr = np.full(len(agg_x), np.nan)
-            obs_rdr[rdr_valid] = agg_x[rdr_valid] / (agg_T * base_props[rdr_valid])
-            if log2:
-                log2_mask = rdr_valid & (obs_rdr > 0)
-                obs_rdr[log2_mask] = np.log2(obs_rdr[log2_mask])
-                obs_rdr[rdr_valid & ~log2_mask] = np.nan
-            exp_vals = None
-            if clone_C_full is not None:
-                denom = float(np.sum(base_props * clone_C_full))
-                if denom > 0:
-                    exp_vals = clone_C_full / denom
-                    if log2:
-                        exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
+        exp_vals = None
+        if base_props is not None and clone_C_full is not None:
+            denom = float(np.sum(base_props * clone_C_full))
+            if denom > 0:
+                exp_vals = clone_C_full / denom
+                if log2:
+                    exp_vals = np.log2(np.maximum(exp_vals, 1e-6))
+        if exp_vals is not None:
+            rdr_exp_lines = _merge_exp_lines(
+                abs_starts, abs_ends, exp_vals, cnprofile["#CHR"]
+            )
+        if log2:
+            candidates = [obs_rdr[np.isfinite(obs_rdr)]]
             if exp_vals is not None:
-                rdr_exp_lines = _merge_exp_lines(
-                    abs_starts, abs_ends, exp_vals, cnprofile["#CHR"]
-                )
-            if log2:
-                candidates = [obs_rdr[np.isfinite(obs_rdr)]]
-                if exp_vals is not None:
-                    candidates.append(np.asarray(exp_vals))
-                all_vals = np.concatenate(
-                    [c[np.isfinite(c)] for c in candidates if len(c) > 0]
-                )
-                if all_vals.size > 0 and all_vals.min() >= -2 and all_vals.max() <= 2:
-                    rdr_ylim_eff = (-2, 2)
-            else:
-                exp_max = float(exp_vals.max()) if exp_vals is not None else 1.0
-                valid_rdr = obs_rdr[np.isfinite(obs_rdr)]
-                rdr_ylim_eff = (
-                    (
-                        -0.1,
-                        min(max(valid_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0),
-                    )
-                    if valid_rdr.size > 0
-                    else (-0.1, 2.0)
-                )
+                candidates.append(np.asarray(exp_vals))
+            all_vals = np.concatenate(
+                [c[np.isfinite(c)] for c in candidates if len(c) > 0]
+            )
+            if all_vals.size > 0 and all_vals.min() >= -2 and all_vals.max() <= 2:
+                rdr_ylim_eff = (-2, 2)
         else:
-            obs_rdr = np.full(len(positions), np.nan)
+            exp_max = float(exp_vals.max()) if exp_vals is not None else 1.0
+            valid_rdr = obs_rdr[np.isfinite(obs_rdr)]
+            rdr_ylim_eff = (
+                (-0.1, min(max(valid_rdr.max() * 1.1, exp_max * 1.1, 2.0), 6.0))
+                if valid_rdr.size > 0
+                else (-0.1, 2.0)
+            )
 
         feat_label = {"atac": "fragment", "gex": "umi"}.get(assay_type, "count")
         total_counts = int(np.sum(read_counts[:, barcode_idxs]))
@@ -423,17 +398,8 @@ def plot_rdr_baf_1d_pseudobulk(
             show_xticklabels=False,
         )
 
-        # ── BAF panel ──
-        agg_bcounts = np.sum(ballele_counts[:, barcode_idxs], axis=1).astype(np.float64)
-        agg_tcounts = np.sum(total_allele_counts[:, barcode_idxs], axis=1).astype(
-            np.float64
-        )
-        obs_baf = np.divide(
-            agg_bcounts,
-            agg_tcounts,
-            out=np.full_like(agg_bcounts, np.nan),
-            where=agg_tcounts > 0,
-        )
+        # ── BAF panel (obs precomputed) ──
+        obs_baf = np.asarray(baf_matrix[ci], dtype=np.float64)
         baf_exp_lines = None
         if (
             is_inferred

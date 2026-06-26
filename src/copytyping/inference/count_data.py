@@ -82,6 +82,21 @@ class Count_Data:
         if sparse.issparse(self.count_B):
             self.count_B = np.asarray(self.count_B.todense())
 
+    def select_clones(self, idx: list[int]) -> "Count_Data":
+        """Return a copy with the per-clone CN arrays + clone names kept to ``idx``.
+
+        Segment-axis count matrices and masks are shared unchanged; only the
+        clone (column) axis of cn_A/cn_B/cn_C/cn_BAF and ``clones`` is restricted.
+        """
+        return replace(
+            self,
+            cn_A=self.cn_A[:, idx],
+            cn_B=self.cn_B[:, idx],
+            cn_C=self.cn_C[:, idx],
+            cn_BAF=self.cn_BAF[:, idx],
+            clones=[self.clones[i] for i in idx],
+        )
+
     def subset_by_rep(self, rep_id: str):
         """Return ``(Count_Data, column_mask)`` restricted to ``REP_ID == rep_id``.
 

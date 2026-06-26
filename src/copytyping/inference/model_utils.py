@@ -23,6 +23,7 @@ def model_kwargs_from_args(args: dict):
     """Extract the model config kwargs (the args the EM models consume) from the
     flat ``args`` dict, so callers can ``Model(..., **model_kwargs_from_args(args))``."""
     return {
+        "ref_label": args["ref_label"],
         "no_normal": args["no_normal"],
         "tau_bounds": (args["min_tau"], args["max_tau"]),
         "invphi_bounds": (args["min_invphi"], args["max_invphi"]),
@@ -171,6 +172,108 @@ def empirical_rdr_gn(
     if norm:
         rdr_matrix = zscore(rdr_matrix, axis=0, nan_policy="omit")
     return rdr_matrix
+
+
+##################################################
+# pseudobulk per-group BAF / RDR
+##################################################
+
+
+def order_pseudobulk_groups(uniq_labels: list[str], is_inferred: bool) -> list[str]:
+    """Row order for pseudobulk groups.
+
+    Inferred clone labels -> normal, clone1, clone2, ..., then other non-NA labels.
+    External labels -> original order, NA dropped.
+    """
+    uniq = list(uniq_labels)
+    if not is_inferred:
+        return [x for x in uniq if x != "NA"]
+    return (
+        [x for x in ["normal"] if x in uniq]
+        + sorted(x for x in uniq if str(x).startswith("clone"))
+        + sorted(
+            x
+            for x in uniq
+            if x != "normal" and not str(x).startswith("clone") and x != "NA"
+        )
+    )
+
+
+def pseudobulk_rdr_matrix(
+    count_data: "Count_Data",
+    base_props: np.ndarray | None,
+    labels: np.ndarray,
+    group_order: list[str] | None = None,
+    log2: bool = True,
+) -> tuple[np.ndarray, list[str]]:
+    """Pseudobulk (log2)RDR per group across genome bins.
+
+    For each group g, aggregate read counts over its cells and normalize by the
+    group library size times the per-bin baseline::
+
+        RDR[g, bin] = (sum_{n in g} count_X[bin, n]) / (sum_{n in g} T_n * lambda_bin)
+
+    Rows follow ``group_order`` (default: unique-in-appearance); columns follow the
+    ``count_data`` bin axis (``coordinates``). NaN where lambda<=0, the group is
+    empty, or (log2) RDR<=0. ``base_props=None`` (no baseline) -> all-NaN rows.
+    Returns ``(rdr (num_groups, G), group_order)``.
+    """
+    count_X = np.asarray(count_data.count_X)
+    count_T = count_X.sum(axis=0).astype(np.float64)
+    labels = np.asarray(labels)
+    if group_order is None:
+        group_order = list(dict.fromkeys(labels.tolist()))
+    G = count_X.shape[0]
+    out = np.full((len(group_order), G), np.nan, dtype=np.float64)
+    if base_props is None:
+        return out, group_order
+    base = np.asarray(base_props, dtype=np.float64).ravel()
+    valid = base > 0
+    for i, grp in enumerate(group_order):
+        cols = labels == grp
+        if not cols.any():
+            continue
+        agg_x = count_X[:, cols].sum(axis=1).astype(np.float64)
+        denom = float(count_T[cols].sum()) * base
+        ok = valid & (denom > 0)
+        rdr = np.full(G, np.nan)
+        rdr[ok] = agg_x[ok] / denom[ok]
+        if log2:
+            pos = ok & (rdr > 0)
+            log_rdr = np.full(G, np.nan)
+            log_rdr[pos] = np.log2(rdr[pos])
+            rdr = log_rdr
+        out[i] = rdr
+    return out, group_order
+
+
+def pseudobulk_baf_matrix(
+    count_data: "Count_Data",
+    labels: np.ndarray,
+    group_order: list[str] | None = None,
+) -> tuple[np.ndarray, list[str]]:
+    """Pseudobulk BAF per group across genome bins::
+
+        BAF[g, bin] = (sum_{n in g} count_B[bin, n]) / (sum_{n in g} count_C[bin, n])
+
+    Rows follow ``group_order``; columns follow the ``count_data`` bin axis. NaN
+    where the group has no allele coverage. Returns ``(baf (num_groups, G), group_order)``.
+    """
+    count_B = np.asarray(count_data.count_B)
+    count_N = np.asarray(count_data.count_C)
+    labels = np.asarray(labels)
+    if group_order is None:
+        group_order = list(dict.fromkeys(labels.tolist()))
+    G = count_B.shape[0]
+    out = np.full((len(group_order), G), np.nan, dtype=np.float64)
+    for i, grp in enumerate(group_order):
+        cols = labels == grp
+        if not cols.any():
+            continue
+        agg_b = count_B[:, cols].sum(axis=1).astype(np.float64)
+        agg_t = count_N[:, cols].sum(axis=1).astype(np.float64)
+        out[i] = np.divide(agg_b, agg_t, out=np.full(G, np.nan), where=agg_t > 0)
+    return out, group_order
 
 
 ##################################################

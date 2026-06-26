@@ -6,6 +6,7 @@ import pandas as pd
 from scipy.special import logsumexp
 
 from copytyping.inference.count_data import Count_Data
+from copytyping.inference.inference_utils import evaluate_malignant_accuracy
 from copytyping.inference.model_utils import compute_baseline_proportions
 
 
@@ -19,6 +20,7 @@ class Base_Model:
         allele_mask_id: str = "IMBALANCED",
         total_mask_id: str = "ANEUPLOID",
         *,
+        ref_label: str | None = None,
         no_normal: bool = False,
         tau_bounds: tuple[float, float] = (1.0, 1e6),
         invphi_bounds: tuple[float, float] = (1.0, 1e6),
@@ -45,6 +47,7 @@ class Base_Model:
         self.num_em_clones = len(self.tumor_clones) if no_normal else self.num_clones
 
         self.prefix = prefix
+        self.ref_label = ref_label
         self.allele_mask_id = allele_mask_id
         self.total_mask_id = total_mask_id
 
@@ -95,12 +98,18 @@ class Base_Model:
         no_normal = self.no_normal
         mask_id = "IMBALANCED" if no_normal else "CLONAL_IMBALANCED"
         logging.info(f"estimate reference cells via allele-only Cell Model ({mask_id})")
+        if no_normal:
+            ref_count_data = self.count_data
+        else:
+            ref_count_data = {
+                a: cd.select_clones([0, 1]) for a, cd in self.count_data.items()
+            }
         pure_model = Cell_Model(
-            count_data=self.count_data,
+            count_data=ref_count_data,
             platform=self.platform,
             assay_types=self.assay_types,
             allele_mask_id=mask_id,
-            no_normal=self.no_normal,
+            no_normal=no_normal,
             tau_bounds=self.tau_bounds,
             invphi_bounds=self.invphi_bounds,
             niters=self.niters,
@@ -131,6 +140,18 @@ class Base_Model:
             n_tumor = int(self.num_barcodes - n_normal)
             logging.info(f"#normal={n_normal}, #tumor={n_tumor} / {self.num_barcodes}")
             assert n_normal > 0, "no normal cells/spots found for baseline estimation"
+            if self.ref_label is not None and self.ref_label in self.barcodes.columns:
+                ref_anns = self.barcodes[[self.ref_label]].copy()
+                ref_anns["allele_label"] = init_labels
+                logging.info(
+                    "reference-stage normal/tumor classification vs cell types:"
+                )
+                evaluate_malignant_accuracy(
+                    ref_anns,
+                    qry_label="allele_label",
+                    ref_label=self.ref_label,
+                    tumor_post="__none__",
+                )
 
         init_labeling = {
             "labels": init_labels,
