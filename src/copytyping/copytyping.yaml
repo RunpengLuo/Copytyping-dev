@@ -13,6 +13,11 @@ verbosity: 0
 fit_mode: allele_total
 # If true, use major clone CNP to derive baseline.
 no_normal: false
+# If true, use cell-type normal cells for the baseline reference set.
+estimate_baseline_by_cell_type: false
+# tumor_post cutoff for reference cells: keep allele-EM cells with tumor_post <
+# cutoff. 0.5 = MAP-normal; smaller = stricter, less tumor contamination.
+ref_post_cutoff: 0.1
 niters: 100
 # baf_clip: cell model uses 0.001; spot model often uses 0.1 (mixture tolerance)
 baf_clip: 0.001

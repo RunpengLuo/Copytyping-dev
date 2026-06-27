@@ -6,7 +6,6 @@ import pandas as pd
 from scipy.special import logsumexp
 
 from copytyping.inference.count_data import Count_Data
-from copytyping.inference.inference_utils import evaluate_malignant_accuracy
 from copytyping.inference.model_utils import compute_baseline_proportions
 
 
@@ -20,7 +19,8 @@ class Base_Model:
         allele_mask_id: str = "IMBALANCED",
         total_mask_id: str = "ANEUPLOID",
         *,
-        ref_label: str | None = None,
+        reference_mask: np.ndarray | None = None,
+        ref_post_cutoff: float = 0.5,
         no_normal: bool = False,
         tau_bounds: tuple[float, float] = (1.0, 1e6),
         invphi_bounds: tuple[float, float] = (1.0, 1e6),
@@ -47,7 +47,6 @@ class Base_Model:
         self.num_em_clones = len(self.tumor_clones) if no_normal else self.num_clones
 
         self.prefix = prefix
-        self.ref_label = ref_label
         self.allele_mask_id = allele_mask_id
         self.total_mask_id = total_mask_id
 
@@ -60,6 +59,12 @@ class Base_Model:
         # reference cells + clone; used by plotting for the RDR baseline
         self.is_reference = None
         self.ref_clone = 0
+        # optional precomputed reference mask (cell-type normal cells) for the
+        # baseline, bypassing the allele-only sub-EM
+        self.reference_mask = reference_mask
+        self.ref_post_cutoff = ref_post_cutoff
+        # reference-stage anns (allele_label, tumor_post, ref cell type) for QC plots
+        self.reference_anns = None
         self.model_tols = {"tol": 1e-4, "eps": 1e-10}  # EM convergence tolerances
 
         # whether each parameter is updated in the M-step (theta is always fixed
@@ -83,19 +88,33 @@ class Base_Model:
     # Initialization helpers
     # ------------------------------------------------------------------
     def _estimate_reference_cells(self) -> tuple[np.ndarray, int, dict]:
-        """Pick the reference-cell set + reference clone via allele-only sub-EM.
+        """Pick the reference-cell set + reference clone for the RDR baseline.
 
-        Default (has-normal): cluster cells on clonal imbalanced bins
-        (IMBALANCED & ~SUBCLONAL) and use the cells labeled "normal" (clone 0,
-        diploid) as the reference. With ``--no_normal`` there is no diploid
-        reference, so cluster on all IMBALANCED bins and use the *major clone*
-        (most-assigned) as the reference, with a CNP-corrected baseline. The
-        sub-model inherits this model's config. Returns
-        ``(is_reference, ref_clone, init_labeling)``.
+        If ``reference_mask`` is given (cell-type normal cells), use it directly
+        and skip the sub-EM. Otherwise run an allele-only sub-EM:
+        default (has-normal) clusters on clonal imbalanced bins (IMBALANCED &
+        ~SUBCLONAL) and keeps cells with ``tumor_post < ref_post_cutoff`` as the
+        reference; with ``--no_normal`` there is no diploid reference, so cluster
+        on all IMBALANCED bins and use the *major clone* (most-assigned) with a
+        CNP-corrected baseline. Returns ``(is_reference, ref_clone, init_labeling)``.
         """
         from copytyping.inference.cell_model import Cell_Model
 
         no_normal = self.no_normal
+        if self.reference_mask is not None:
+            is_reference = np.asarray(self.reference_mask, dtype=bool)
+            logging.info(
+                f"baseline reference: {int(is_reference.sum())}/{self.num_barcodes} "
+                "cell-type normal cells (allele-only sub-EM bypassed)"
+            )
+            init_labeling = {
+                "labels": np.where(is_reference, "normal", "tumor"),
+                "max_posterior": np.ones(self.num_barcodes),
+            }
+            self.is_reference = is_reference
+            self.ref_clone = 0
+            return is_reference, 0, init_labeling
+
         mask_id = "IMBALANCED" if no_normal else "CLONAL_IMBALANCED"
         logging.info(f"estimate reference cells via allele-only Cell Model ({mask_id})")
         if no_normal:
@@ -135,23 +154,26 @@ class Base_Model:
             assert n_ref > 0, "no reference cells found for baseline estimation"
         else:
             ref_clone = 0  # normal clone (1|1 everywhere)
-            is_reference = init_labels == "normal"
+            tumor_post = 1.0 - allele_anns["normal"].to_numpy()
+            # keep only confidently-normal cells (tumor_post < cutoff); cutoff 0.5
+            # = MAP-normal (default), smaller = stricter, less tumor contamination
+            is_reference = tumor_post < self.ref_post_cutoff
             n_normal = int(is_reference.sum())
             n_tumor = int(self.num_barcodes - n_normal)
-            logging.info(f"#normal={n_normal}, #tumor={n_tumor} / {self.num_barcodes}")
+            logging.info(
+                f"#normal={n_normal}, #tumor={n_tumor} / {self.num_barcodes} "
+                f"(ref_post_cutoff={self.ref_post_cutoff})"
+            )
             assert n_normal > 0, "no normal cells/spots found for baseline estimation"
-            if self.ref_label is not None and self.ref_label in self.barcodes.columns:
-                ref_anns = self.barcodes[[self.ref_label]].copy()
-                ref_anns["allele_label"] = init_labels
-                logging.info(
-                    "reference-stage normal/tumor classification vs cell types:"
-                )
-                evaluate_malignant_accuracy(
-                    ref_anns,
-                    qry_label="allele_label",
-                    ref_label=self.ref_label,
-                    tumor_post="__none__",
-                )
+            # barcode-aligned reference-stage labels/posteriors (cell-type
+            # validation + QC plot done by the caller in inference.py)
+            self.reference_anns = pd.DataFrame(
+                {
+                    "allele_label": init_labels,
+                    "tumor_post": tumor_post,
+                    "max_posterior": allele_anns["max_posterior"].to_numpy(),
+                }
+            )
 
         init_labeling = {
             "labels": init_labels,

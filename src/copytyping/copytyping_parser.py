@@ -54,13 +54,6 @@ def add_arguments_inference_inputs(
         "CN profiles (matched by CLUSTER ID).",
     )
     parser.add_argument(
-        "--no_normal",
-        required=False,
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="If set, use major clone CNP to derive baseline.",
-    )
-    parser.add_argument(
         "--cell_type",
         required=False,
         type=str,
@@ -118,6 +111,29 @@ def add_arguments_inference_parameters(
     parser: argparse.ArgumentParser,
 ):
     """Model, smoothing, and plot parameters (all defaulted, tunable from CLI)."""
+    parser.add_argument(
+        "--no_normal",
+        required=False,
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="If set, use major clone CNP to derive baseline.",
+    )
+    parser.add_argument(
+        "--estimate_baseline_by_cell_type",
+        required=False,
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help="Use cell-type normal cells (--cell_type) as the baseline reference "
+        "set instead of the allele-only sub-EM.",
+    )
+    parser.add_argument(
+        "--ref_post_cutoff",
+        required=False,
+        type=float,
+        default=argparse.SUPPRESS,
+        help="tumor posterior cutoff for RDR baseline estimation "
+        "(0.5 = MAP-normal; smaller = stricter).",
+    )
     parser.add_argument(
         "--exclude",
         required=False,

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.backends.backend_pdf import PdfPages
 
-from copytyping.utils import INVALID_LABELS, NA_CELLTYPE
+from copytyping.utils import INVALID_LABELS, NA_CELLTYPE, is_tumor_label
 
 
 class FigureSaver:
@@ -312,4 +312,126 @@ def plot_loss(
     ax.set_ylabel(val_type)
     fig.tight_layout()
     fig.savefig(out_loss_file, dpi=dpi)
+    plt.close(fig)
+
+
+def plot_tumor_post_hist(
+    anns: pd.DataFrame,
+    tumor_post: str,
+    ref_label: str | None = None,
+    title: str | None = None,
+    bins: int = 41,
+    pdf_pages: "FigureSaver | PdfPages | None" = None,
+    out_file: str | None = None,
+    dpi: int = 300,
+    transparent: bool = False,
+) -> None:
+    """Tumor-posterior histogram, plus reference-set contamination curves.
+
+    Panel 1: histogram of ``tumor_post``; stacked by reference cell type when
+    ``ref_label`` is available (else a single histogram). Diagnoses contamination
+    of the normal/reference set used for the RDR baseline: tumor-type cells
+    sitting at low posterior are tumor cells misassigned to normal.
+
+    Panels 2-3 (only with ``ref_label``) condition on the MAP-normal pool
+    (``tumor_post < 0.5``, the reference candidates) and report the tumor false
+    negatives (true tumor cells kept in the reference set, FN count + FN/#tumor):
+    - panel 2: vs an absolute ``tumor_post`` cutoff swept 0..1 step 0.1 (pool
+      cells with ``tumor_post < cutoff`` kept);
+    - panel 3: vs the top-x% of the pool by P(normal)=1-tumor_post.
+    Same cells per set size, different knob -> guides a dataset-general rule.
+    Saved to ``pdf_pages`` else ``out_file``.
+    """
+    has_ref = ref_label is not None and ref_label in anns.columns
+    cols = [tumor_post] + ([ref_label] if has_ref else [])
+    df = anns[cols].copy()
+    df[tumor_post] = pd.to_numeric(df[tumor_post], errors="coerce")
+    df = df[np.isfinite(df[tumor_post].to_numpy())]
+    if has_ref:
+        df = df[~df[ref_label].isin(NA_CELLTYPE)]
+    if df.empty:
+        return
+    post = df[tumor_post].to_numpy()
+    edges = np.linspace(0.0, 1.0, bins)
+
+    n_panels = 3 if has_ref else 1
+    fig, axes = plt.subplots(n_panels, 1, figsize=(8, 3.4 * n_panels), squeeze=False)
+    ax_hist = axes[0, 0]
+    if has_ref:
+        # normal-like cell types first, tumor-like last (the diagnostic group)
+        groups = sorted(
+            df[ref_label].unique(), key=lambda g: (is_tumor_label(str(g)), str(g))
+        )
+        color_map = build_label_color_maps({ref_label: df[ref_label].to_numpy()}, None)[
+            ref_label
+        ]
+        data = [df.loc[df[ref_label] == g, tumor_post].to_numpy() for g in groups]
+        colors = [color_map[g] for g in groups]
+        labels = [f"{g} (n={len(d)})" for g, d in zip(groups, data)]
+        ax_hist.hist(data, bins=edges, stacked=True, color=colors, label=labels)
+        ax_hist.legend(fontsize=7, ncol=2, title=f"ref {ref_label}", title_fontsize=8)
+    else:
+        ax_hist.hist(post, bins=edges, color="steelblue")
+    ax_hist.set_ylabel("cell count")
+    ax_hist.set_xlabel(f"tumor posterior ({tumor_post})")
+    ax_hist.axvline(0.5, ls="--", color="k", lw=1.0, alpha=0.7)
+    ax_hist.set_xlim(0.0, 1.0)
+
+    if has_ref:
+        is_tum = np.array([is_tumor_label(str(g)) for g in df[ref_label]])
+        n_tum = int(is_tum.sum())
+        map_normal = post < 0.5  # reference candidates (MAP = normal)
+
+        def _draw_fn(ax, xs, fn, xlabel, xticks):
+            rate = fn / n_tum if n_tum > 0 else np.zeros_like(fn, dtype=float)
+            ax.plot(xs, fn, "-o", color="purple")
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("tumor_cell FN count", color="purple")
+            ax.tick_params(axis="y", labelcolor="purple")
+            ax.set_xticks(xticks)
+            ax_r = ax.twinx()
+            ax_r.plot(xs, rate, "-s", color="darkorange")
+            ax_r.set_ylabel("FN / #tumor_cell", color="darkorange")
+            ax_r.tick_params(axis="y", labelcolor="darkorange")
+            ax_r.set_ylim(0.0, max(0.02, float(rate.max()) * 1.1))
+
+        # panel 2: absolute tumor_post cutoff within the MAP-normal pool
+        cutoffs = np.round(np.arange(0.0, 1.0001, 0.1), 1)
+        fn_cut = np.array(
+            [int((is_tum & map_normal & (post < c)).sum()) for c in cutoffs]
+        )
+        _draw_fn(
+            axes[1, 0],
+            cutoffs,
+            fn_cut,
+            "tumor_post cutoff (MAP-normal cells < cutoff -> reference)",
+            cutoffs,
+        )
+        axes[1, 0].axvline(0.5, ls="--", color="k", lw=1.0, alpha=0.7)
+        axes[1, 0].set_title(
+            f"#tumor_cell={n_tum}, MAP-normal pool={int(map_normal.sum())}", fontsize=9
+        )
+
+        # panel 3: top-x% of the MAP-normal pool by P(normal) = 1 - tumor_post
+        pool_tum = is_tum[map_normal][np.argsort(post[map_normal])]
+        n_pool = pool_tum.size
+        fracs = np.round(np.arange(0.1, 1.0001, 0.1), 1)
+        fn_top = np.array(
+            [int(pool_tum[: max(1, int(round(p * n_pool)))].sum()) for p in fracs]
+        )
+        _draw_fn(
+            axes[2, 0],
+            fracs * 100,
+            fn_top,
+            "top-x% of MAP-normal pool by P(normal) -> reference",
+            fracs * 100,
+        )
+
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    if pdf_pages is not None:
+        pdf_pages.savefig(fig)
+    elif out_file is not None:
+        fig.savefig(out_file, dpi=dpi, bbox_inches="tight", transparent=transparent)
     plt.close(fig)

@@ -23,7 +23,7 @@ def model_kwargs_from_args(args: dict):
     """Extract the model config kwargs (the args the EM models consume) from the
     flat ``args`` dict, so callers can ``Model(..., **model_kwargs_from_args(args))``."""
     return {
-        "ref_label": args["ref_label"],
+        "ref_post_cutoff": args["ref_post_cutoff"],
         "no_normal": args["no_normal"],
         "tau_bounds": (args["min_tau"], args["max_tau"]),
         "invphi_bounds": (args["min_invphi"], args["max_invphi"]),

@@ -2,6 +2,7 @@ import logging
 import os
 
 import numpy as np
+import pandas as pd
 
 from copytyping.copytyping_parser import check_arguments_inference
 from copytyping.inference.cell_model import Cell_Model
@@ -29,7 +30,11 @@ from copytyping.io_utils import (
     read_bbc_phases,
     build_spatial_graphs,
 )
-from copytyping.plot.plot_common import FigureSaver, build_label_color_maps
+from copytyping.plot.plot_common import (
+    FigureSaver,
+    build_label_color_maps,
+    plot_tumor_post_hist,
+)
 from copytyping.plot.plot_heatmap import plot_cnv_heatmap
 from copytyping.plot.plot_scatter_1d import plot_rdr_baf_1d_pseudobulk
 from copytyping.plot.plot_scatter_2d import plot_scatter_2d_per_cell
@@ -37,6 +42,7 @@ from copytyping.plot.plot_spatial import plot_visium_all
 from copytyping.utils import (
     SPATIAL_PLATFORMS,
     add_file_logging,
+    is_normal_label,
     log_arguments,
     log_step_start,
     normalize_args,
@@ -176,6 +182,41 @@ def run(args: dict | None = None):
     dpi = args["dpi"]
     img_type = args["img_type"]
     transparent = args["transparent"]
+
+    # QC: tumor posterior, reference-stage (allele-only sub-EM) and final (full
+    # EM). reference_anns is barcode-aligned with anns, so the ref cell type
+    # comes from anns. Cell-type validation only when a ref_label column exists.
+    ref_lab = args["ref_label"]
+    if model.reference_anns is not None and "normal" in anns.columns:
+        has_ct = ref_lab in anns.columns
+        ref_post = model.reference_anns.copy()
+        final_post = pd.DataFrame({"tumor_post": 1.0 - anns["normal"].to_numpy()})
+        if has_ct:
+            ref_post[ref_lab] = anns[ref_lab].to_numpy()
+            final_post[ref_lab] = anns[ref_lab].to_numpy()
+            logging.info("reference-stage normal/tumor classification vs cell types:")
+            evaluate_malignant_accuracy(
+                ref_post,
+                qry_label="allele_label",
+                ref_label=ref_lab,
+                tumor_post="tumor_post",
+            )
+        base = os.path.join(plot_dir, f"{out_prefix}.tumor_post")
+        with FigureSaver(base, img_type, dpi, transparent) as pdf:
+            plot_tumor_post_hist(
+                ref_post,
+                tumor_post="tumor_post",
+                ref_label=ref_lab if has_ct else None,
+                title=f"{sample_id} reference-stage tumor posterior",
+                pdf_pages=pdf,
+            )
+            plot_tumor_post_hist(
+                final_post,
+                tumor_post="tumor_post",
+                ref_label=ref_lab if has_ct else None,
+                title=f"{sample_id} final tumor posterior",
+                pdf_pages=pdf,
+            )
     plot_labels = [label]
     if args["ref_label"] in anns.columns:
         plot_labels.append(args["ref_label"])
@@ -357,6 +398,28 @@ def run(args: dict | None = None):
 ##################################################
 
 
+def cell_type_reference_mask(
+    barcodes: pd.DataFrame, ref_label: str, enabled: bool
+) -> np.ndarray | None:
+    """Boolean mask of cell-type normal cells for the baseline reference set.
+
+    Returns None (use the default allele-only sub-EM) when disabled, when no cell
+    types are available, or when no cell is labelled normal.
+    """
+    if not enabled:
+        return None
+    if ref_label not in barcodes.columns:
+        logging.warning("estimate_baseline_by_cell_type: no cell types; using default")
+        return None
+    mask = barcodes[ref_label].map(lambda c: is_normal_label(str(c))).to_numpy()
+    if not mask.any():
+        logging.warning(
+            "estimate_baseline_by_cell_type: no normal cells; using default"
+        )
+        return None
+    return mask
+
+
 def run_copytyping(
     assay_types: list[str],
     bbc_data: dict[str, Count_Data],
@@ -386,11 +449,17 @@ def run_copytyping(
             **model_kwargs_from_args(args),
         )
     else:
+        reference_mask = cell_type_reference_mask(
+            cluster_count_data[assay_types[0]].barcodes,
+            args["ref_label"],
+            args["estimate_baseline_by_cell_type"],
+        )
         model = Cell_Model(
             count_data=cluster_count_data,
             platform=platform,
             assay_types=assay_types,
             prefix=out_prefix,
+            reference_mask=reference_mask,
             **model_kwargs_from_args(args),
         )
     model_params, model_ll = model.fit(fit_mode=args["fit_mode"])
